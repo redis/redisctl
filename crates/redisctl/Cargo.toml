@@ -18,7 +18,7 @@ path = "src/main.rs"
 
 
 [dependencies]
-redisctl-core = { version = "0.10.1", path = "../redisctl-core" }
+redisctl-core = { version = "0.11.0", path = "../redisctl-core" }
 redis-cloud = { workspace = true, features = ["tower-integration"] }
 redis-enterprise = { workspace = true, features = ["tower-integration"] }
 files-sdk = { workspace = true, optional = true }

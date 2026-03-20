@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0](https://github.com/redis-developer/redisctl/compare/redisctl-v0.10.1...redisctl-v0.11.0) - 2026-03-20
+
+### Fixed
+
+- *(auth)* support Redis Cloud secret env var alias ([#913](https://github.com/redis-developer/redisctl/pull/913))
+
+### Other
+
+- *(readme)* fix MCP policy example ([#915](https://github.com/redis-developer/redisctl/pull/915))
+
 ## [0.10.1](https://github.com/redis-developer/redisctl/compare/redisctl-v0.10.0...redisctl-v0.10.1) - 2026-03-19
 
 ### Fixed

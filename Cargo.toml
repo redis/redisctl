@@ -15,7 +15,7 @@ default-members = [
 version = "0.3.1"
 
 [workspace.package]
-version = "0.10.1"
+version = "0.11.0"
 edition = "2024"
 rust-version = "1.90"
 authors = ["Josh Rotenberg <josh.rotenberg@redis.com>"]
