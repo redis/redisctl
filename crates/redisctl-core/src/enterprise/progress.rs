@@ -16,9 +16,17 @@ pub enum EnterpriseProgressEvent {
     Started { action_uid: String },
     /// Polling iteration with current status
     Polling {
+        /// Action UID being polled.
         action_uid: String,
+        /// Current status string (e.g. `"running"`, `"completed"`).
         status: String,
-        progress: Option<f32>,
+        /// Percent complete as reported by the API.
+        ///
+        /// Typed as `Option<String>` because the Redis Enterprise REST
+        /// API emits this as a string (e.g. `"100"`), not a float.
+        /// Callers that need a numeric value can `.parse::<f32>().ok()`.
+        progress: Option<String>,
+        /// Time since polling started.
         elapsed: Duration,
     },
     /// Action completed successfully
@@ -106,7 +114,7 @@ pub async fn poll_action(
             EnterpriseProgressEvent::Polling {
                 action_uid: action_uid.to_string(),
                 status: status.clone(),
-                progress: action.progress,
+                progress: action.progress.clone(),
                 elapsed,
             },
         );

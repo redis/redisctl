@@ -521,8 +521,12 @@ async fn test_get_all_databases_stats() {
 async fn test_get_shard_stats() {
     let server = MockEnterpriseServer::start().await;
 
+    // The documented Enterprise REST API path is `/v1/shards/stats/{uid}`,
+    // not `/v1/shards/{uid}/stats`. The handler was corrected to match
+    // the spec in redis-enterprise-rs#71; this test mounts the correct
+    // path so the tool round-trips against a realistic mock.
     Mock::given(method("GET"))
-        .and(path("/v1/shards/1/stats"))
+        .and(path("/v1/shards/stats/1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "intervals": [
                 {"time": "2024-01-15T10:30:00Z", "metrics": {"used_memory": 512000}}
