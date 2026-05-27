@@ -6,7 +6,7 @@ Go from zero to a running Redis database in 5 minutes.
 
 - Redis Cloud account ([sign up free](https://redis.com/try-free/))
 - API keys from Redis Cloud console (Access Management > API Keys)
-- redisctl installed (`brew install redis-developer/homebrew-tap/redisctl`)
+- redisctl installed (`brew install redis/homebrew-tap/redisctl`)
 
 !!! tip "Prefix optional"
     The `cloud` prefix is optional when your profile config is unambiguous. The examples below use the full form for copy-paste convenience in scripts. See [Platform Inference](../../common/profiles.md#platform-inference).

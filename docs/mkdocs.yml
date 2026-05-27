@@ -1,8 +1,8 @@
 site_name: redisctl
 site_description: The CLI and MCP Server for Redis
 site_url: https://redis-field-engineering.github.io/redisctl-docs
-repo_url: https://github.com/redis-developer/redisctl
-repo_name: redis-developer/redisctl
+repo_url: https://github.com/redis/redisctl
+repo_name: redis/redisctl
 edit_uri: edit/main/mkdocs-site/docs/
 
 theme:
@@ -92,9 +92,9 @@ markdown_extensions:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/redis-developer/redisctl
+      link: https://github.com/redis/redisctl
     - icon: fontawesome/brands/docker
-      link: https://github.com/redis-developer/redisctl/pkgs/container/redisctl
+      link: https://github.com/redis/redisctl/pkgs/container/redisctl
   generator: false
 
 extra_css:

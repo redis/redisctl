@@ -39,7 +39,7 @@ x-redis-enterprise-base: &redis-enterprise-base
     - multi-cluster-network
 
 x-redisctl-base: &redisctl-base
-  image: ghcr.io/redis-developer/redisctl:latest
+  image: ghcr.io/redis/redisctl:latest
   networks:
     - multi-cluster-network
 

@@ -122,13 +122,13 @@ graph LR
 === "Homebrew"
 
     ``` bash
-    brew install redis-developer/homebrew-tap/redisctl
+    brew install redis/homebrew-tap/redisctl
     ```
 
 === "Docker"
 
     ``` bash
-    docker run ghcr.io/redis-developer/redisctl --help
+    docker run ghcr.io/redis/redisctl --help
     ```
 
 === "Cargo"
@@ -141,7 +141,7 @@ graph LR
 
     ``` bash
     # Download from GitHub Releases
-    curl -L https://github.com/redis-developer/redisctl/releases/latest/download/redisctl-x86_64-unknown-linux-gnu.tar.gz | tar xz
+    curl -L https://github.com/redis/redisctl/releases/latest/download/redisctl-x86_64-unknown-linux-gnu.tar.gz | tar xz
     ```
 
 [:octicons-arrow-right-24: Full installation guide](getting-started/installation.md)
@@ -173,7 +173,7 @@ graph LR
 
     MIT licensed. Contributions welcome.
 
-    [GitHub](https://github.com/redis-developer/redisctl)
+    [GitHub](https://github.com/redis/redisctl)
 
 -   :material-book:{ .lg } __API Docs__
 

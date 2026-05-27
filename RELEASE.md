@@ -12,7 +12,7 @@ The release process produces artifacts for multiple destinations:
 | `redisctl` crate | crates.io | `release-plz.yml` |
 | `redisctl-mcp` crate | crates.io | `release-plz.yml` |
 | CLI binaries | GitHub Releases | `release.yml` |
-| Homebrew formula | redis-developer/homebrew-tap | `release.yml` |
+| Homebrew formula | redis/homebrew-tap | `release.yml` |
 | Docker images | ghcr.io | `docker.yml` |
 
 **Note:** The `redis-cloud` and `redis-enterprise` crates are maintained in separate repositories:
@@ -106,7 +106,7 @@ git_tag_name = "redisctl-v{{ version }}"
    - `x86_64-pc-windows-msvc` (Windows)
 3. **Build global artifacts:** Creates installers, checksums
 4. **Host phase:** Uploads artifacts, creates GitHub Release
-5. **Update Homebrew:** Updates formula in `redis-developer/homebrew-tap`
+5. **Update Homebrew:** Updates formula in `redis/homebrew-tap`
 
 **Configuration:** `Cargo.toml` under `[workspace.metadata.dist]`
 
@@ -119,7 +119,7 @@ git_tag_name = "redisctl-v{{ version }}"
 **What it does:**
 1. Extracts version from tag
 2. Builds multi-arch images (linux/amd64, linux/arm64)
-3. Pushes to `ghcr.io/redis-developer/redisctl` with tags:
+3. Pushes to `ghcr.io/redis/redisctl` with tags:
    - `latest`
    - `{version}` (e.g., `0.7.6`)
    - `{major}.{minor}` (e.g., `0.7`)
@@ -167,7 +167,7 @@ release-plz.yml (creates tags)
 ### Homebrew update fails
 - **Symptom:** GitHub Release exists but formula not updated
 - **Check:** `update-homebrew` job in release.yml
-- **Recovery:** Manually update the formula in `redis-developer/homebrew-tap`
+- **Recovery:** Manually update the formula in `redis/homebrew-tap`
 - **Common causes:**
   - `COMMITTER_TOKEN` secret expired/invalid
   - Download URL incorrect
@@ -203,7 +203,7 @@ After a release, verify:
 
 - [ ] **Docker:** Images available
   ```bash
-  docker pull ghcr.io/redis-developer/redisctl:{version}
+  docker pull ghcr.io/redis/redisctl:{version}
   ```
 
 ## Manual Release Steps
@@ -239,8 +239,8 @@ gh release create redisctl-v{version} \
 ### Build and Push Docker
 ```bash
 docker buildx build --platform linux/amd64,linux/arm64 \
-  -t ghcr.io/redis-developer/redisctl:{version} \
-  -t ghcr.io/redis-developer/redisctl:latest \
+  -t ghcr.io/redis/redisctl:{version} \
+  -t ghcr.io/redis/redisctl:latest \
   --push .
 ```
 

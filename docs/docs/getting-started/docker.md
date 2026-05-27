@@ -5,7 +5,7 @@ Run redisctl without installing anything.
 ## Quick Start
 
 ```bash
-docker run ghcr.io/redis-developer/redisctl --help
+docker run ghcr.io/redis/redisctl --help
 ```
 
 !!! note "Explicit prefixes in Docker"
@@ -19,7 +19,7 @@ docker run ghcr.io/redis-developer/redisctl --help
 docker run --rm \
   -e REDIS_CLOUD_API_KEY \
   -e REDIS_CLOUD_SECRET_KEY \
-  ghcr.io/redis-developer/redisctl cloud subscription list
+  ghcr.io/redis/redisctl cloud subscription list
 ```
 
 ### Mount Config File
@@ -29,7 +29,7 @@ If you have a local configuration:
 ```bash
 docker run --rm \
   -v ~/.config/redisctl:/root/.config/redisctl:ro \
-  ghcr.io/redis-developer/redisctl --profile prod cloud subscription list
+  ghcr.io/redis/redisctl --profile prod cloud subscription list
 ```
 
 ## Convenient Aliases
@@ -42,7 +42,7 @@ Add to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.):
     alias redisctl-cloud='docker run --rm \
       -e REDIS_CLOUD_API_KEY \
       -e REDIS_CLOUD_SECRET_KEY \
-      ghcr.io/redis-developer/redisctl'
+      ghcr.io/redis/redisctl'
 
     # Usage
     redisctl-cloud cloud subscription list
@@ -56,7 +56,7 @@ Add to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.):
       -e REDIS_ENTERPRISE_USER \
       -e REDIS_ENTERPRISE_PASSWORD \
       -e REDIS_ENTERPRISE_INSECURE \
-      ghcr.io/redis-developer/redisctl'
+      ghcr.io/redis/redisctl'
 
     # Usage
     redisctl-enterprise enterprise cluster get
@@ -67,7 +67,7 @@ Add to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.):
     ``` bash
     alias redisctl='docker run --rm \
       -v ~/.config/redisctl:/root/.config/redisctl:ro \
-      ghcr.io/redis-developer/redisctl'
+      ghcr.io/redis/redisctl'
 
     # Usage
     redisctl --profile prod cloud database list
@@ -83,7 +83,7 @@ docker run --rm \
   -e REDIS_ENTERPRISE_USER \
   -e REDIS_ENTERPRISE_PASSWORD \
   -v $(pwd)/output:/output \
-  ghcr.io/redis-developer/redisctl \
+  ghcr.io/redis/redisctl \
   enterprise support-package cluster --output-dir /output
 ```
 
@@ -105,7 +105,7 @@ Pass credentials as environment variables. The password is pulled from your host
         "-e", "REDIS_ENTERPRISE_URL=https://cluster:9443",
         "-e", "REDIS_ENTERPRISE_USER=admin@redis.local",
         "-e", "REDIS_ENTERPRISE_PASSWORD",
-        "ghcr.io/redis-developer/redisctl",
+        "ghcr.io/redis/redisctl",
         "redisctl-mcp"
       ]
     }
@@ -125,7 +125,7 @@ Mount your existing redisctl config directory for profile-based auth:
       "args": [
         "run", "-i", "--rm",
         "-v", "~/.config/redisctl:/root/.config/redisctl:ro",
-        "ghcr.io/redis-developer/redisctl",
+        "ghcr.io/redis/redisctl",
         "redisctl-mcp", "--profile", "my-profile"
       ]
     }
@@ -149,7 +149,7 @@ For clusters running on localhost (e.g. Docker Compose demos), use `--network ho
         "-e", "REDIS_ENTERPRISE_USER=admin@redis.local",
         "-e", "REDIS_ENTERPRISE_PASSWORD",
         "-e", "REDIS_ENTERPRISE_INSECURE=true",
-        "ghcr.io/redis-developer/redisctl",
+        "ghcr.io/redis/redisctl",
         "redisctl-mcp"
       ]
     }
@@ -170,13 +170,13 @@ docker run -i --rm \
   -e REDIS_ENTERPRISE_URL \
   -e REDIS_ENTERPRISE_USER \
   -e REDIS_ENTERPRISE_PASSWORD \
-  ghcr.io/redis-developer/redisctl \
+  ghcr.io/redis/redisctl \
   redisctl-mcp
 
 # With mounted config
 docker run -i --rm \
   -v ~/.config/redisctl:/root/.config/redisctl:ro \
-  ghcr.io/redis-developer/redisctl \
+  ghcr.io/redis/redisctl \
   redisctl-mcp --profile my-profile
 ```
 
@@ -193,7 +193,7 @@ docker run -i --rm \
 
 ```bash
 # Pin to specific version
-docker run ghcr.io/redis-developer/redisctl:0.7.7 --version
+docker run ghcr.io/redis/redisctl:0.7.7 --version
 ```
 
 ## CI/CD Example
@@ -205,6 +205,6 @@ docker run ghcr.io/redis-developer/redisctl:0.7.7 --version
     docker run --rm \
       -e REDIS_CLOUD_API_KEY=${{ secrets.REDIS_CLOUD_API_KEY }} \
       -e REDIS_CLOUD_SECRET_KEY=${{ secrets.REDIS_CLOUD_SECRET_KEY }} \
-      ghcr.io/redis-developer/redisctl \
+      ghcr.io/redis/redisctl \
       cloud database list --subscription-id ${{ vars.SUBSCRIPTION_ID }} -o json
 ```

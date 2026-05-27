@@ -19,7 +19,7 @@ brew install redis-developer/tap/redisctl
 cargo install redisctl
 
 # Docker
-docker run --rm -it ghcr.io/redis-developer/redisctl --help
+docker run --rm -it ghcr.io/redis/redisctl --help
 ```
 
 ## Profile Setup

@@ -9,7 +9,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: redis-developer/redisctl
+  IMAGE_NAME: redis/redisctl
 
 jobs:
   docker:

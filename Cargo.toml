@@ -20,8 +20,8 @@ edition = "2024"
 rust-version = "1.90"
 authors = ["Josh Rotenberg <josh.rotenberg@redis.com>"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/redis-developer/redisctl"
-homepage = "https://github.com/redis-developer/redisctl"
+repository = "https://github.com/redis/redisctl"
+homepage = "https://github.com/redis/redisctl"
 documentation = "https://docs.rs/redisctl"
 
 # Config for 'dist'

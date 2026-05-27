@@ -12,7 +12,7 @@ How to contribute to redisctl.
 ### Clone and Build
 
 ```bash
-git clone https://github.com/redis-developer/redisctl
+git clone https://github.com/redis/redisctl
 cd redisctl
 cargo build
 ```
@@ -152,5 +152,5 @@ async fn test_database_list() {
 
 ## Questions?
 
-- [GitHub Issues](https://github.com/redis-developer/redisctl/issues)
-- [GitHub Discussions](https://github.com/redis-developer/redisctl/discussions)
+- [GitHub Issues](https://github.com/redis/redisctl/issues)
+- [GitHub Discussions](https://github.com/redis/redisctl/discussions)

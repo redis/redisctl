@@ -7,7 +7,7 @@ Multiple ways to install redisctl depending on your platform and preferences.
 The easiest way to install on macOS or Linux:
 
 ```bash
-brew install redis-developer/homebrew-tap/redisctl
+brew install redis/homebrew-tap/redisctl
 ```
 
 To upgrade:
@@ -21,13 +21,13 @@ brew upgrade redisctl
 Run without installing anything:
 
 ```bash
-docker run ghcr.io/redis-developer/redisctl --help
+docker run ghcr.io/redis/redisctl --help
 ```
 
 For frequent use, create an alias:
 
 ```bash
-alias redisctl='docker run --rm -e REDIS_CLOUD_API_KEY -e REDIS_CLOUD_SECRET_KEY ghcr.io/redis-developer/redisctl'
+alias redisctl='docker run --rm -e REDIS_CLOUD_API_KEY -e REDIS_CLOUD_SECRET_KEY ghcr.io/redis/redisctl'
 ```
 
 See the [Docker guide](docker.md) for more details.
@@ -48,33 +48,33 @@ cargo install redisctl --features secure-storage
 
 ## Binary Downloads
 
-Download pre-built binaries from [GitHub Releases](https://github.com/redis-developer/redisctl/releases/latest).
+Download pre-built binaries from [GitHub Releases](https://github.com/redis/redisctl/releases/latest).
 
 === "Linux (x86_64)"
 
     ``` bash
-    curl -L https://github.com/redis-developer/redisctl/releases/latest/download/redisctl-x86_64-unknown-linux-gnu.tar.xz | tar xJ
+    curl -L https://github.com/redis/redisctl/releases/latest/download/redisctl-x86_64-unknown-linux-gnu.tar.xz | tar xJ
     sudo mv redisctl /usr/local/bin/
     ```
 
 === "Linux (ARM64)"
 
     ``` bash
-    curl -L https://github.com/redis-developer/redisctl/releases/latest/download/redisctl-aarch64-unknown-linux-gnu.tar.xz | tar xJ
+    curl -L https://github.com/redis/redisctl/releases/latest/download/redisctl-aarch64-unknown-linux-gnu.tar.xz | tar xJ
     sudo mv redisctl /usr/local/bin/
     ```
 
 === "macOS (Intel)"
 
     ``` bash
-    curl -L https://github.com/redis-developer/redisctl/releases/latest/download/redisctl-x86_64-apple-darwin.tar.xz | tar xJ
+    curl -L https://github.com/redis/redisctl/releases/latest/download/redisctl-x86_64-apple-darwin.tar.xz | tar xJ
     sudo mv redisctl /usr/local/bin/
     ```
 
 === "macOS (Apple Silicon)"
 
     ``` bash
-    curl -L https://github.com/redis-developer/redisctl/releases/latest/download/redisctl-aarch64-apple-darwin.tar.xz | tar xJ
+    curl -L https://github.com/redis/redisctl/releases/latest/download/redisctl-aarch64-apple-darwin.tar.xz | tar xJ
     sudo mv redisctl /usr/local/bin/
     ```
 
