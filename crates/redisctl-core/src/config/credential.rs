@@ -235,6 +235,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(credential_alias_env)]
     fn test_env_var_alias_override_uses_first_available() {
         unsafe {
             env::set_var("TEST_CREDENTIAL_ALIAS_2", "alias-value");
@@ -255,6 +256,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(credential_alias_env)]
     fn test_env_var_alias_override_prefers_first_set() {
         unsafe {
             env::set_var("TEST_CREDENTIAL_ALIAS_1", "preferred-value");
