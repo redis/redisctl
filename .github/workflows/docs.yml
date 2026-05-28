@@ -104,8 +104,8 @@ jobs:
             --exclude-path node_modules
             --exclude-path .git
             --exclude-path docs/site
-            --exclude "https://github.com/redis-developer/redisctl/pull/.*"
-            --exclude "https://github.com/redis-developer/redisctl/issues/.*"
+            --exclude "https://github.com/redis/redisctl/pull/.*"
+            --exclude "https://github.com/redis/redisctl/issues/.*"
             .
         continue-on-error: true # Don't fail CI for broken external links
 
@@ -185,4 +185,4 @@ jobs:
           external_repository: redis-field-engineering/redisctl-docs
           publish_branch: gh-pages
           publish_dir: ./docs/site
-          commit_message: "docs: update from redis-developer/redisctl@${{ github.sha }}"
+          commit_message: "docs: update from redis/redisctl@${{ github.sha }}"

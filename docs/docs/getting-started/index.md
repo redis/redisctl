@@ -13,7 +13,7 @@ Get up and running with redisctl in minutes.
     No installation required. Run commands immediately.
 
     ``` bash
-    docker run ghcr.io/redis-developer/redisctl --help
+    docker run ghcr.io/redis/redisctl --help
     ```
 
     [:octicons-arrow-right-24: Docker guide](docker.md)

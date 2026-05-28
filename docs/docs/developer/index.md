@@ -81,6 +81,6 @@ We welcome contributions:
 
 ## Links
 
-- [GitHub Repository](https://github.com/redis-developer/redisctl)
-- [Issue Tracker](https://github.com/redis-developer/redisctl/issues)
-- [Releases](https://github.com/redis-developer/redisctl/releases)
+- [GitHub Repository](https://github.com/redis/redisctl)
+- [Issue Tracker](https://github.com/redis/redisctl/issues)
+- [Releases](https://github.com/redis/redisctl/releases)

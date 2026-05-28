@@ -10,12 +10,12 @@ The MCP server is a separate binary called `redisctl-mcp`. Install it using one 
 
 ```bash
 # macOS / Linux
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/redis-developer/redisctl/releases/latest/download/redisctl-mcp-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/redis/redisctl/releases/latest/download/redisctl-mcp-installer.sh | sh
 ```
 
 ```powershell
 # Windows
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/redis-developer/redisctl/releases/latest/download/redisctl-mcp-installer.ps1 | iex"
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/redis/redisctl/releases/latest/download/redisctl-mcp-installer.ps1 | iex"
 ```
 
 ### Cargo
@@ -26,7 +26,7 @@ cargo install redisctl-mcp
 
 ### Binary Downloads
 
-Download pre-built binaries from [GitHub Releases](https://github.com/redis-developer/redisctl/releases/latest).
+Download pre-built binaries from [GitHub Releases](https://github.com/redis/redisctl/releases/latest).
 
 ### Docker (Zero-Install)
 
@@ -42,7 +42,7 @@ No local install required. Pass credentials via environment variables and point 
         "-e", "REDIS_ENTERPRISE_URL=https://cluster:9443",
         "-e", "REDIS_ENTERPRISE_USER=admin@redis.local",
         "-e", "REDIS_ENTERPRISE_PASSWORD",
-        "ghcr.io/redis-developer/redisctl",
+        "ghcr.io/redis/redisctl",
         "redisctl-mcp"
       ]
     }

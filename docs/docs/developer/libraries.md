@@ -8,7 +8,7 @@ Use the Redis API client libraries in your own Rust or Python projects.
 |-------|-------------|---------|------------|
 | `redis-cloud` | Redis Cloud API client | [docs](https://docs.rs/redis-cloud) | [redis-cloud-rs](https://github.com/redis-developer/redis-cloud-rs) |
 | `redis-enterprise` | Redis Enterprise API client | [docs](https://docs.rs/redis-enterprise) | [redis-enterprise-rs](https://github.com/redis-developer/redis-enterprise-rs) |
-| `redisctl-core` | Profile and credential management | [docs](https://docs.rs/redisctl-core) | [redisctl](https://github.com/redis-developer/redisctl) |
+| `redisctl-core` | Profile and credential management | [docs](https://docs.rs/redisctl-core) | [redisctl](https://github.com/redis/redisctl) |
 
 **Note:** `redis-cloud` and `redis-enterprise` are maintained in separate repositories and also provide Python bindings via PyPI.
 
@@ -208,6 +208,6 @@ async fn collect_metrics(client: &RedisEnterpriseClient) -> anyhow::Result<()> {
 - [pypi.org/project/redis-enterprise](https://pypi.org/project/redis-enterprise/)
 
 **GitHub:**
-- [redis-developer/redisctl](https://github.com/redis-developer/redisctl)
+- [redis/redisctl](https://github.com/redis/redisctl)
 - [redis-developer/redis-cloud-rs](https://github.com/redis-developer/redis-cloud-rs)
 - [redis-developer/redis-enterprise-rs](https://github.com/redis-developer/redis-enterprise-rs)

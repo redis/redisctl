@@ -63,7 +63,7 @@ services:
   # ==============================================================================
   # Creates the cluster, admin user, and default database.
   redis-enterprise-init:
-    image: ghcr.io/redis-developer/redisctl:latest
+    image: ghcr.io/redis/redisctl:latest
     container_name: mcp-demo-init
     depends_on:
       redis-enterprise:
@@ -116,7 +116,7 @@ services:
   # Connects to the Enterprise cluster API and directly to the default
   # database for Redis data operations.
   mcp-server:
-    image: ghcr.io/redis-developer/redisctl:latest
+    image: ghcr.io/redis/redisctl:latest
     container_name: mcp-demo-server
     depends_on:
       seed-data:

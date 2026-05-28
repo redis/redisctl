@@ -3,8 +3,8 @@
 **Manage Redis Cloud, Redis Enterprise, and Redis databases from one tool** -- as a CLI for humans or an MCP server for AI agents.
 
 [![Crates.io](https://img.shields.io/crates/v/redisctl.svg)](https://crates.io/crates/redisctl)
-[![CI](https://github.com/redis-developer/redisctl/actions/workflows/ci.yml/badge.svg)](https://github.com/redis-developer/redisctl/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/redis-developer/redisctl#license)
+[![CI](https://github.com/redis/redisctl/actions/workflows/ci.yml/badge.svg)](https://github.com/redis/redisctl/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/redis/redisctl#license)
 
 redisctl replaces curl-and-jq scripts against the Redis Cloud and Enterprise REST APIs with a single binary that handles authentication, async polling, output formatting, and error handling. The same tool ships as an MCP server so AI assistants can manage Redis infrastructure directly.
 
@@ -27,12 +27,12 @@ redisctl replaces curl-and-jq scripts against the Redis Cloud and Enterprise RES
 
 ```bash
 # Homebrew (macOS/Linux)
-brew install redis-developer/homebrew-tap/redisctl
+brew install redis/homebrew-tap/redisctl
 
 # Cargo
 cargo install redisctl
 
-# Binary releases: https://github.com/redis-developer/redisctl/releases
+# Binary releases: https://github.com/redis/redisctl/releases
 ```
 
 ### Configure a Profile
@@ -111,7 +111,7 @@ See the [MCP configuration docs](https://redis-field-engineering.github.io/redis
         "-e", "REDIS_ENTERPRISE_URL=https://cluster:9443",
         "-e", "REDIS_ENTERPRISE_USER=admin@redis.local",
         "-e", "REDIS_ENTERPRISE_PASSWORD",
-        "ghcr.io/redis-developer/redisctl",
+        "ghcr.io/redis/redisctl",
         "redisctl-mcp"
       ]
     }
@@ -175,7 +175,7 @@ API client libraries (separate repositories):
 ## Contributing
 
 ```bash
-git clone https://github.com/redis-developer/redisctl.git
+git clone https://github.com/redis/redisctl.git
 cd redisctl
 cargo build --release
 cargo test --workspace

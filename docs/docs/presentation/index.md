@@ -55,7 +55,7 @@ Need a one-liner?
 
 ```bash
 # Show installation
-brew install redis-developer/homebrew-tap/redisctl
+brew install redis/homebrew-tap/redisctl
 
 # Configure profile
 redisctl profile set demo \

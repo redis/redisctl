@@ -331,7 +331,7 @@ jobs:
         env:
           COMMITTER_TOKEN: ${{ secrets.COMMITTER_TOKEN }}
         run: |
-          git clone "https://x-access-token:${COMMITTER_TOKEN}@github.com/redis-developer/homebrew-tap.git" tap
+          git clone "https://x-access-token:${COMMITTER_TOKEN}@github.com/redis/homebrew-tap.git" tap
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
