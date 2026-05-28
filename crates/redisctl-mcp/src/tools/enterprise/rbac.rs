@@ -86,7 +86,10 @@ enterprise_tool!(write, create_enterprise_user, "create_enterprise_user",
         let request = CreateUserRequest {
             email: input.email,
             password: input.password,
-            role: input.role,
+            // `role` is now Option<String> in redis-enterprise so RBAC-only
+            // clusters can pass role_uids without a role. The MCP tool
+            // still treats role as required at the schema level.
+            role: Some(input.role),
             name: input.name,
             email_alerts: input.email_alerts,
             bdbs_email_alerts: None,
