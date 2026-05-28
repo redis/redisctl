@@ -70,4 +70,5 @@ wiremock = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 redis = { workspace = true }
+serial_test = { workspace = true }
 docker-wrapper = { git = "https://github.com/joshrotenberg/docker-wrapper", features = ["testing", "template-redis"] }

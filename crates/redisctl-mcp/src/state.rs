@@ -613,6 +613,7 @@ mod tests {
 
     #[cfg(feature = "cloud")]
     #[test]
+    #[serial_test::serial(cloud_secret_env)]
     fn cloud_secret_env_prefers_canonical_name() {
         unsafe {
             std::env::set_var("REDIS_CLOUD_SECRET_KEY", "canonical-secret");
@@ -630,6 +631,7 @@ mod tests {
 
     #[cfg(feature = "cloud")]
     #[test]
+    #[serial_test::serial(cloud_secret_env)]
     fn cloud_secret_env_falls_back_to_alias() {
         unsafe {
             std::env::remove_var("REDIS_CLOUD_SECRET_KEY");
