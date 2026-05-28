@@ -338,7 +338,7 @@ database_tool!(read_only, hotkeys, "redis_hotkeys",
         }
 
         // Sort by memory descending and take top N
-        key_sizes.sort_by(|a, b| b.1.cmp(&a.1));
+        key_sizes.sort_by_key(|entry| std::cmp::Reverse(entry.1));
         key_sizes.truncate(TOP_N);
 
         // Build output
@@ -414,7 +414,7 @@ database_tool!(read_only, connection_summary, "redis_connection_summary",
             }
         }
         let mut ip_list: Vec<_> = ip_counts.into_iter().collect();
-        ip_list.sort_by(|a, b| b.1.cmp(&a.1));
+        ip_list.sort_by_key(|entry| std::cmp::Reverse(entry.1));
         ip_list.truncate(10);
 
         // Idle connections (idle > 60s)
