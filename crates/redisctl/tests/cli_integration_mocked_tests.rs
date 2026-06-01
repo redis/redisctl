@@ -2,7 +2,7 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use serde_json::json;
 use tempfile::TempDir;
-use wiremock::matchers::{header, method, path};
+use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Helper to create a test command with isolated config
@@ -1094,4 +1094,49 @@ async fn test_cloud_api_secret_alias_works_without_config_file() {
         .assert()
         .success()
         .stdout(predicate::str::contains("env alias credentials used"));
+}
+
+/// Regression test for #916: `enterprise database create --dry-run` must POST to
+/// `/v1/bdbs?dry_run` (query-string flag), NOT `/v1/bdbs/dry-run` (non-existent path).
+#[tokio::test]
+async fn test_enterprise_database_create_dry_run_uses_query_param() {
+    let temp_dir = TempDir::new().unwrap();
+    let mock_server = MockServer::start().await;
+
+    create_enterprise_profile(&temp_dir, &mock_server.uri()).unwrap();
+
+    // The validated BDB object the real API returns on dry-run success.
+    let bdb_response = json!({
+        "uid": 0,
+        "name": "dryrun-db",
+        "type": "redis",
+        "memory_size": 1073741824,
+        "status": "active"
+    });
+
+    // Assert that the request goes to /v1/bdbs with ?dry_run — NOT /v1/bdbs/dry-run.
+    Mock::given(method("POST"))
+        .and(path("/v1/bdbs"))
+        .and(query_param("dry_run", ""))
+        .respond_with(ResponseTemplate::new(200).set_body_json(bdb_response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    test_cmd(&temp_dir)
+        .args([
+            "enterprise",
+            "database",
+            "create",
+            "--data",
+            r#"{"name":"dryrun-db","type":"redis","memory_size":1073741824}"#,
+            "--dry-run",
+            "-o",
+            "json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dryrun-db"));
+
+    // MockServer verifies the `.expect(1)` constraint on drop.
 }
