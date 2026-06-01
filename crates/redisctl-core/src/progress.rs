@@ -132,7 +132,7 @@ pub async fn poll_task(
                 let error = task
                     .response
                     .as_ref()
-                    .and_then(|r| r.error.clone())
+                    .and_then(|r| r.error_message())
                     .unwrap_or_else(|| format!("Task failed with status: {}", status));
 
                 emit(
@@ -167,5 +167,64 @@ pub async fn poll_task(
 fn emit(callback: &Option<ProgressCallback>, event: ProgressEvent) {
     if let Some(cb) = callback {
         cb(event);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn test_client(uri: String) -> CloudClient {
+        CloudClient::builder()
+            .api_key("test-key".to_string())
+            .api_secret("test-secret".to_string())
+            .base_url(uri)
+            .build()
+            .unwrap()
+    }
+
+    // Regression: a failed task whose `response.error` is a structured object
+    // (e.g. a failed database backup) must surface the human-readable
+    // description, not fail to deserialize. See redis-cloud-rs
+    // ProcessorResponse::error_message.
+    #[tokio::test]
+    async fn poll_task_surfaces_object_error_description() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/tasks/task-backup"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "taskId": "task-backup",
+                "commandType": "DATABASE_BACKUP",
+                "status": "processing-error",
+                "response": {
+                    "error": {
+                        "type": "BACKUP_FAILED",
+                        "status": "400 BAD_REQUEST",
+                        "description": "Remote backup location is not configured"
+                    }
+                }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = test_client(mock_server.uri());
+        let result = poll_task(
+            &client,
+            "task-backup",
+            Duration::from_secs(5),
+            Duration::from_millis(10),
+            None,
+        )
+        .await;
+
+        match result {
+            Err(CoreError::TaskFailed(msg)) => {
+                assert_eq!(msg, "Remote backup location is not configured");
+            }
+            other => panic!("expected TaskFailed with description, got {other:?}"),
+        }
     }
 }

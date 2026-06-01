@@ -2856,7 +2856,7 @@ dependencies = [
 [[package]]
 name = "redis-cloud"
 version = "0.9.5"
-source = "git+https://github.com/redis-developer/redis-cloud-rs?branch=main#bbd0beb3f84ed0e71126c274fbdefb05899d1264"
+source = "git+https://github.com/redis-developer/redis-cloud-rs?branch=fix%2Ftask-error-object-deserialization#6d9af5b6be4bfa749b8b88818f5af5263552c1c3"
 dependencies = [
  "anyhow",
  "async-stream",
