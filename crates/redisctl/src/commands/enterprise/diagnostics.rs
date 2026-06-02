@@ -1,7 +1,6 @@
 use crate::error::RedisCtlError;
-use anyhow::Context;
 use clap::Subcommand;
-use redis_enterprise::DiagnosticsHandler;
+use redis_enterprise::{DiagnosticsHandler, RestError};
 
 use crate::cli::OutputFormat;
 use crate::connection::ConnectionManager;
@@ -163,7 +162,10 @@ impl DiagnosticsCommands {
             }
 
             DiagnosticsCommands::ListChecks => {
-                let checks = handler.list_checks().await.map_err(RedisCtlError::from)?;
+                let checks = handler
+                    .list_checks()
+                    .await
+                    .map_err(|e| map_endpoint_error(e, "list-checks", "/v1/diagnostics/checks"))?;
 
                 // Convert to JSON Value for output
                 let response = serde_json::to_value(&checks)?;
@@ -180,7 +182,7 @@ impl DiagnosticsCommands {
                 let report = handler
                     .get_last_report()
                     .await
-                    .map_err(RedisCtlError::from)?;
+                    .map_err(|e| map_endpoint_error(e, "last-report", "/v1/diagnostics/last"))?;
 
                 // Convert to JSON Value for output
                 let response = serde_json::to_value(&report)?;
@@ -194,10 +196,11 @@ impl DiagnosticsCommands {
             }
 
             DiagnosticsCommands::GetReport { report_id } => {
+                let endpoint = format!("/v1/diagnostics/reports/{}", report_id);
                 let report = handler
                     .get_report(report_id)
                     .await
-                    .context(format!("Failed to get diagnostic report {}", report_id))?;
+                    .map_err(|e| map_endpoint_error(e, "get-report", &endpoint))?;
 
                 // Convert to JSON Value for output
                 let response = serde_json::to_value(&report)?;
@@ -211,7 +214,9 @@ impl DiagnosticsCommands {
             }
 
             DiagnosticsCommands::ListReports => {
-                let reports = handler.list_reports().await.map_err(RedisCtlError::from)?;
+                let reports = handler.list_reports().await.map_err(|e| {
+                    map_endpoint_error(e, "list-reports", "/v1/diagnostics/reports")
+                })?;
 
                 // Convert to JSON Value for output
                 let response = serde_json::to_value(&reports)?;
@@ -242,6 +247,24 @@ pub async fn handle_diagnostics_command(
         .await
 }
 
+/// Map an error from a diagnostics endpoint into a `RedisCtlError`.
+///
+/// A 404 is turned into a clear, actionable message naming the specific
+/// endpoint, since these diagnostics endpoints may not be supported by all
+/// Redis Enterprise versions. Any other error is converted normally.
+fn map_endpoint_error(err: RestError, command: &str, endpoint: &str) -> RedisCtlError {
+    if err.is_not_found() {
+        RedisCtlError::ApiError {
+            message: format!(
+                "The '{command}' endpoint ({endpoint}) is not available on this cluster. \
+                 This feature may not be supported by your Redis Enterprise version."
+            ),
+        }
+    } else {
+        RedisCtlError::from(err)
+    }
+}
+
 // Helper functions
 #[allow(dead_code)]
 fn parse_comma_separated(input: &Option<String>) -> Option<Vec<String>> {
@@ -264,4 +287,74 @@ fn parse_comma_separated_u32(input: &Option<String>) -> Option<Vec<u32>> {
             .collect();
         values.ok()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn not_found_maps_to_actionable_endpoint_message() {
+        let err = map_endpoint_error(RestError::NotFound, "list-checks", "/v1/diagnostics/checks");
+
+        match err {
+            RedisCtlError::ApiError { message } => {
+                assert!(
+                    message.contains("/v1/diagnostics/checks"),
+                    "message should name the endpoint, got: {message}"
+                );
+                assert!(
+                    message.contains("not available"),
+                    "message should explain it is not available, got: {message}"
+                );
+                assert!(
+                    message.contains("list-checks"),
+                    "message should name the command, got: {message}"
+                );
+            }
+            other => panic!("expected ApiError, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn api_error_404_also_maps_to_actionable_message() {
+        let err = map_endpoint_error(
+            RestError::ApiError {
+                code: 404,
+                message: "not found".to_string(),
+            },
+            "list-reports",
+            "/v1/diagnostics/reports",
+        );
+
+        match err {
+            RedisCtlError::ApiError { message } => {
+                assert!(message.contains("/v1/diagnostics/reports"));
+                assert!(message.contains("not available"));
+            }
+            other => panic!("expected ApiError, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_404_error_passes_through() {
+        let err = map_endpoint_error(
+            RestError::ServerError("boom".to_string()),
+            "list-checks",
+            "/v1/diagnostics/checks",
+        );
+
+        match err {
+            RedisCtlError::ApiError { message } => {
+                // Should be the generic server-error conversion, not the
+                // "not available" endpoint message.
+                assert!(
+                    !message.contains("not available"),
+                    "non-404 errors must not be rewritten, got: {message}"
+                );
+                assert!(message.contains("boom"));
+            }
+            other => panic!("expected ApiError from server error, got: {other:?}"),
+        }
+    }
 }
