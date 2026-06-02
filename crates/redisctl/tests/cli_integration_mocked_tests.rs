@@ -1065,6 +1065,40 @@ async fn test_env_vars_work_without_config_file() {
         .stdout(predicate::str::contains("env credentials used"));
 }
 
+/// Regression test for https://github.com/redis/redisctl/issues/919
+///
+/// When the endpoint is available the API returns HTTP 200 with an empty
+/// body.  The old typed `client.get::<Value>()` tried to JSON-deserialise
+/// that empty body and failed.  The fix uses `get_text` + synthesises the
+/// result, so the command must succeed and output `"available": true`.
+#[tokio::test]
+async fn test_enterprise_endpoint_availability_empty_200_body() {
+    let temp_dir = TempDir::new().unwrap();
+    let mock_server = MockServer::start().await;
+
+    create_enterprise_profile(&temp_dir, &mock_server.uri()).unwrap();
+
+    // Simulate the real cluster behaviour: 200 OK with zero bytes.
+    Mock::given(method("GET"))
+        .and(path("/v1/local/bdbs/1/endpoint/availability"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    test_cmd(&temp_dir)
+        .arg("enterprise")
+        .arg("endpoint")
+        .arg("availability")
+        .arg("1")
+        .arg("-o")
+        .arg("json")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("available"))
+        .stdout(predicate::str::contains("true"));
+}
+
 #[tokio::test]
 async fn test_cloud_api_secret_alias_works_without_config_file() {
     let mock_server = MockServer::start().await;
