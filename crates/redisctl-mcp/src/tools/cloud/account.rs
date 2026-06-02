@@ -6,6 +6,7 @@ use redis_cloud::acl::{
     AclUserUpdateRequest,
 };
 use redis_cloud::cloud_accounts::{CloudAccountCreateRequest, CloudAccountUpdateRequest};
+use redis_cloud::types::TaskStatus;
 use redis_cloud::users::AccountUserUpdateRequest;
 use redis_cloud::{
     AccountHandler, AclHandler, CloudAccountHandler, CostReportCreateRequest, CostReportHandler,
@@ -688,20 +689,13 @@ cloud_tool!(read_only, wait_for_cloud_task, "wait_for_cloud_task",
                 .await
                 .tool_context("Failed to get task status")?;
 
-            // Check for terminal states
-            if let Some(ref status) = task.status {
-                let s = status.to_lowercase();
-                if matches!(
-                    s.as_str(),
-                    "completed"
-                        | "failed"
-                        | "error"
-                        | "success"
-                        | "cancelled"
-                        | "aborted"
-                ) {
-                    return CallToolResult::from_serialize(&task);
-                }
+            // Check for terminal states. `TaskStatus` models only the two
+            // terminal states explicitly; everything else is still in flight.
+            if matches!(
+                task.status,
+                Some(TaskStatus::ProcessingCompleted) | Some(TaskStatus::ProcessingError)
+            ) {
+                return CallToolResult::from_serialize(&task);
             }
 
             // Check timeout

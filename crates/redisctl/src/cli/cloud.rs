@@ -287,6 +287,9 @@ pub enum PscCommands {
     EndpointsList {
         /// Subscription ID
         subscription_id: i32,
+        /// PSC Service ID
+        #[arg(long)]
+        psc_service_id: i32,
     },
     /// Create PSC endpoint
     #[command(
@@ -306,6 +309,10 @@ pub enum PscCommands {
     EndpointCreate {
         /// Subscription ID
         subscription_id: i32,
+
+        /// PSC Service ID
+        #[arg(long)]
+        psc_service_id: i32,
 
         /// GCP project ID
         #[arg(long, required_unless_present = "data")]
@@ -351,7 +358,7 @@ pub enum PscCommands {
         endpoint_id: i32,
         /// PSC Service ID
         #[arg(long)]
-        psc_service_id: Option<i32>,
+        psc_service_id: i32,
 
         /// GCP project ID
         #[arg(long)]
@@ -381,6 +388,9 @@ pub enum PscCommands {
     EndpointDelete {
         /// Subscription ID
         subscription_id: i32,
+        /// PSC Service ID
+        #[arg(long)]
+        psc_service_id: i32,
         /// Endpoint ID
         endpoint_id: i32,
         /// Skip confirmation prompt
@@ -394,6 +404,9 @@ pub enum PscCommands {
     EndpointCreationScript {
         /// Subscription ID
         subscription_id: i32,
+        /// PSC Service ID
+        #[arg(long)]
+        psc_service_id: i32,
         /// Endpoint ID
         endpoint_id: i32,
     },
@@ -402,6 +415,9 @@ pub enum PscCommands {
     EndpointDeletionScript {
         /// Subscription ID
         subscription_id: i32,
+        /// PSC Service ID
+        #[arg(long)]
+        psc_service_id: i32,
         /// Endpoint ID
         endpoint_id: i32,
     },
@@ -412,12 +428,16 @@ pub enum PscCommands {
     AaServiceGet {
         /// Subscription ID
         subscription_id: i32,
+        /// Region ID
+        region_id: i32,
     },
     /// Create Active-Active PSC service
     #[command(name = "aa-service-create")]
     AaServiceCreate {
         /// Subscription ID
         subscription_id: i32,
+        /// Region ID
+        region_id: i32,
         #[command(flatten)]
         async_ops: crate::commands::cloud::async_utils::AsyncOperationArgs,
     },
@@ -426,6 +446,8 @@ pub enum PscCommands {
     AaServiceDelete {
         /// Subscription ID
         subscription_id: i32,
+        /// Region ID
+        region_id: i32,
         /// Skip confirmation prompt
         #[arg(short, long)]
         yes: bool,
@@ -439,6 +461,11 @@ pub enum PscCommands {
     AaEndpointsList {
         /// Subscription ID
         subscription_id: i32,
+        /// Region ID
+        region_id: i32,
+        /// PSC Service ID
+        #[arg(long)]
+        psc_service_id: i32,
     },
     /// Create Active-Active PSC endpoint
     #[command(
@@ -458,6 +485,14 @@ pub enum PscCommands {
     AaEndpointCreate {
         /// Subscription ID
         subscription_id: i32,
+
+        /// Region ID
+        #[arg(long)]
+        region_id: i32,
+
+        /// PSC Service ID
+        #[arg(long)]
+        psc_service_id: i32,
 
         /// GCP project ID
         #[arg(long, required_unless_present = "data")]
@@ -489,6 +524,9 @@ pub enum PscCommands {
         subscription_id: i32,
         /// Region ID
         region_id: i32,
+        /// PSC Service ID
+        #[arg(long)]
+        psc_service_id: i32,
         /// Endpoint ID
         endpoint_id: i32,
         /// Skip confirmation prompt
@@ -634,6 +672,8 @@ pub enum TgwCommands {
     AaAttachmentsList {
         /// Subscription ID
         subscription_id: i32,
+        /// Region ID
+        region_id: i32,
     },
     /// Create Active-Active TGW attachment
     #[command(
@@ -734,6 +774,8 @@ pub enum TgwCommands {
     AaInvitationsList {
         /// Subscription ID
         subscription_id: i32,
+        /// Region ID
+        region_id: i32,
     },
     /// Accept Active-Active TGW resource share invitation
     #[command(name = "aa-invitation-accept")]

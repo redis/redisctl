@@ -76,11 +76,22 @@ pub async fn handle_psc_command(
         }
 
         // Standard PSC Endpoint operations
-        PscCommands::EndpointsList { subscription_id } => {
-            get_endpoints(&client, *subscription_id, output_format, query).await
+        PscCommands::EndpointsList {
+            subscription_id,
+            psc_service_id,
+        } => {
+            get_endpoints(
+                &client,
+                *subscription_id,
+                *psc_service_id,
+                output_format,
+                query,
+            )
+            .await
         }
         PscCommands::EndpointCreate {
             subscription_id,
+            psc_service_id,
             gcp_project_id,
             gcp_vpc_name,
             gcp_vpc_subnet_name,
@@ -102,10 +113,10 @@ pub async fn handle_psc_command(
                 gcp_vpc_name: gcp_vpc_name.clone(),
                 gcp_vpc_subnet_name: gcp_vpc_subnet_name.clone(),
                 endpoint_connection_name: endpoint_connection_name.clone(),
-                psc_service_id: None,
+                psc_service_id: Some(*psc_service_id),
                 data: data.clone(),
             };
-            create_endpoint(&params, &endpoint_params).await
+            create_endpoint(&params, *psc_service_id, &endpoint_params).await
         }
         PscCommands::EndpointUpdate {
             subscription_id,
@@ -132,13 +143,14 @@ pub async fn handle_psc_command(
                 gcp_vpc_name: gcp_vpc_name.clone(),
                 gcp_vpc_subnet_name: gcp_vpc_subnet_name.clone(),
                 endpoint_connection_name: endpoint_connection_name.clone(),
-                psc_service_id: *psc_service_id,
+                psc_service_id: Some(*psc_service_id),
                 data: data.clone(),
             };
-            update_endpoint(&params, *endpoint_id, &endpoint_params).await
+            update_endpoint(&params, *psc_service_id, *endpoint_id, &endpoint_params).await
         }
         PscCommands::EndpointDelete {
             subscription_id,
+            psc_service_id,
             endpoint_id,
             yes,
             async_ops,
@@ -152,23 +164,33 @@ pub async fn handle_psc_command(
                 output_format,
                 query,
             };
-            delete_endpoint(&params, *endpoint_id, *yes).await
+            delete_endpoint(&params, *psc_service_id, *endpoint_id, *yes).await
         }
         PscCommands::EndpointCreationScript {
             subscription_id,
+            psc_service_id,
             endpoint_id,
-        } => get_endpoint_creation_script(&client, *subscription_id, *endpoint_id).await,
+        } => {
+            get_endpoint_creation_script(&client, *subscription_id, *psc_service_id, *endpoint_id)
+                .await
+        }
         PscCommands::EndpointDeletionScript {
             subscription_id,
+            psc_service_id,
             endpoint_id,
-        } => get_endpoint_deletion_script(&client, *subscription_id, *endpoint_id).await,
+        } => {
+            get_endpoint_deletion_script(&client, *subscription_id, *psc_service_id, *endpoint_id)
+                .await
+        }
 
         // Active-Active PSC Service operations
-        PscCommands::AaServiceGet { subscription_id } => {
-            get_service_aa(&client, *subscription_id, output_format, query).await
-        }
+        PscCommands::AaServiceGet {
+            subscription_id,
+            region_id,
+        } => get_service_aa(&client, *subscription_id, *region_id, output_format, query).await,
         PscCommands::AaServiceCreate {
             subscription_id,
+            region_id,
             async_ops,
         } => {
             let params = ConnectivityOperationParams {
@@ -180,10 +202,11 @@ pub async fn handle_psc_command(
                 output_format,
                 query,
             };
-            create_service_aa(&params).await
+            create_service_aa(&params, *region_id).await
         }
         PscCommands::AaServiceDelete {
             subscription_id,
+            region_id,
             yes,
             async_ops,
         } => {
@@ -196,15 +219,29 @@ pub async fn handle_psc_command(
                 output_format,
                 query,
             };
-            delete_service_aa(&params, *yes).await
+            delete_service_aa(&params, *region_id, *yes).await
         }
 
         // Active-Active PSC Endpoint operations
-        PscCommands::AaEndpointsList { subscription_id } => {
-            get_endpoints_aa(&client, *subscription_id, output_format, query).await
+        PscCommands::AaEndpointsList {
+            subscription_id,
+            region_id,
+            psc_service_id,
+        } => {
+            get_endpoints_aa(
+                &client,
+                *subscription_id,
+                *region_id,
+                *psc_service_id,
+                output_format,
+                query,
+            )
+            .await
         }
         PscCommands::AaEndpointCreate {
             subscription_id,
+            region_id,
+            psc_service_id,
             gcp_project_id,
             gcp_vpc_name,
             gcp_vpc_subnet_name,
@@ -226,14 +263,15 @@ pub async fn handle_psc_command(
                 gcp_vpc_name: gcp_vpc_name.clone(),
                 gcp_vpc_subnet_name: gcp_vpc_subnet_name.clone(),
                 endpoint_connection_name: endpoint_connection_name.clone(),
-                psc_service_id: None,
+                psc_service_id: Some(*psc_service_id),
                 data: data.clone(),
             };
-            create_endpoint_aa(&params, &endpoint_params).await
+            create_endpoint_aa(&params, *region_id, *psc_service_id, &endpoint_params).await
         }
         PscCommands::AaEndpointDelete {
             subscription_id,
             region_id,
+            psc_service_id,
             endpoint_id,
             yes,
             async_ops,
@@ -247,7 +285,7 @@ pub async fn handle_psc_command(
                 output_format,
                 query,
             };
-            delete_endpoint_aa(&params, *region_id, *endpoint_id, *yes).await
+            delete_endpoint_aa(&params, *region_id, *psc_service_id, *endpoint_id, *yes).await
         }
     }
 }
@@ -334,12 +372,13 @@ async fn delete_service(params: &ConnectivityOperationParams<'_>, yes: bool) -> 
 async fn get_endpoints(
     client: &CloudClient,
     subscription_id: i32,
+    psc_service_id: i32,
     output_format: OutputFormat,
     query: Option<&str>,
 ) -> CliResult<()> {
     let handler = PscHandler::new(client.clone());
     let response = handler
-        .get_endpoints(subscription_id)
+        .get_endpoints(subscription_id, psc_service_id)
         .await
         .context("Failed to get PSC endpoints")?;
 
@@ -379,13 +418,14 @@ fn build_psc_endpoint_request(
 
 async fn create_endpoint(
     params: &ConnectivityOperationParams<'_>,
+    psc_service_id: i32,
     endpoint_params: &PscEndpointParams,
 ) -> CliResult<()> {
     let request = build_psc_endpoint_request(params.subscription_id, 0, endpoint_params)?;
 
     let handler = PscHandler::new(params.client.clone());
     let response = handler
-        .create_endpoint(params.subscription_id, &request)
+        .create_endpoint(params.subscription_id, psc_service_id, &request)
         .await
         .context("Failed to create PSC endpoint")?;
 
@@ -405,6 +445,7 @@ async fn create_endpoint(
 
 async fn update_endpoint(
     params: &ConnectivityOperationParams<'_>,
+    psc_service_id: i32,
     endpoint_id: i32,
     endpoint_params: &PscEndpointParams,
 ) -> CliResult<()> {
@@ -412,7 +453,12 @@ async fn update_endpoint(
 
     let handler = PscHandler::new(params.client.clone());
     let response = handler
-        .update_endpoint(params.subscription_id, endpoint_id, &request)
+        .update_endpoint(
+            params.subscription_id,
+            psc_service_id,
+            endpoint_id,
+            &request,
+        )
         .await
         .context("Failed to update PSC endpoint")?;
 
@@ -432,6 +478,7 @@ async fn update_endpoint(
 
 async fn delete_endpoint(
     params: &ConnectivityOperationParams<'_>,
+    psc_service_id: i32,
     endpoint_id: i32,
     yes: bool,
 ) -> CliResult<()> {
@@ -448,7 +495,7 @@ async fn delete_endpoint(
 
     let handler = PscHandler::new(params.client.clone());
     let response = handler
-        .delete_endpoint(params.subscription_id, endpoint_id)
+        .delete_endpoint(params.subscription_id, psc_service_id, endpoint_id)
         .await
         .context("Failed to delete PSC endpoint")?;
 
@@ -469,11 +516,12 @@ async fn delete_endpoint(
 async fn get_endpoint_creation_script(
     client: &CloudClient,
     subscription_id: i32,
+    psc_service_id: i32,
     endpoint_id: i32,
 ) -> CliResult<()> {
     let handler = PscHandler::new(client.clone());
     let script = handler
-        .get_endpoint_creation_script(subscription_id, endpoint_id)
+        .get_endpoint_creation_script(subscription_id, psc_service_id, endpoint_id)
         .await
         .context("Failed to get creation script")?;
 
@@ -485,11 +533,12 @@ async fn get_endpoint_creation_script(
 async fn get_endpoint_deletion_script(
     client: &CloudClient,
     subscription_id: i32,
+    psc_service_id: i32,
     endpoint_id: i32,
 ) -> CliResult<()> {
     let handler = PscHandler::new(client.clone());
     let script = handler
-        .get_endpoint_deletion_script(subscription_id, endpoint_id)
+        .get_endpoint_deletion_script(subscription_id, psc_service_id, endpoint_id)
         .await
         .context("Failed to get deletion script")?;
 
@@ -505,12 +554,13 @@ async fn get_endpoint_deletion_script(
 async fn get_service_aa(
     client: &CloudClient,
     subscription_id: i32,
+    region_id: i32,
     output_format: OutputFormat,
     query: Option<&str>,
 ) -> CliResult<()> {
     let handler = PscHandler::new(client.clone());
     let response = handler
-        .get_service_active_active(subscription_id)
+        .get_service_active_active(subscription_id, region_id)
         .await
         .context("Failed to get Active-Active PSC service")?;
 
@@ -520,10 +570,13 @@ async fn get_service_aa(
     Ok(())
 }
 
-async fn create_service_aa(params: &ConnectivityOperationParams<'_>) -> CliResult<()> {
+async fn create_service_aa(
+    params: &ConnectivityOperationParams<'_>,
+    region_id: i32,
+) -> CliResult<()> {
     let handler = PscHandler::new(params.client.clone());
     let response = handler
-        .create_service_active_active(params.subscription_id)
+        .create_service_active_active(params.subscription_id, region_id)
         .await
         .context("Failed to create Active-Active PSC service")?;
 
@@ -541,7 +594,11 @@ async fn create_service_aa(params: &ConnectivityOperationParams<'_>) -> CliResul
     .await
 }
 
-async fn delete_service_aa(params: &ConnectivityOperationParams<'_>, yes: bool) -> CliResult<()> {
+async fn delete_service_aa(
+    params: &ConnectivityOperationParams<'_>,
+    region_id: i32,
+    yes: bool,
+) -> CliResult<()> {
     if !yes {
         let prompt = format!(
             "Delete Active-Active PSC service for subscription {}?",
@@ -555,7 +612,7 @@ async fn delete_service_aa(params: &ConnectivityOperationParams<'_>, yes: bool) 
 
     let handler = PscHandler::new(params.client.clone());
     let response = handler
-        .delete_service_active_active(params.subscription_id)
+        .delete_service_active_active(params.subscription_id, region_id)
         .await
         .context("Failed to delete Active-Active PSC service")?;
 
@@ -580,12 +637,14 @@ async fn delete_service_aa(params: &ConnectivityOperationParams<'_>, yes: bool) 
 async fn get_endpoints_aa(
     client: &CloudClient,
     subscription_id: i32,
+    region_id: i32,
+    psc_service_id: i32,
     output_format: OutputFormat,
     query: Option<&str>,
 ) -> CliResult<()> {
     let handler = PscHandler::new(client.clone());
     let response = handler
-        .get_endpoints_active_active(subscription_id)
+        .get_endpoints_active_active(subscription_id, region_id, psc_service_id)
         .await
         .context("Failed to get Active-Active PSC endpoints")?;
 
@@ -597,13 +656,15 @@ async fn get_endpoints_aa(
 
 async fn create_endpoint_aa(
     params: &ConnectivityOperationParams<'_>,
+    region_id: i32,
+    psc_service_id: i32,
     endpoint_params: &PscEndpointParams,
 ) -> CliResult<()> {
     let request = build_psc_endpoint_request(params.subscription_id, 0, endpoint_params)?;
 
     let handler = PscHandler::new(params.client.clone());
     let response = handler
-        .create_endpoint_active_active(params.subscription_id, &request)
+        .create_endpoint_active_active(params.subscription_id, region_id, psc_service_id, &request)
         .await
         .context("Failed to create Active-Active PSC endpoint")?;
 
@@ -624,6 +685,7 @@ async fn create_endpoint_aa(
 async fn delete_endpoint_aa(
     params: &ConnectivityOperationParams<'_>,
     region_id: i32,
+    psc_service_id: i32,
     endpoint_id: i32,
     yes: bool,
 ) -> CliResult<()> {
@@ -640,7 +702,12 @@ async fn delete_endpoint_aa(
 
     let handler = PscHandler::new(params.client.clone());
     let response = handler
-        .delete_endpoint_active_active(params.subscription_id, region_id, endpoint_id)
+        .delete_endpoint_active_active(
+            params.subscription_id,
+            region_id,
+            psc_service_id,
+            endpoint_id,
+        )
         .await
         .context("Failed to delete Active-Active PSC endpoint")?;
 

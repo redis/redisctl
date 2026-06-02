@@ -169,7 +169,8 @@ async fn handle_get(
             .context("Failed to get PrivateLink configuration")?
     };
 
-    let data = handle_output(result, output_format, query)?;
+    let json_response = serde_json::to_value(result).context("Failed to serialize response")?;
+    let data = handle_output(json_response, output_format, query)?;
     print_formatted_output(data, output_format)?;
     Ok(())
 }
@@ -303,10 +304,11 @@ async fn handle_create(
             .context("Failed to create PrivateLink")?
     };
 
+    let json_response = serde_json::to_value(result).context("Failed to serialize response")?;
     handle_async_response(
         params.conn_mgr,
         params.profile_name,
-        result,
+        json_response,
         params.async_ops,
         params.output_format,
         params.query,
@@ -338,7 +340,8 @@ async fn handle_add_principal(
             .context("Failed to add principals to PrivateLink")?
     };
 
-    let data = handle_output(result, output_format, query)?;
+    let json_response = serde_json::to_value(result).context("Failed to serialize response")?;
+    let data = handle_output(json_response, output_format, query)?;
     print_formatted_output(data, output_format)?;
     Ok(())
 }
@@ -366,7 +369,8 @@ async fn handle_remove_principal(
             .context("Failed to remove principals from PrivateLink")?
     };
 
-    let data = handle_output(result, output_format, query)?;
+    let json_response = serde_json::to_value(result).context("Failed to serialize response")?;
+    let data = handle_output(json_response, output_format, query)?;
     print_formatted_output(data, output_format)?;
     Ok(())
 }
@@ -391,7 +395,8 @@ async fn handle_get_script(
             .context("Failed to get endpoint script")?
     };
 
-    let data = handle_output(result, output_format, query)?;
+    let json_response = serde_json::to_value(result).context("Failed to serialize response")?;
+    let data = handle_output(json_response, output_format, query)?;
     print_formatted_output(data, output_format)?;
     Ok(())
 }
@@ -425,10 +430,11 @@ async fn handle_delete(
         .await
         .context("Failed to delete PrivateLink")?;
 
+    let json_response = serde_json::to_value(result).context("Failed to serialize response")?;
     handle_async_response(
         params.conn_mgr,
         params.profile_name,
-        result,
+        json_response,
         params.async_ops,
         params.output_format,
         params.query,

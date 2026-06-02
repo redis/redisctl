@@ -32,8 +32,12 @@ mcp_module! {
 enterprise_tool!(read_only, list_alerts, "list_alerts",
     "List all active alerts.",
     {} => |client, _input| {
-        let handler = redis_enterprise::alerts::AlertHandler::new(client);
-        let alerts = handler.list().await.tool_context("Failed to list alerts")?;
+        // The `AlertHandler::list` convenience method was removed upstream; call
+        // the cluster-wide alerts route directly to preserve this tool.
+        let alerts: Vec<redis_enterprise::alerts::Alert> = client
+            .get("/v1/alerts")
+            .await
+            .tool_context("Failed to list alerts")?;
         CallToolResult::from_list("alerts", &alerts)
     }
 );
@@ -44,9 +48,10 @@ enterprise_tool!(write, acknowledge_enterprise_alert, "acknowledge_enterprise_al
         /// Alert UID to acknowledge
         pub alert_uid: String,
     } => |client, input| {
-        let handler = redis_enterprise::alerts::AlertHandler::new(client);
-        handler
-            .clear(&input.alert_uid)
+        // The `AlertHandler::clear` convenience method was removed upstream;
+        // delete the alert directly to preserve this tool.
+        client
+            .delete(&format!("/v1/alerts/{}", input.alert_uid))
             .await
             .tool_context("Failed to acknowledge alert")?;
 

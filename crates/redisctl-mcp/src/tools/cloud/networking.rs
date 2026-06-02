@@ -4,7 +4,9 @@
 
 use redis_cloud::connectivity::psc::PscEndpointUpdateRequest;
 use redis_cloud::connectivity::transit_gateway::TgwAttachmentRequest;
-use redis_cloud::connectivity::vpc_peering::VpcPeeringCreateRequest;
+use redis_cloud::connectivity::vpc_peering::{
+    ActiveActiveVpcPeeringCreateRequest, VpcPeeringCreateRequest, VpcPeeringUpdateAwsRequest,
+};
 use redis_cloud::{
     PrincipalType, PrivateLinkAddPrincipalRequest, PrivateLinkCreateRequest, PrivateLinkHandler,
     PscHandler, TransitGatewayHandler, VpcPeeringHandler,
@@ -261,11 +263,13 @@ cloud_tool!(write, create_aa_vpc_peering, "create_aa_vpc_peering",
         #[serde(default)]
         pub network_name: Option<String>,
     } => |client, input| {
-        let request = VpcPeeringCreateRequest {
+        // Active-Active peering uses a distinct request type upstream; map the
+        // single `aws_region` onto `source_region`.
+        let request = ActiveActiveVpcPeeringCreateRequest {
             provider: input.provider,
-            vpc_id: input.vpc_id,
-            aws_region: input.aws_region,
+            source_region: input.aws_region,
             aws_account_id: input.aws_account_id,
+            vpc_id: input.vpc_id,
             vpc_cidr: input.vpc_cidr,
             vpc_cidrs: input.vpc_cidrs,
             gcp_project_id: input.gcp_project_id,
@@ -290,41 +294,20 @@ cloud_tool!(write, update_aa_vpc_peering, "update_aa_vpc_peering",
         pub subscription_id: i32,
         /// VPC Peering ID
         pub peering_id: i32,
-        /// Cloud provider (AWS, GCP, Azure)
-        #[serde(default)]
-        pub provider: Option<String>,
-        /// AWS VPC ID
-        #[serde(default)]
-        pub vpc_id: Option<String>,
-        /// AWS region
-        #[serde(default)]
-        pub aws_region: Option<String>,
-        /// AWS account ID
-        #[serde(default)]
-        pub aws_account_id: Option<String>,
         /// VPC CIDR block
         #[serde(default)]
         pub vpc_cidr: Option<String>,
         /// Multiple VPC CIDR blocks
         #[serde(default)]
         pub vpc_cidrs: Option<Vec<String>>,
-        /// GCP project ID (for GCP peering)
-        #[serde(default)]
-        pub gcp_project_id: Option<String>,
-        /// GCP network name (for GCP peering)
-        #[serde(default)]
-        pub network_name: Option<String>,
     } => |client, input| {
-        let request = VpcPeeringCreateRequest {
-            provider: input.provider,
-            vpc_id: input.vpc_id,
-            aws_region: input.aws_region,
-            aws_account_id: input.aws_account_id,
+        // Active-Active update only carries the CIDR list upstream.
+        let request = VpcPeeringUpdateAwsRequest {
+            subscription_id: None,
+            vpc_peering_id: None,
             vpc_cidr: input.vpc_cidr,
             vpc_cidrs: input.vpc_cidrs,
-            gcp_project_id: input.gcp_project_id,
-            network_name: input.network_name,
-            ..Default::default()
+            command_type: None,
         };
 
         let handler = VpcPeeringHandler::new(client);
@@ -432,25 +415,19 @@ cloud_tool!(write, create_tgw_attachment, "create_tgw_attachment",
     {
         /// Subscription ID
         pub subscription_id: i32,
-        /// AWS account ID
-        #[serde(default)]
-        pub aws_account_id: Option<String>,
         /// Transit Gateway ID
         #[serde(default)]
         pub tgw_id: Option<String>,
-        /// CIDR blocks to route through the TGW
-        #[serde(default)]
-        pub cidrs: Option<Vec<String>>,
     } => |client, input| {
-        let request = TgwAttachmentRequest {
-            aws_account_id: input.aws_account_id,
-            tgw_id: input.tgw_id,
-            cidrs: input.cidrs,
-        };
+        // The attachment route now requires the TGW ID in the path; the
+        // generic `create_attachment` was removed upstream.
+        let tgw_id = input
+            .tgw_id
+            .ok_or_else(|| ToolError::new("tgw_id is required".to_string()))?;
 
         let handler = TransitGatewayHandler::new(client);
         let result = handler
-            .create_attachment(input.subscription_id, &request)
+            .create_attachment_with_id(input.subscription_id, &tgw_id)
             .await
             .tool_context("Failed to create TGW attachment")?;
 
@@ -518,10 +495,12 @@ cloud_tool!(read_only, get_aa_tgw_attachments, "get_aa_tgw_attachments",
     {
         /// Subscription ID
         pub subscription_id: i32,
+        /// Region ID
+        pub region_id: i32,
     } => |client, input| {
         let handler = TransitGatewayHandler::new(client);
         let result = handler
-            .get_attachments_active_active(input.subscription_id)
+            .get_attachments_active_active(input.subscription_id, input.region_id)
             .await
             .tool_context("Failed to get AA TGW attachments")?;
 
@@ -534,10 +513,12 @@ cloud_tool!(read_only, get_aa_tgw_invitations, "get_aa_tgw_invitations",
     {
         /// Subscription ID
         pub subscription_id: i32,
+        /// Region ID
+        pub region_id: i32,
     } => |client, input| {
         let handler = TransitGatewayHandler::new(client);
         let result = handler
-            .get_shared_invitations_active_active(input.subscription_id)
+            .get_shared_invitations_active_active(input.subscription_id, input.region_id)
             .await
             .tool_context("Failed to get AA TGW invitations")?;
 
@@ -610,6 +591,11 @@ cloud_tool!(write, create_aa_tgw_attachment, "create_aa_tgw_attachment",
         #[serde(default)]
         pub cidrs: Option<Vec<String>>,
     } => |client, input| {
+        // The attachment route now requires the TGW ID in the path.
+        let tgw_id = input
+            .tgw_id
+            .clone()
+            .ok_or_else(|| ToolError::new("tgw_id is required".to_string()))?;
         let request = TgwAttachmentRequest {
             aws_account_id: input.aws_account_id,
             tgw_id: input.tgw_id,
@@ -621,6 +607,7 @@ cloud_tool!(write, create_aa_tgw_attachment, "create_aa_tgw_attachment",
             .create_attachment_active_active(
                 input.subscription_id,
                 input.region_id,
+                &tgw_id,
                 &request,
             )
             .await
@@ -751,10 +738,12 @@ cloud_tool!(read_only, get_psc_endpoints, "get_psc_endpoints",
     {
         /// Subscription ID
         pub subscription_id: i32,
+        /// PSC service ID
+        pub psc_service_id: i32,
     } => |client, input| {
         let handler = PscHandler::new(client);
         let result = handler
-            .get_endpoints(input.subscription_id)
+            .get_endpoints(input.subscription_id, input.psc_service_id)
             .await
             .tool_context("Failed to get PSC endpoints")?;
 
@@ -796,7 +785,7 @@ cloud_tool!(write, create_psc_endpoint, "create_psc_endpoint",
 
         let handler = PscHandler::new(client);
         let result = handler
-            .create_endpoint(input.subscription_id, &request)
+            .create_endpoint(input.subscription_id, input.psc_service_id, &request)
             .await
             .tool_context("Failed to create PSC endpoint")?;
 
@@ -838,7 +827,12 @@ cloud_tool!(write, update_psc_endpoint, "update_psc_endpoint",
 
         let handler = PscHandler::new(client);
         let result = handler
-            .update_endpoint(input.subscription_id, input.endpoint_id, &request)
+            .update_endpoint(
+                input.subscription_id,
+                input.psc_service_id,
+                input.endpoint_id,
+                &request,
+            )
             .await
             .tool_context("Failed to update PSC endpoint")?;
 
@@ -851,12 +845,14 @@ cloud_tool!(destructive, delete_psc_endpoint, "delete_psc_endpoint",
     {
         /// Subscription ID
         pub subscription_id: i32,
+        /// PSC service ID
+        pub psc_service_id: i32,
         /// Endpoint ID
         pub endpoint_id: i32,
     } => |client, input| {
         let handler = PscHandler::new(client);
         let result = handler
-            .delete_endpoint(input.subscription_id, input.endpoint_id)
+            .delete_endpoint(input.subscription_id, input.psc_service_id, input.endpoint_id)
             .await
             .tool_context("Failed to delete PSC endpoint")?;
 
@@ -869,12 +865,18 @@ cloud_tool!(read_only, get_psc_creation_script, "get_psc_creation_script",
     {
         /// Subscription ID
         pub subscription_id: i32,
+        /// PSC service ID
+        pub psc_service_id: i32,
         /// Endpoint ID
         pub endpoint_id: i32,
     } => |client, input| {
         let handler = PscHandler::new(client);
         let result = handler
-            .get_endpoint_creation_script(input.subscription_id, input.endpoint_id)
+            .get_endpoint_creation_script(
+                input.subscription_id,
+                input.psc_service_id,
+                input.endpoint_id,
+            )
             .await
             .tool_context("Failed to get PSC creation script")?;
 
@@ -887,12 +889,18 @@ cloud_tool!(read_only, get_psc_deletion_script, "get_psc_deletion_script",
     {
         /// Subscription ID
         pub subscription_id: i32,
+        /// PSC service ID
+        pub psc_service_id: i32,
         /// Endpoint ID
         pub endpoint_id: i32,
     } => |client, input| {
         let handler = PscHandler::new(client);
         let result = handler
-            .get_endpoint_deletion_script(input.subscription_id, input.endpoint_id)
+            .get_endpoint_deletion_script(
+                input.subscription_id,
+                input.psc_service_id,
+                input.endpoint_id,
+            )
             .await
             .tool_context("Failed to get PSC deletion script")?;
 
@@ -909,10 +917,12 @@ cloud_tool!(read_only, get_aa_psc_service, "get_aa_psc_service",
     {
         /// Subscription ID
         pub subscription_id: i32,
+        /// Region ID
+        pub region_id: i32,
     } => |client, input| {
         let handler = PscHandler::new(client);
         let result = handler
-            .get_service_active_active(input.subscription_id)
+            .get_service_active_active(input.subscription_id, input.region_id)
             .await
             .tool_context("Failed to get AA PSC service")?;
 
@@ -925,10 +935,12 @@ cloud_tool!(write, create_aa_psc_service, "create_aa_psc_service",
     {
         /// Subscription ID
         pub subscription_id: i32,
+        /// Region ID
+        pub region_id: i32,
     } => |client, input| {
         let handler = PscHandler::new(client);
         let result = handler
-            .create_service_active_active(input.subscription_id)
+            .create_service_active_active(input.subscription_id, input.region_id)
             .await
             .tool_context("Failed to create AA PSC service")?;
 
@@ -941,10 +953,12 @@ cloud_tool!(destructive, delete_aa_psc_service, "delete_aa_psc_service",
     {
         /// Subscription ID
         pub subscription_id: i32,
+        /// Region ID
+        pub region_id: i32,
     } => |client, input| {
         let handler = PscHandler::new(client);
         let result = handler
-            .delete_service_active_active(input.subscription_id)
+            .delete_service_active_active(input.subscription_id, input.region_id)
             .await
             .tool_context("Failed to delete AA PSC service")?;
 
@@ -957,10 +971,18 @@ cloud_tool!(read_only, get_aa_psc_endpoints, "get_aa_psc_endpoints",
     {
         /// Subscription ID
         pub subscription_id: i32,
+        /// Region ID
+        pub region_id: i32,
+        /// PSC service ID
+        pub psc_service_id: i32,
     } => |client, input| {
         let handler = PscHandler::new(client);
         let result = handler
-            .get_endpoints_active_active(input.subscription_id)
+            .get_endpoints_active_active(
+                input.subscription_id,
+                input.region_id,
+                input.psc_service_id,
+            )
             .await
             .tool_context("Failed to get AA PSC endpoints")?;
 
@@ -973,6 +995,8 @@ cloud_tool!(write, create_aa_psc_endpoint, "create_aa_psc_endpoint",
     {
         /// Subscription ID
         pub subscription_id: i32,
+        /// Region ID
+        pub region_id: i32,
         /// PSC service ID
         pub psc_service_id: i32,
         /// Endpoint ID
@@ -1002,7 +1026,12 @@ cloud_tool!(write, create_aa_psc_endpoint, "create_aa_psc_endpoint",
 
         let handler = PscHandler::new(client);
         let result = handler
-            .create_endpoint_active_active(input.subscription_id, &request)
+            .create_endpoint_active_active(
+                input.subscription_id,
+                input.region_id,
+                input.psc_service_id,
+                &request,
+            )
             .await
             .tool_context("Failed to create AA PSC endpoint")?;
 
@@ -1049,6 +1078,7 @@ cloud_tool!(write, update_aa_psc_endpoint, "update_aa_psc_endpoint",
             .update_endpoint_active_active(
                 input.subscription_id,
                 input.region_id,
+                input.psc_service_id,
                 input.endpoint_id,
                 &request,
             )
@@ -1066,6 +1096,8 @@ cloud_tool!(destructive, delete_aa_psc_endpoint, "delete_aa_psc_endpoint",
         pub subscription_id: i32,
         /// Region ID
         pub region_id: i32,
+        /// PSC service ID
+        pub psc_service_id: i32,
         /// Endpoint ID
         pub endpoint_id: i32,
     } => |client, input| {
@@ -1074,6 +1106,7 @@ cloud_tool!(destructive, delete_aa_psc_endpoint, "delete_aa_psc_endpoint",
             .delete_endpoint_active_active(
                 input.subscription_id,
                 input.region_id,
+                input.psc_service_id,
                 input.endpoint_id,
             )
             .await

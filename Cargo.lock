@@ -952,7 +952,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1099,7 +1099,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2722,7 +2722,7 @@ dependencies = [
  "once_cell",
  "socket2 0.6.0",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2855,8 +2855,9 @@ dependencies = [
 
 [[package]]
 name = "redis-cloud"
-version = "0.9.5"
-source = "git+https://github.com/redis-developer/redis-cloud-rs?branch=fix%2Ftask-error-object-deserialization#6d9af5b6be4bfa749b8b88818f5af5263552c1c3"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a44ce273747009abf9345536d0a4eb3a86db916ba0f002193edf4c90efcac021"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2879,8 +2880,9 @@ dependencies = [
 
 [[package]]
 name = "redis-enterprise"
-version = "0.8.7"
-source = "git+https://github.com/redis-developer/redis-enterprise-rs?branch=main#2c7337462c9a236975800e274ff6f965d8ef8f09"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c13f41c80d29c1a26e390a64b803528971a824d02b8c449b61c4e05293054e15"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -3262,7 +3264,7 @@ dependencies = [
  "errno 0.3.14",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3342,7 +3344,7 @@ dependencies = [
  "security-framework 3.5.1",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3885,7 +3887,7 @@ dependencies = [
  "getrandom 0.3.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4807,7 +4809,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

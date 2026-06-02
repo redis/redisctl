@@ -7,7 +7,7 @@
 
 use crate::enterprise::progress::{EnterpriseProgressCallback, poll_action};
 use crate::error::Result;
-use redis_enterprise::bdb::DatabaseUpgradeRequest;
+use redis_enterprise::bdb::{DatabaseActionResponse, DatabaseUpgradeRequest, ModuleUpgrade};
 use redis_enterprise::{Database, EnterpriseClient};
 use std::time::Duration;
 
@@ -97,10 +97,19 @@ pub async fn upgrade_module_and_wait(
     timeout: Duration,
     on_progress: Option<EnterpriseProgressCallback>,
 ) -> Result<Database> {
-    // Submit the module upgrade request
+    // Submit the module upgrade as part of a database upgrade request. The
+    // dedicated module-upgrade method was folded into the upgrade endpoint
+    // upstream; modules are now carried in the `modules` field.
+    let request = DatabaseUpgradeRequest::builder()
+        .modules(vec![ModuleUpgrade {
+            module_name: module_name.to_string(),
+            new_version: Some(new_version.to_string()),
+            module_args: None,
+        }])
+        .build();
     let action = client
         .databases()
-        .upgrade(bdb_uid, module_name, new_version)
+        .upgrade_redis_version(bdb_uid, request)
         .await?;
 
     // Poll until completion
@@ -137,13 +146,24 @@ pub async fn backup_database_and_wait(
     timeout: Duration,
     on_progress: Option<EnterpriseProgressCallback>,
 ) -> Result<()> {
-    // Trigger backup
-    let response = client.databases().backup(bdb_uid).await?;
+    // Trigger backup. The dedicated `backup` handler method was removed
+    // upstream; POST the backup action directly (BDB.BACKUP).
+    let response: DatabaseActionResponse = client
+        .post(
+            &format!("/v1/bdbs/{}/actions/backup", bdb_uid),
+            &serde_json::json!({}),
+        )
+        .await?;
 
-    // Poll until completion if we got an action_uid
-    if let Some(action_uid) = response.action_uid {
-        poll_action(client, &action_uid, timeout, DEFAULT_INTERVAL, on_progress).await?;
-    }
+    // Poll until completion
+    poll_action(
+        client,
+        &response.action_uid,
+        timeout,
+        DEFAULT_INTERVAL,
+        on_progress,
+    )
+    .await?;
 
     Ok(())
 }

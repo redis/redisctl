@@ -385,9 +385,14 @@ enterprise_tool!(write, restore_enterprise_database, "restore_enterprise_databas
         #[serde(default)]
         pub backup_uid: Option<String>,
     } => |client, input| {
-        let handler = DatabaseHandler::new(client);
-        let response = handler
-            .restore(input.uid, input.backup_uid.as_deref())
+        // `DatabaseHandler::restore` was removed upstream; POST the restore
+        // action directly (BDB.RESTORE).
+        let body = match input.backup_uid.as_deref() {
+            Some(backup_id) => serde_json::json!({ "backup_uid": backup_id }),
+            None => serde_json::json!({}),
+        };
+        let response: redis_enterprise::bdb::DatabaseActionResponse = client
+            .post(&format!("/v1/bdbs/{}/actions/restore", input.uid), &body)
             .await
             .tool_context("Failed to restore database")?;
 
