@@ -147,16 +147,32 @@ async fn handle_services_get(
 ) -> Result<(), RedisCtlError> {
     let client = conn_mgr.create_enterprise_client(profile_name).await?;
 
-    let endpoint = format!("/v1/services/{}", service);
     let response = client
-        .get::<Value>(&endpoint)
+        .get::<Value>("/v1/local/services")
         .await
-        .context(format!("Failed to get service {}", service))?;
+        .map_err(RedisCtlError::from)?;
+
+    let services_map = response
+        .as_object()
+        .ok_or_else(|| RedisCtlError::ApiError {
+            message: "Unexpected response format from /v1/local/services".to_string(),
+        })?;
+
+    let entry = services_map.get(service).ok_or_else(|| {
+        let available: Vec<&str> = services_map.keys().map(String::as_str).collect();
+        RedisCtlError::InvalidInput {
+            message: format!(
+                "Service '{}' not found. Available services: {}",
+                service,
+                available.join(", ")
+            ),
+        }
+    })?;
 
     let result = if let Some(q) = query {
-        utils::apply_jmespath(&response, q)?
+        utils::apply_jmespath(entry, q)?
     } else {
-        response
+        entry.clone()
     };
 
     utils::print_formatted_output(result, output_format)
@@ -240,16 +256,32 @@ async fn handle_services_status(
 ) -> Result<(), RedisCtlError> {
     let client = conn_mgr.create_enterprise_client(profile_name).await?;
 
-    let endpoint = format!("/v1/services/{}/status", service);
     let response = client
-        .get::<Value>(&endpoint)
+        .get::<Value>("/v1/local/services")
         .await
-        .context(format!("Failed to get status for service {}", service))?;
+        .map_err(RedisCtlError::from)?;
+
+    let services_map = response
+        .as_object()
+        .ok_or_else(|| RedisCtlError::ApiError {
+            message: "Unexpected response format from /v1/local/services".to_string(),
+        })?;
+
+    let entry = services_map.get(service).ok_or_else(|| {
+        let available: Vec<&str> = services_map.keys().map(String::as_str).collect();
+        RedisCtlError::InvalidInput {
+            message: format!(
+                "Service '{}' not found. Available services: {}",
+                service,
+                available.join(", ")
+            ),
+        }
+    })?;
 
     let result = if let Some(q) = query {
-        utils::apply_jmespath(&response, q)?
+        utils::apply_jmespath(entry, q)?
     } else {
-        response
+        entry.clone()
     };
 
     utils::print_formatted_output(result, output_format)
@@ -326,5 +358,98 @@ mod tests {
         }
 
         TestCli::command().debug_assert();
+    }
+
+    /// Helper that mimics the extraction logic shared by handle_services_get and
+    /// handle_services_status: look up a service name in the /v1/local/services object.
+    fn extract_service_entry<'a>(
+        response: &'a Value,
+        service: &str,
+    ) -> Result<&'a Value, RedisCtlError> {
+        let services_map = response
+            .as_object()
+            .ok_or_else(|| RedisCtlError::ApiError {
+                message: "Unexpected response format from /v1/local/services".to_string(),
+            })?;
+
+        services_map.get(service).ok_or_else(|| {
+            let available: Vec<&str> = services_map.keys().map(String::as_str).collect();
+            RedisCtlError::InvalidInput {
+                message: format!(
+                    "Service '{}' not found. Available services: {}",
+                    service,
+                    available.join(", ")
+                ),
+            }
+        })
+    }
+
+    fn sample_services_response() -> Value {
+        serde_json::json!({
+            "cm_server": {
+                "start_time": "2025-06-01T00:00:00Z",
+                "status": "RUNNING",
+                "uptime": "0:02:18"
+            },
+            "ccs": {
+                "start_time": "2025-06-01T00:00:01Z",
+                "status": "RUNNING",
+                "uptime": "0:02:17"
+            }
+        })
+    }
+
+    #[test]
+    fn test_get_extracts_known_service() {
+        let response = sample_services_response();
+        let entry = extract_service_entry(&response, "cm_server").unwrap();
+        assert_eq!(entry["status"], "RUNNING");
+        assert_eq!(entry["uptime"], "0:02:18");
+    }
+
+    #[test]
+    fn test_status_extracts_known_service() {
+        let response = sample_services_response();
+        let entry = extract_service_entry(&response, "ccs").unwrap();
+        assert_eq!(entry["status"], "RUNNING");
+    }
+
+    #[test]
+    fn test_get_unknown_service_returns_invalid_input_error() {
+        let response = sample_services_response();
+        let err = extract_service_entry(&response, "nope").unwrap_err();
+        match err {
+            RedisCtlError::InvalidInput { message } => {
+                assert!(
+                    message.contains("nope"),
+                    "error should mention the service name"
+                );
+                assert!(
+                    message.contains("cm_server") || message.contains("ccs"),
+                    "error should list available services"
+                );
+            }
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_get_reads_from_local_services_object() {
+        // Verify that both get and status derive data from the flat map at /v1/local/services,
+        // not from a per-service endpoint.  The sample response is a JSON object (not array),
+        // matching what the real API returns.
+        let response = sample_services_response();
+        assert!(
+            response.as_object().is_some(),
+            "/v1/local/services must be a JSON object keyed by service name"
+        );
+        // Every entry should have a 'status' field
+        for (name, entry) in response.as_object().unwrap() {
+            assert!(
+                entry.get("status").is_some(),
+                "service '{}' is missing the 'status' field",
+                name
+            );
+        }
     }
 }
