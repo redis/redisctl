@@ -99,7 +99,8 @@ pretty_assertions = "1.4"
 redis = { version = "0.27", features = ["tokio-comp", "tokio-rustls-comp", "connection-manager", "cluster-async"] }
 
 # External crates (git for dev, version required for crates.io publish)
-redis-cloud = { version = "0.9.5", git = "https://github.com/redis-developer/redis-cloud-rs", branch = "main" }
+# TODO: revert to branch = "main" once redis-developer/redis-cloud-rs#103 merges.
+redis-cloud = { version = "0.9.5", git = "https://github.com/redis-developer/redis-cloud-rs", branch = "fix/task-error-object-deserialization" }
 redis-enterprise = { version = "0.8.5", git = "https://github.com/redis-developer/redis-enterprise-rs", branch = "main" }
 
 # Windows CI workaround - ensure these are available in workspace
