@@ -154,9 +154,10 @@ pub async fn handle_tgw_command(
         }
 
         // Active-Active TGW operations
-        TgwCommands::AaAttachmentsList { subscription_id } => {
-            list_attachments_aa(&client, *subscription_id, output_format, query).await
-        }
+        TgwCommands::AaAttachmentsList {
+            subscription_id,
+            region_id,
+        } => list_attachments_aa(&client, *subscription_id, *region_id, output_format, query).await,
         TgwCommands::AaAttachmentCreate {
             subscription_id,
             region_id,
@@ -226,9 +227,10 @@ pub async fn handle_tgw_command(
             };
             delete_attachment_aa(&params, *region_id, attachment_id, *yes).await
         }
-        TgwCommands::AaInvitationsList { subscription_id } => {
-            list_invitations_aa(&client, *subscription_id, output_format, query).await
-        }
+        TgwCommands::AaInvitationsList {
+            subscription_id,
+            region_id,
+        } => list_invitations_aa(&client, *subscription_id, *region_id, output_format, query).await,
         TgwCommands::AaInvitationAccept {
             subscription_id,
             region_id,
@@ -314,11 +316,16 @@ async fn create_attachment(
     params: &ConnectivityOperationParams<'_>,
     attachment_params: &TgwAttachmentParams,
 ) -> CliResult<()> {
-    let request = build_tgw_attachment_request(attachment_params)?;
+    // The generic create_attachment route was removed upstream; the TGW ID is
+    // now required and is carried in the path.
+    let tgw_id = attachment_params
+        .tgw_id
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("--tgw-id is required"))?;
 
     let handler = TransitGatewayHandler::new(params.client.clone());
     let response = handler
-        .create_attachment(params.subscription_id, &request)
+        .create_attachment_with_id(params.subscription_id, &tgw_id)
         .await
         .context("Failed to create TGW attachment")?;
 
@@ -485,12 +492,13 @@ async fn reject_invitation(
 async fn list_attachments_aa(
     client: &CloudClient,
     subscription_id: i32,
+    region_id: i32,
     output_format: OutputFormat,
     query: Option<&str>,
 ) -> CliResult<()> {
     let handler = TransitGatewayHandler::new(client.clone());
     let response = handler
-        .get_attachments_active_active(subscription_id)
+        .get_attachments_active_active(subscription_id, region_id)
         .await
         .context("Failed to get Active-Active TGW attachments")?;
 
@@ -505,11 +513,16 @@ async fn create_attachment_aa(
     region_id: i32,
     attachment_params: &TgwAttachmentParams,
 ) -> CliResult<()> {
+    // The attachment route now requires the TGW ID in the path.
+    let tgw_id = attachment_params
+        .tgw_id
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("--tgw-id is required"))?;
     let request = build_tgw_attachment_request(attachment_params)?;
 
     let handler = TransitGatewayHandler::new(params.client.clone());
     let response = handler
-        .create_attachment_active_active(params.subscription_id, region_id, &request)
+        .create_attachment_active_active(params.subscription_id, region_id, &tgw_id, &request)
         .await
         .context("Failed to create Active-Active TGW attachment")?;
 
@@ -594,12 +607,13 @@ async fn delete_attachment_aa(
 async fn list_invitations_aa(
     client: &CloudClient,
     subscription_id: i32,
+    region_id: i32,
     output_format: OutputFormat,
     query: Option<&str>,
 ) -> CliResult<()> {
     let handler = TransitGatewayHandler::new(client.clone());
     let response = handler
-        .get_shared_invitations_active_active(subscription_id)
+        .get_shared_invitations_active_active(subscription_id, region_id)
         .await
         .context("Failed to get Active-Active TGW invitations")?;
 

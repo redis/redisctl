@@ -6,6 +6,7 @@
 
 use crate::error::{CoreError, Result};
 use redis_cloud::tasks::TaskStateUpdate;
+use redis_cloud::types::TaskStatus;
 use redis_cloud::{CloudClient, TaskHandler};
 use std::time::{Duration, Instant};
 
@@ -102,21 +103,24 @@ pub async fn poll_task(
         }
 
         let task = handler.get_task_by_id(task_id.to_string()).await?;
-        let status = task.status.clone().unwrap_or_default();
+        let status = task.status.clone();
+        let status_label = task_status_label(status.as_ref());
 
         emit(
             &on_progress,
             ProgressEvent::Polling {
                 task_id: task_id.to_string(),
-                status: status.clone(),
+                status: status_label.clone(),
                 elapsed,
             },
         );
 
-        // Check for terminal states (case-insensitive)
-        match status.to_lowercase().as_str() {
-            // Success states
-            "processing-completed" | "completed" | "complete" | "succeeded" | "success" => {
+        // Check for terminal states. `TaskStatus` only models the two terminal
+        // states explicitly; everything else (Initialized, Received,
+        // ProcessingInProgress, and any Unknown wire value) is still in flight.
+        match status {
+            // Success
+            Some(TaskStatus::ProcessingCompleted) => {
                 let resource_id = task.response.as_ref().and_then(|r| r.resource_id);
                 emit(
                     &on_progress,
@@ -127,13 +131,13 @@ pub async fn poll_task(
                 );
                 return Ok(task);
             }
-            // Failure states
-            "processing-error" | "failed" | "error" => {
+            // Failure
+            Some(TaskStatus::ProcessingError) => {
                 let error = task
                     .response
                     .as_ref()
                     .and_then(|r| r.error_message())
-                    .unwrap_or_else(|| format!("Task failed with status: {}", status));
+                    .unwrap_or_else(|| format!("Task failed with status: {}", status_label));
 
                 emit(
                     &on_progress,
@@ -144,19 +148,8 @@ pub async fn poll_task(
                 );
                 return Err(CoreError::TaskFailed(error));
             }
-            // Cancelled state
-            "cancelled" => {
-                emit(
-                    &on_progress,
-                    ProgressEvent::Failed {
-                        task_id: task_id.to_string(),
-                        error: "Task was cancelled".to_string(),
-                    },
-                );
-                return Err(CoreError::TaskFailed("Task was cancelled".to_string()));
-            }
+            // Still processing, wait and try again
             _ => {
-                // Still processing, wait and try again
                 tokio::time::sleep(interval).await;
             }
         }
@@ -168,6 +161,22 @@ fn emit(callback: &Option<ProgressCallback>, event: ProgressEvent) {
     if let Some(cb) = callback {
         cb(event);
     }
+}
+
+/// Human-readable label for a task status, mirroring the kebab-case wire form.
+///
+/// Used for progress events and failure messages. A missing status (or one the
+/// client doesn't recognize) is reported as `"unknown"`.
+fn task_status_label(status: Option<&TaskStatus>) -> String {
+    match status {
+        Some(TaskStatus::Initialized) => "initialized",
+        Some(TaskStatus::Received) => "received",
+        Some(TaskStatus::ProcessingInProgress) => "processing-in-progress",
+        Some(TaskStatus::ProcessingCompleted) => "processing-completed",
+        Some(TaskStatus::ProcessingError) => "processing-error",
+        Some(TaskStatus::Unknown) | None => "unknown",
+    }
+    .to_string()
 }
 
 #[cfg(test)]

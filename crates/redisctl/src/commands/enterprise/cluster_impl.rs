@@ -7,7 +7,6 @@ use crate::connection::ConnectionManager;
 use crate::error::RedisCtlError;
 use crate::error::Result as CliResult;
 use anyhow::Context;
-use redis_enterprise::alerts::AlertHandler;
 use redis_enterprise::bootstrap::BootstrapHandler;
 use redis_enterprise::cluster::ClusterHandler;
 use redis_enterprise::debuginfo::DebugInfoHandler;
@@ -550,8 +549,9 @@ pub async fn get_cluster_alerts(
     query: Option<&str>,
 ) -> CliResult<()> {
     let client = conn_mgr.create_enterprise_client(profile_name).await?;
-    let handler = AlertHandler::new(client);
-    let alerts = handler.list().await?;
+    // `AlertHandler::list` was removed upstream; call the cluster-wide alerts
+    // route directly to preserve this command's behavior.
+    let alerts: Vec<redis_enterprise::alerts::Alert> = client.get("/v1/alerts").await?;
     let alerts_json = serde_json::to_value(alerts).context("Failed to serialize alerts")?;
     let data = handle_output(alerts_json, output_format, query)?;
     print_formatted_output(data, output_format)?;

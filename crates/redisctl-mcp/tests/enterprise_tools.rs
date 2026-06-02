@@ -411,7 +411,13 @@ async fn test_list_alerts() {
         .entity_uid("1")
         .build();
 
-    server.mock_alerts_list(vec![alert1, alert2]).await;
+    // The `mock_alerts_list` helper was removed upstream; the list_alerts tool
+    // now reads the cluster-wide alerts route directly.
+    Mock::given(method("GET"))
+        .and(path("/v1/alerts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([alert1, alert2])))
+        .mount(server.inner())
+        .await;
 
     let client = server.client();
     let state = Arc::new(AppState::with_enterprise_client(client));
