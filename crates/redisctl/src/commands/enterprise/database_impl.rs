@@ -470,7 +470,7 @@ pub async fn create_database(
     }
 
     let path = if dry_run {
-        "/v1/bdbs/dry-run"
+        "/v1/bdbs?dry_run"
     } else {
         "/v1/bdbs"
     };
