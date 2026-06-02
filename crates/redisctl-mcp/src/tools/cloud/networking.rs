@@ -234,7 +234,7 @@ cloud_tool!(read_only, get_aa_vpc_peering, "get_aa_vpc_peering",
 );
 
 cloud_tool!(write, create_aa_vpc_peering, "create_aa_vpc_peering",
-    "Create an Active-Active VPC peering connection.",
+    "Create an Active-Active VPC peering connection. Use aws_region for the source region and destination_region for the target region (AWS cross-region peering).",
     {
         /// Subscription ID
         pub subscription_id: i32,
@@ -244,9 +244,12 @@ cloud_tool!(write, create_aa_vpc_peering, "create_aa_vpc_peering",
         /// AWS VPC ID
         #[serde(default)]
         pub vpc_id: Option<String>,
-        /// AWS region
+        /// AWS source region
         #[serde(default)]
         pub aws_region: Option<String>,
+        /// AWS destination region for cross-region Active-Active VPC peering (AWS only)
+        #[serde(default)]
+        pub destination_region: Option<String>,
         /// AWS account ID
         #[serde(default)]
         pub aws_account_id: Option<String>,
@@ -263,11 +266,13 @@ cloud_tool!(write, create_aa_vpc_peering, "create_aa_vpc_peering",
         #[serde(default)]
         pub network_name: Option<String>,
     } => |client, input| {
-        // Active-Active peering uses a distinct request type upstream; map the
-        // single `aws_region` onto `source_region`.
+        // Active-Active peering uses a distinct request type upstream; map
+        // `aws_region` onto `source_region` and the optional
+        // `destination_region` for AWS cross-region peering.
         let request = ActiveActiveVpcPeeringCreateRequest {
             provider: input.provider,
             source_region: input.aws_region,
+            destination_region: input.destination_region,
             aws_account_id: input.aws_account_id,
             vpc_id: input.vpc_id,
             vpc_cidr: input.vpc_cidr,
