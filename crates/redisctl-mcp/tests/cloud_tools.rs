@@ -8,7 +8,8 @@ use redis_cloud::testing::{
 };
 use serde_json::json;
 use tower_mcp::Tool;
-use wiremock::ResponseTemplate;
+use wiremock::matchers::{body_partial_json, method, path};
+use wiremock::{Mock, ResponseTemplate};
 
 // Import the tools and state from the MCP crate
 use redisctl_mcp::state::AppState;
@@ -453,4 +454,49 @@ async fn test_get_session_logs() {
     assert!(result.get("entries").is_some());
     let entries = result["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 2);
+}
+
+// ============================================================================
+// Networking Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_create_aa_vpc_peering_destination_region() {
+    let server = MockCloudServer::start().await;
+
+    // The mock only matches when the request body carries both the source and
+    // destination regions, so a successful call proves `destination_region`
+    // was wired through to the upstream request.
+    Mock::given(method("POST"))
+        .and(path("/subscriptions/123/regions/peerings"))
+        .and(body_partial_json(json!({
+            "sourceRegion": "us-east-1",
+            "destinationRegion": "us-west-2"
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-aa-001",
+            "commandType": "CREATE_AA_VPC_PEERING",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client_write(client));
+    let tool = cloud::create_aa_vpc_peering(state);
+
+    let result = call_tool_json(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "provider": "AWS",
+            "aws_region": "us-east-1",
+            "destination_region": "us-west-2",
+            "aws_account_id": "123456789012",
+            "vpc_id": "vpc-abcdef01"
+        }),
+    )
+    .await;
+
+    assert_eq!(result["taskId"], "task-aa-001");
 }

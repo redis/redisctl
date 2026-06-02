@@ -529,6 +529,27 @@ impl AppState {
         ))
     }
 
+    /// Create a read-write policy for tests that exercise write tools
+    pub fn test_write_policy() -> Arc<Policy> {
+        Arc::new(Policy::new(
+            crate::policy::PolicyConfig {
+                tier: SafetyTier::ReadWrite,
+                ..Default::default()
+            },
+            std::collections::HashMap::new(),
+            "test".to_string(),
+        ))
+    }
+
+    /// Create test state with a pre-configured Cloud client and write access
+    /// enabled, for tests that exercise write tools.
+    #[cfg(feature = "cloud")]
+    pub fn with_cloud_client_write(client: CloudClient) -> Self {
+        let mut state = Self::with_cloud_client(client);
+        state.policy = Self::test_write_policy();
+        state
+    }
+
     /// Create test state with a pre-configured Cloud client
     #[cfg(feature = "cloud")]
     pub fn with_cloud_client(client: CloudClient) -> Self {
