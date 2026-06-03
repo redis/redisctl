@@ -958,3 +958,526 @@ async fn test_delete_acl_role_request_shape() {
         "Expected task response for DELETE ACL role, got: {result}"
     );
 }
+
+// ============================================================================
+// Section 5: Subscription write tools — strict request shapes
+// ============================================================================
+
+#[tokio::test]
+async fn test_update_subscription_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // update_subscription sends an empty BaseSubscriptionUpdateRequest body via PUT.
+    Mock::given(method("PUT"))
+        .and(path("/subscriptions/123"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-update-sub",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::update_subscription(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123})).await;
+
+    assert!(
+        result.contains("task-update-sub") || result.contains("taskId"),
+        "Expected task response, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_subscription_cidr_allowlist_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/123/cidr"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "cidrIps": ["10.0.0.0/8"],
+            "securityGroupIds": []
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_subscription_cidr_allowlist(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "Expected successful GET cidr response, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_subscription_maintenance_windows_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/123/maintenance-windows"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "mode": "automatic",
+            "timeZone": "UTC",
+            "windows": []
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_subscription_maintenance_windows(state);
+
+    let result = call_tool_json(&tool, json!({"subscription_id": 123})).await;
+
+    assert_eq!(result["mode"], "automatic");
+}
+
+#[tokio::test]
+async fn test_update_subscription_maintenance_windows_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // Verify the request body contains the "mode" field.
+    Mock::given(method("PUT"))
+        .and(path("/subscriptions/123/maintenance-windows"))
+        .and(body_partial_json(json!({
+            "mode": "automatic"
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-update-mw",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::update_subscription_maintenance_windows(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "mode": "automatic"
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("task-update-mw") || result.contains("taskId"),
+        "Expected task response, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_active_active_regions_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/123/regions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "subscriptionId": 123
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_active_active_regions(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "Expected successful GET regions response, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_add_active_active_region_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // Verify the POST body carries deploymentCidr (camelCase from serde rename_all = "camelCase").
+    Mock::given(method("POST"))
+        .and(path("/subscriptions/123/regions"))
+        .and(body_partial_json(json!({
+            "deploymentCidr": "10.1.0.0/24"
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-add-region",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::add_active_active_region(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "deployment_cidr": "10.1.0.0/24"
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("task-add-region") || result.contains("taskId"),
+        "Expected task response for add region, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_subscription_pricing_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/123/pricing"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "pricing": []
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_subscription_pricing(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "Expected successful GET pricing response, got: {result}"
+    );
+}
+
+// ============================================================================
+// Section 6: Database tag tools — strict request shapes
+// ============================================================================
+
+#[tokio::test]
+async fn test_create_database_tag_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // DatabaseTagCreateRequest serializes key and value directly (no rename — they're already
+    // single lower-case words, camelCase is identity for them).
+    // create_tag returns CloudTag (not TaskStateUpdate).
+    Mock::given(method("POST"))
+        .and(path("/subscriptions/123/databases/1001/tags"))
+        .and(body_partial_json(json!({
+            "key": "env",
+            "value": "prod"
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "key": "env",
+            "value": "prod"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::create_database_tag(state);
+
+    let result = call_tool_json(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "database_id": 1001,
+            "key": "env",
+            "value": "prod"
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        result["key"], "env",
+        "Expected tag key in response, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_database_tag_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // PUT /subscriptions/{sub}/databases/{db}/tags/{key} — body: {"value": "..."}
+    // update_tag returns CloudTag (not TaskStateUpdate).
+    Mock::given(method("PUT"))
+        .and(path("/subscriptions/123/databases/1001/tags/env"))
+        .and(body_partial_json(json!({
+            "value": "staging"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "key": "env",
+            "value": "staging"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::update_database_tag(state);
+
+    let result = call_tool_json(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "database_id": 1001,
+            "tag_key": "env",
+            "value": "staging"
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        result["value"], "staging",
+        "Expected updated tag value in response, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_delete_database_tag_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/subscriptions/123/databases/1001/tags/env"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-delete-tag",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::delete_database_tag(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "database_id": 1001,
+            "tag_key": "env"
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("task-delete-tag") || result.contains("taskId"),
+        "Expected task response for DELETE tag, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_database_tags_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // PUT /subscriptions/{sub}/databases/{db}/tags — body: {"tags": [{key, value}]}
+    // DatabaseTagsUpdateRequest serializes as camelCase, but "tags" is already camelCase-safe.
+    // update_tags returns CloudTags (an HATEOAS envelope, not TaskStateUpdate).
+    Mock::given(method("PUT"))
+        .and(path("/subscriptions/123/databases/1001/tags"))
+        .and(body_partial_json(json!({
+            "tags": [{"key": "env", "value": "prod"}]
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "accountId": 12345
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::update_database_tags(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "database_id": 1001,
+            "tags": [{"key": "env", "value": "prod"}]
+        }),
+    )
+    .await;
+
+    // If the mock matched (correct body shape), we get a CloudTags response.
+    // If it didn't match (wrong tags body), wiremock falls through and the tool errors.
+    assert!(
+        !result.contains("Failed"),
+        "Expected successful update tags response — body_partial_json matcher was not satisfied: {result}"
+    );
+}
+
+// ============================================================================
+// Section 7: Database upgrade and status tools — strict request shapes
+// ============================================================================
+
+#[tokio::test]
+async fn test_upgrade_database_redis_version_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // DatabaseUpgradeRedisVersionRequest serializes targetRedisVersion (camelCase).
+    Mock::given(method("POST"))
+        .and(path("/subscriptions/123/databases/1001/upgrade"))
+        .and(body_partial_json(json!({
+            "targetRedisVersion": "7.4"
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-upgrade-version",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::upgrade_database_redis_version(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "database_id": 1001,
+            "target_redis_version": "7.4"
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("task-upgrade-version") || result.contains("taskId"),
+        "Expected task response for upgrade, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_database_upgrade_status_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/123/databases/1001/upgrade"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "upgradeStatus": "completed",
+            "targetRedisVersion": "7.4"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_database_upgrade_status(state);
+
+    let result = call_tool_json(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "database_id": 1001
+        }),
+    )
+    .await;
+
+    assert_eq!(result["upgradeStatus"], "completed");
+}
+
+#[tokio::test]
+async fn test_get_database_import_status_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/123/databases/1001/import"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": "completed",
+            "importedRdb": true
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_database_import_status(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "database_id": 1001
+        }),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "Expected successful import status response, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_available_database_versions_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // get_available_target_versions calls:
+    // GET /subscriptions/{sub}/databases/{db}/available-target-versions
+    Mock::given(method("GET"))
+        .and(path(
+            "/subscriptions/123/databases/1001/available-target-versions",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "versions": ["7.2", "7.4"]
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_available_database_versions(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "database_id": 1001
+        }),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "Expected successful available versions response, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_database_certificate_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/123/databases/1001/certificate"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "publicCertificatePemString": "-----BEGIN CERTIFICATE-----\nMIIBx...\n-----END CERTIFICATE-----"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_database_certificate(state);
+
+    let result = call_tool_json(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "database_id": 1001
+        }),
+    )
+    .await;
+
+    assert!(
+        result.get("publicCertificatePemString").is_some(),
+        "Expected certificate PEM in response, got: {result}"
+    );
+}
