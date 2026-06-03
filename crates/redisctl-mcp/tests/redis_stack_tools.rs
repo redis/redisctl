@@ -633,3 +633,371 @@ async fn test_alias_tools() {
 
     cleanup(&mut conn, "alias_doc:").await;
 }
+
+// ============================================================================
+// Search: profile, synonyms, dictionaries, aliases (RediSearch)
+// ============================================================================
+
+#[tokio::test]
+#[ignore = "Requires Docker"]
+async fn test_ft_profile() {
+    let ctx = get_redis_stack()
+        .await
+        .expect("Failed to get Redis Stack container");
+    let full_state = make_full_state(ctx.port);
+    let state = make_state(ctx.port);
+    let mut conn = get_conn(ctx.port).await;
+
+    cleanup(&mut conn, "ftpro_doc:").await;
+    let _: Result<(), _> = ::redis::cmd("FT.DROPINDEX")
+        .arg("ftpro_idx")
+        .query_async::<()>(&mut conn)
+        .await;
+
+    // Index a single document.
+    let _: () = ::redis::cmd("JSON.SET")
+        .arg("ftpro_doc:1")
+        .arg("$")
+        .arg("{\"title\":\"Redis Search Profiling Guide\"}")
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+
+    // redis_ft_create -- minimal TEXT index on the JSON title.
+    let text = call_tool_text(
+        &redis::ft_create(full_state.clone()),
+        json!({
+            "index": "ftpro_idx",
+            "on": "JSON",
+            "prefixes": ["ftpro_doc:"],
+            "schema": [
+                {"name": "$.title", "alias": "title", "field_type": "TEXT"}
+            ]
+        }),
+    )
+    .await;
+    assert!(
+        text.contains("Created") || text.contains("OK"),
+        "ft_create: {}",
+        text
+    );
+
+    // Give the indexer a moment to settle before profiling.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    // redis_ft_profile -- profile a SEARCH query.
+    let text = call_tool_text(
+        &redis::ft_profile(state.clone()),
+        json!({"index": "ftpro_idx", "command": "SEARCH", "query": "redis"}),
+    )
+    .await;
+    assert!(
+        text.contains("Profile for SEARCH"),
+        "ft_profile header: {}",
+        text
+    );
+    // The result/profile sections are rendered as "[0]:" and "[1]:" markers.
+    assert!(
+        text.contains("[0]:"),
+        "ft_profile results section: {}",
+        text
+    );
+    assert!(
+        text.contains("[1]:"),
+        "ft_profile profile section: {}",
+        text
+    );
+
+    let _: Result<(), _> = ::redis::cmd("FT.DROPINDEX")
+        .arg("ftpro_idx")
+        .query_async::<()>(&mut conn)
+        .await;
+    cleanup(&mut conn, "ftpro_doc:").await;
+}
+
+#[tokio::test]
+#[ignore = "Requires Docker"]
+async fn test_ft_synonym_and_dict() {
+    let ctx = get_redis_stack()
+        .await
+        .expect("Failed to get Redis Stack container");
+    let full_state = make_full_state(ctx.port);
+    let state = make_state(ctx.port);
+    let mut conn = get_conn(ctx.port).await;
+
+    cleanup(&mut conn, "ftsyn_doc:").await;
+    let _: Result<(), _> = ::redis::cmd("FT.DROPINDEX")
+        .arg("ftsyn_idx")
+        .query_async::<()>(&mut conn)
+        .await;
+    // Clear any leftover dictionary terms from a previous run.
+    let _: Result<i64, _> = ::redis::cmd("FT.DICTDEL")
+        .arg("ftsyn_dict")
+        .arg("foo")
+        .arg("bar")
+        .query_async(&mut conn)
+        .await;
+
+    // redis_ft_create -- minimal TEXT index (synonyms are index-scoped).
+    let text = call_tool_text(
+        &redis::ft_create(full_state.clone()),
+        json!({
+            "index": "ftsyn_idx",
+            "on": "JSON",
+            "prefixes": ["ftsyn_doc:"],
+            "schema": [
+                {"name": "$.title", "alias": "title", "field_type": "TEXT"}
+            ]
+        }),
+    )
+    .await;
+    assert!(
+        text.contains("Created") || text.contains("OK"),
+        "ft_create: {}",
+        text
+    );
+
+    // redis_ft_synupdate -- add a synonym group.
+    let text = call_tool_text(
+        &redis::ft_synupdate(full_state.clone()),
+        json!({
+            "index": "ftsyn_idx",
+            "group_id": "speed_group",
+            "terms": ["fast", "quick", "speedy"]
+        }),
+    )
+    .await;
+    assert!(
+        text.contains("Updated synonym group"),
+        "ft_synupdate: {}",
+        text
+    );
+
+    // redis_ft_syndump -- the group terms appear.
+    let text = call_tool_text(
+        &redis::ft_syndump(state.clone()),
+        json!({"index": "ftsyn_idx"}),
+    )
+    .await;
+    assert!(
+        text.contains("speed_group") || text.contains("fast"),
+        "ft_syndump: {}",
+        text
+    );
+
+    // redis_ft_dictadd -- add dictionary terms.
+    let text = call_tool_text(
+        &redis::ft_dictadd(full_state.clone()),
+        json!({"dict": "ftsyn_dict", "terms": ["foo", "bar"]}),
+    )
+    .await;
+    assert!(text.contains("Added"), "ft_dictadd: {}", text);
+
+    // redis_ft_dictdump -- both terms present.
+    let text = call_tool_text(
+        &redis::ft_dictdump(state.clone()),
+        json!({"dict": "ftsyn_dict"}),
+    )
+    .await;
+    assert!(text.contains("foo"), "ft_dictdump foo: {}", text);
+
+    // redis_ft_dictdel -- remove "foo".
+    let text = call_tool_text(
+        &redis::ft_dictdel(full_state.clone()),
+        json!({"dict": "ftsyn_dict", "terms": ["foo"]}),
+    )
+    .await;
+    assert!(text.contains("Removed"), "ft_dictdel: {}", text);
+
+    // redis_ft_dictdump -- "bar" remains, "foo" is gone.
+    let text = call_tool_text(
+        &redis::ft_dictdump(state.clone()),
+        json!({"dict": "ftsyn_dict"}),
+    )
+    .await;
+    assert!(text.contains("bar"), "ft_dictdump bar: {}", text);
+    assert!(!text.contains("foo"), "ft_dictdump foo gone: {}", text);
+
+    // Clean up the dictionary and index.
+    let _: Result<i64, _> = ::redis::cmd("FT.DICTDEL")
+        .arg("ftsyn_dict")
+        .arg("bar")
+        .query_async(&mut conn)
+        .await;
+    let _: Result<(), _> = ::redis::cmd("FT.DROPINDEX")
+        .arg("ftsyn_idx")
+        .query_async::<()>(&mut conn)
+        .await;
+    cleanup(&mut conn, "ftsyn_doc:").await;
+}
+
+#[tokio::test]
+#[ignore = "Requires Docker"]
+async fn test_ft_alias_management() {
+    let ctx = get_redis_stack()
+        .await
+        .expect("Failed to get Redis Stack container");
+    let full_state = make_full_state(ctx.port);
+    let state = make_state(ctx.port);
+    let mut conn = get_conn(ctx.port).await;
+
+    cleanup(&mut conn, "ftalias_doc:").await;
+    for idx in ["ft_alias_src_idx", "ft_alias_dst_idx"] {
+        let _: Result<(), _> = ::redis::cmd("FT.DROPINDEX")
+            .arg(idx)
+            .query_async::<()>(&mut conn)
+            .await;
+    }
+    // Best-effort drop of a stale alias from a previous run.
+    let _: Result<(), _> = ::redis::cmd("FT.ALIASDEL")
+        .arg("ft_alias_test")
+        .query_async::<()>(&mut conn)
+        .await;
+
+    // Index a document so searches via the alias return a hit.
+    let _: () = ::redis::cmd("JSON.SET")
+        .arg("ftalias_doc:1")
+        .arg("$")
+        .arg("{\"title\":\"Redis Alias Guide\"}")
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+
+    // redis_ft_create -- source index.
+    let schema = json!([
+        {"name": "$.title", "alias": "title", "field_type": "TEXT"}
+    ]);
+    let text = call_tool_text(
+        &redis::ft_create(full_state.clone()),
+        json!({
+            "index": "ft_alias_src_idx",
+            "on": "JSON",
+            "prefixes": ["ftalias_doc:"],
+            "schema": schema.clone()
+        }),
+    )
+    .await;
+    assert!(
+        text.contains("Created") || text.contains("OK"),
+        "ft_create src: {}",
+        text
+    );
+
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    // redis_ft_aliasadd -- point alias at the source index.
+    let text = call_tool_text(
+        &redis::ft_aliasadd(full_state.clone()),
+        json!({"alias": "ft_alias_test", "index": "ft_alias_src_idx"}),
+    )
+    .await;
+    assert!(text.contains("Added alias"), "ft_aliasadd: {}", text);
+
+    // redis_ft_search -- search via the alias should resolve to the source index.
+    let text = call_tool_text(
+        &redis::ft_search(state.clone()),
+        json!({"index": "ft_alias_test", "query": "redis"}),
+    )
+    .await;
+    assert!(
+        text.contains("Total results") && !text.contains("Total results: 0"),
+        "ft_search via alias: {}",
+        text
+    );
+
+    // redis_ft_create -- destination index (same schema).
+    let text = call_tool_text(
+        &redis::ft_create(full_state.clone()),
+        json!({
+            "index": "ft_alias_dst_idx",
+            "on": "JSON",
+            "prefixes": ["ftalias_doc:"],
+            "schema": schema
+        }),
+    )
+    .await;
+    assert!(
+        text.contains("Created") || text.contains("OK"),
+        "ft_create dst: {}",
+        text
+    );
+
+    // redis_ft_aliasupdate -- repoint the alias.
+    let text = call_tool_text(
+        &redis::ft_aliasupdate(full_state.clone()),
+        json!({"alias": "ft_alias_test", "index": "ft_alias_dst_idx"}),
+    )
+    .await;
+    assert!(text.contains("Updated alias"), "ft_aliasupdate: {}", text);
+
+    // redis_ft_aliasdel -- remove the alias.
+    let text = call_tool_text(
+        &redis::ft_aliasdel(full_state.clone()),
+        json!({"alias": "ft_alias_test"}),
+    )
+    .await;
+    assert!(text.contains("Deleted alias"), "ft_aliasdel: {}", text);
+
+    for idx in ["ft_alias_src_idx", "ft_alias_dst_idx"] {
+        let _: Result<(), _> = ::redis::cmd("FT.DROPINDEX")
+            .arg(idx)
+            .query_async::<()>(&mut conn)
+            .await;
+    }
+    cleanup(&mut conn, "ftalias_doc:").await;
+}
+
+// ============================================================================
+// JSON array mutation tools (RedisJSON)
+// ============================================================================
+
+#[tokio::test]
+#[ignore = "Requires Docker"]
+async fn test_json_array_tools() {
+    let ctx = get_redis_stack()
+        .await
+        .expect("Failed to get Redis Stack container");
+    let state = make_full_state(ctx.port);
+    let mut conn = get_conn(ctx.port).await;
+
+    cleanup(&mut conn, "jarr_doc:").await;
+
+    // Seed a document with an array at $.nums.
+    let _: () = ::redis::cmd("JSON.SET")
+        .arg("jarr_doc:1")
+        .arg("$")
+        .arg("{\"nums\":[10,20,30,40,50]}")
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+
+    // redis_json_arrinsert -- insert 99 at the front -> new length 6.
+    let text = call_tool_text(
+        &redis::json_arrinsert(state.clone()),
+        json!({"key": "jarr_doc:1", "path": "$.nums", "index": 0, "values": ["99"]}),
+    )
+    .await;
+    assert!(text.contains("6"), "json_arrinsert: {}", text);
+
+    // redis_json_arrpop -- pop the last element. Uses a legacy path (".nums")
+    // because the tool deserializes the reply into a scalar String; a "$" path
+    // returns a wrapped array that would not deserialize.
+    let text = call_tool_text(
+        &redis::json_arrpop(state.clone()),
+        json!({"key": "jarr_doc:1", "path": ".nums"}),
+    )
+    .await;
+    assert!(text.contains("Popped:"), "json_arrpop: {}", text);
+    assert!(text.contains("50"), "json_arrpop value: {}", text);
+
+    // redis_json_arrtrim -- trim to indices 0..=1 -> new length 2.
+    let text = call_tool_text(
+        &redis::json_arrtrim(state.clone()),
+        json!({"key": "jarr_doc:1", "path": "$.nums", "start": 0, "stop": 1}),
+    )
+    .await;
+    assert!(text.contains("Trimmed array"), "json_arrtrim: {}", text);
+    assert!(text.contains("2"), "json_arrtrim length: {}", text);
+
+    cleanup(&mut conn, "jarr_doc:").await;
+}
