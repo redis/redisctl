@@ -4,16 +4,38 @@
 use std::sync::Arc;
 
 use redis_cloud::testing::{
-    AccountFixture, DatabaseFixture, MockCloudServer, SubscriptionFixture, TaskFixture, UserFixture,
+    AccountFixture, DatabaseFixture, Mock, MockCloudServer, SubscriptionFixture, TaskFixture,
+    UserFixture, method, path, query_param,
 };
 use serde_json::json;
 use tower_mcp::Tool;
-use wiremock::matchers::{body_partial_json, method, path};
-use wiremock::{Mock, ResponseTemplate};
+use wiremock::ResponseTemplate;
+// NOTE: `redis_cloud::testing` re-exports wiremock's `body_json`, but in wiremock
+// 0.6 that matcher is an *exact* whole-body comparison (`BodyExactMatcher`). The
+// request-contract tests below only want to assert the key fields a tool is
+// supposed to send while tolerating server-populated / skipped fields, so they use
+// `body_partial_json`, which does a genuine partial (subset) match.
+use wiremock::matchers::body_partial_json;
 
 // Import the tools and state from the MCP crate
+use redisctl_mcp::policy::{Policy, PolicyConfig, SafetyTier};
 use redisctl_mcp::state::AppState;
 use redisctl_mcp::tools::cloud;
+
+/// Create an AppState with full-tier policy for testing write/destructive tools.
+#[cfg(feature = "cloud")]
+fn full_policy_state(client: redis_cloud::CloudClient) -> Arc<AppState> {
+    let mut state = AppState::with_cloud_client(client);
+    state.policy = Arc::new(Policy::new(
+        PolicyConfig {
+            tier: SafetyTier::Full,
+            ..Default::default()
+        },
+        std::collections::HashMap::new(),
+        "test-full".to_string(),
+    ));
+    Arc::new(state)
+}
 
 /// Helper to call a tool and get text result
 async fn call_tool_text(tool: &Tool, input: serde_json::Value) -> String {
@@ -456,7 +478,6 @@ async fn test_get_session_logs() {
     assert_eq!(entries.len(), 2);
 }
 
-// ============================================================================
 // Networking Tests
 // ============================================================================
 
@@ -499,4 +520,441 @@ async fn test_create_aa_vpc_peering_destination_region() {
     .await;
 
     assert_eq!(result["taskId"], "task-aa-001");
+}
+
+// ============================================================================
+// Section 1: Subscriptions — strict request shapes
+// ============================================================================
+
+#[tokio::test]
+async fn test_update_subscription_cidr_allowlist_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/subscriptions/123/cidr"))
+        .and(body_partial_json(json!({
+            "cidrIps": ["10.0.0.0/8"]
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-cidr-update",
+            "commandType": "updateSubscriptionCidrAllowlist",
+            "status": "processing-in-progress",
+            "description": "Task in progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::update_subscription_cidr_allowlist(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "cidr_ips": ["10.0.0.0/8"]
+        }),
+    )
+    .await;
+
+    // If the mock matched (correct body shape), we get the task response.
+    // If it didn't match (wrong body), wiremock returns 404 and the tool errors.
+    assert!(
+        result.contains("task-cidr-update") || result.contains("taskId"),
+        "Expected task response, got: {result}"
+    );
+}
+
+/// KEY REGRESSION TEST: DELETE /subscriptions/{id}/regions sends a body.
+/// A loose mock (method+path only) would accept any DELETE — including one
+/// that silently drops the body. The body_partial_json matcher here ensures
+/// the tool actually serializes the regions list.
+#[tokio::test]
+async fn test_delete_active_active_regions_bodyful_delete() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/subscriptions/123/regions"))
+        .and(body_partial_json(json!({
+            "regions": [{"region": "us-east-1"}]
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-delete-regions",
+            "commandType": "deleteActiveActiveRegions",
+            "status": "processing-in-progress",
+            "description": "Task in progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::delete_active_active_regions(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "regions": [{"region": "us-east-1"}]
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("task-delete-regions") || result.contains("taskId"),
+        "Expected task response — bodyful DELETE body was not sent correctly: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_redis_versions_with_subscription_id_query_param() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/redis-versions"))
+        .and(query_param("subscriptionId", "123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "redisVersions": [
+                {"version": "7.2", "default": true},
+                {"version": "7.0", "default": false}
+            ]
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_redis_versions(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123})).await;
+
+    // If the query_param matcher matched, we get the versions back.
+    // If the URL didn't include subscriptionId=123, wiremock would return 404.
+    assert!(
+        result.contains("7.2") || result.contains("redisVersions"),
+        "Expected versions response with query param match, got: {result}"
+    );
+}
+
+// ============================================================================
+// Section 2: Networking — strict request shapes
+// ============================================================================
+
+#[tokio::test]
+async fn test_get_vpc_peering_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/123/peerings"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "subscription": 123,
+            "peerings": []
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_vpc_peering(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "GET peerings should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_vpc_peering_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // The VpcPeeringCreateRequest serializes:
+    //   aws_region -> "region" (explicit rename)
+    //   aws_account_id -> "awsAccountId" (camelCase)
+    //   vpc_id -> "vpcId" (camelCase)
+    //   vpc_cidr -> "vpcCidr" (camelCase)
+    //   provider -> "provider"
+    Mock::given(method("POST"))
+        .and(path("/subscriptions/123/peerings"))
+        .and(body_partial_json(json!({
+            "provider": "AWS",
+            "region": "us-east-1",
+            "awsAccountId": "123456789012",
+            "vpcId": "vpc-abc123"
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-create-peering",
+            "commandType": "createSubscriptionPeering",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::create_vpc_peering(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "provider": "AWS",
+            "vpc_id": "vpc-abc123",
+            "aws_region": "us-east-1",
+            "aws_account_id": "123456789012",
+            "vpc_cidr": "10.0.0.0/16"
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("task-create-peering") || result.contains("taskId"),
+        "Expected task response, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_delete_vpc_peering_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/subscriptions/123/peerings/456"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-delete-peering",
+            "commandType": "deleteSubscriptionPeering",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::delete_vpc_peering(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "peering_id": 456
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("task-delete-peering") || result.contains("taskId"),
+        "Expected task response for DELETE peering, got: {result}"
+    );
+}
+
+// ============================================================================
+// Section 3: Fixed subscriptions — strict request shapes
+// ============================================================================
+
+#[tokio::test]
+async fn test_create_fixed_subscription_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // FixedSubscriptionCreateRequest: name -> "name", plan_id -> "planId" (camelCase)
+    Mock::given(method("POST"))
+        .and(path("/fixed/subscriptions"))
+        .and(body_partial_json(json!({
+            "name": "my-essentials",
+            "planId": 42
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-create-fixed-sub",
+            "commandType": "createFixedSubscription",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::create_fixed_subscription(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "name": "my-essentials",
+            "plan_id": 42
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("task-create-fixed-sub") || result.contains("taskId"),
+        "Expected task response, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_fixed_subscription_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // FixedSubscriptionUpdateRequest: name -> "name" (single-word, camelCase is identity)
+    Mock::given(method("PUT"))
+        .and(path("/fixed/subscriptions/789"))
+        .and(body_partial_json(json!({
+            "name": "updated-name"
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-update-fixed-sub",
+            "commandType": "updateFixedSubscription",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::update_fixed_subscription(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 789,
+            "name": "updated-name"
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("task-update-fixed-sub") || result.contains("taskId"),
+        "Expected task response, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_delete_fixed_subscription_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/fixed/subscriptions/789"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-delete-fixed-sub",
+            "commandType": "deleteFixedSubscription",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::delete_fixed_subscription(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 789})).await;
+
+    assert!(
+        result.contains("task-delete-fixed-sub") || result.contains("taskId"),
+        "Expected task response for DELETE fixed subscription, got: {result}"
+    );
+}
+
+// ============================================================================
+// Section 4: Account / ACL — strict request shapes
+// ============================================================================
+
+#[tokio::test]
+async fn test_create_acl_user_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // AclUserCreateRequest: name -> "name", role -> "role", password -> "password"
+    Mock::given(method("POST"))
+        .and(path("/acl/users"))
+        .and(body_partial_json(json!({
+            "name": "test-user",
+            "role": "some-role"
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-create-acl-user",
+            "commandType": "createAclUser",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::create_acl_user(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "name": "test-user",
+            "role": "some-role",
+            "password": "s3cr3t"
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("task-create-acl-user") || result.contains("taskId"),
+        "Expected task response, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_redis_rule_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // AclRedisRuleCreateRequest: name -> "name", redis_rule -> "redisRule" (camelCase)
+    Mock::given(method("POST"))
+        .and(path("/acl/redisRules"))
+        .and(body_partial_json(json!({
+            "name": "my-rule",
+            "redisRule": "+@read"
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-create-redis-rule",
+            "commandType": "createRedisRule",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::create_redis_rule(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "name": "my-rule",
+            "redis_rule": "+@read"
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("task-create-redis-rule") || result.contains("taskId"),
+        "Expected task response, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_delete_acl_role_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/acl/roles/99"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-delete-acl-role",
+            "commandType": "deleteAclRole",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::delete_acl_role(state);
+
+    let result = call_tool_text(&tool, json!({"role_id": 99})).await;
+
+    assert!(
+        result.contains("task-delete-acl-role") || result.contains("taskId"),
+        "Expected task response for DELETE ACL role, got: {result}"
+    );
 }
