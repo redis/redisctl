@@ -148,7 +148,7 @@ REDIS_URL=redis://localhost:6379 redisctl-mcp --profile my-profile
 
 #### Option 2: Database Profile (Recommended for Regular Use)
 
-Configure a database profile in your redisctl config file (`~/.config/redisctl/config.toml` or `~/Library/Application Support/redisctl/config.toml` on macOS):
+Configure a database profile in your redisctl config file (`~/.config/redisctl/config.toml` or `~/Library/Application Support/com.redis.redisctl/config.toml` on macOS):
 
 ```toml
 # Default database profile to use when none specified
