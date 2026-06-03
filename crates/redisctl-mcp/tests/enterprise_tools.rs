@@ -832,3 +832,288 @@ async fn test_get_module() {
     assert_eq!(result["semantic_version"], "2.6.0");
     assert_eq!(result["author"], "Redis Ltd.");
 }
+
+// ============================================================================
+// Proxy Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_list_enterprise_proxies() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/proxies"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"uid": 1, "status": "active", "port": 12000},
+            {"uid": 2, "status": "active", "port": 12001}
+        ])))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::list_proxies(state);
+
+    let result = call_tool_json(&tool, json!({})).await;
+
+    let proxies = result["proxies"]
+        .as_array()
+        .expect("expected proxies array");
+    assert_eq!(proxies.len(), 2);
+    assert_eq!(proxies[0]["uid"], 1);
+}
+
+#[tokio::test]
+async fn test_get_enterprise_proxy() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/proxies/1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "uid": 1,
+            "status": "active",
+            "port": 12000,
+            "max_connections": 1000
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::get_proxy(state);
+
+    let result = call_tool_json(&tool, json!({"uid": 1})).await;
+
+    assert_eq!(result["uid"], 1);
+    assert_eq!(result["status"], "active");
+}
+
+#[tokio::test]
+async fn test_get_enterprise_proxy_stats() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/proxies/1/stats"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "uid": 1,
+            "intervals": [
+                {"interval": "1sec", "timestamps": [1705314600], "values": [5000]}
+            ]
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::get_proxy_stats(state);
+
+    let result = call_tool_json(&tool, json!({"uid": 1})).await;
+
+    assert_eq!(result["uid"], 1);
+    assert!(result.get("intervals").is_some());
+}
+
+#[tokio::test]
+async fn test_update_enterprise_proxy() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/v1/proxies/1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "uid": 1,
+            "status": "active",
+            "max_connections": 2000
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::update_proxy(state);
+
+    let result = call_tool_json(
+        &tool,
+        json!({
+            "uid": 1,
+            "updates": {"max_connections": 2000}
+        }),
+    )
+    .await;
+
+    assert_eq!(result["uid"], 1);
+    assert_eq!(result["max_connections"], 2000);
+}
+
+// ============================================================================
+// Services Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_list_enterprise_services() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/local/services"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "cm_server": {"service_id": "cm_server", "name": "cm_server", "enabled": true},
+            "mdns_server": {"service_id": "mdns_server", "name": "mdns_server", "enabled": true}
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::list_services(state);
+
+    let result = call_tool_json(&tool, json!({})).await;
+
+    assert!(result.get("cm_server").is_some());
+    assert!(result.get("mdns_server").is_some());
+}
+
+#[tokio::test]
+async fn test_get_enterprise_service() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/local/services"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "cm_server": {"service_id": "cm_server", "name": "cm_server", "enabled": true}
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::get_service(state);
+
+    let result = call_tool_json(&tool, json!({"service_id": "cm_server"})).await;
+
+    assert_eq!(result["service_id"], "cm_server");
+    assert_eq!(result["enabled"], true);
+}
+
+#[tokio::test]
+async fn test_get_enterprise_service_status() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/local/services"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "cm_server": {"service_id": "cm_server", "name": "cm_server", "enabled": true}
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::get_service_status(state);
+
+    let result = call_tool_json(&tool, json!({"service_id": "cm_server"})).await;
+
+    assert_eq!(result["service_id"], "cm_server");
+    assert_eq!(result["enabled"], true);
+}
+
+#[tokio::test]
+async fn test_update_enterprise_service() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/v1/services/cm_server"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "service_id": "cm_server",
+            "enabled": false
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::update_service(state);
+
+    let result = call_tool_json(
+        &tool,
+        json!({
+            "service_id": "cm_server",
+            "config": {"enabled": false}
+        }),
+    )
+    .await;
+
+    assert_eq!(result["service_id"], "cm_server");
+    assert_eq!(result["enabled"], false);
+}
+
+#[tokio::test]
+async fn test_start_enterprise_service() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/services/cm_server/start"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": "ok"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::start_service(state);
+
+    let result = call_tool_json(&tool, json!({"service_id": "cm_server"})).await;
+
+    assert_eq!(result["status"], "ok");
+}
+
+#[tokio::test]
+async fn test_stop_enterprise_service() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/services/cm_server/stop"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": "ok"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::stop_service(state);
+
+    let result = call_tool_json(&tool, json!({"service_id": "cm_server"})).await;
+
+    assert_eq!(result["status"], "ok");
+}
+
+#[tokio::test]
+async fn test_restart_enterprise_service() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/services/cm_server/restart"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": "ok"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::restart_service(state);
+
+    let result = call_tool_json(&tool, json!({"service_id": "cm_server"})).await;
+
+    assert_eq!(result["status"], "ok");
+}
