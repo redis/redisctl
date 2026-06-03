@@ -449,7 +449,7 @@ The MCP server uses:
 
 - **Transport**: stdio (standard input/output)
 - **Protocol Version**: 2024-11-05
-- **Capabilities**: Tools only (no resources or prompts currently)
+- **Capabilities**: Tools, Resources (`redis://config/path`, `redis://profiles`, `redis://help`), and Prompts (`troubleshoot_database`, `analyze_performance`, `capacity_planning`, `migration_planning`, plus dynamic skill prompts)
 
 For MCP protocol details, see the [MCP Specification](https://spec.modelcontextprotocol.io/).
 
