@@ -14,42 +14,39 @@ Manage the full lifecycle of Redis Cloud resources: subscriptions, databases, us
 redisctl cloud subscription list
 
 # Get subscription details
-redisctl cloud subscription get --id 12345
+redisctl cloud subscription get 12345
 
 # Create a subscription (JSON input)
 redisctl cloud subscription create --data '{...}'
 
 # Update a subscription
-redisctl cloud subscription update --id 12345 --data '{...}'
+redisctl cloud subscription update 12345 --data '{...}'
 
 # Delete a subscription
-redisctl cloud subscription delete --id 12345
+redisctl cloud subscription delete 12345
 ```
 
 ## Databases
 
 ```bash
-# List databases in a subscription
-redisctl cloud database list --subscription-id 12345
+# List databases (optionally filtered by subscription)
+redisctl cloud database list
+redisctl cloud database list --subscription 12345
 
-# Get database details
-redisctl cloud database get --subscription-id 12345 --id 67890
+# Get database details (format: subscription_id:database_id)
+redisctl cloud database get 12345:67890
 
 # Create a database
-redisctl cloud database create --subscription-id 12345 --data '{...}'
+redisctl cloud database create --subscription 12345 --name mydb --memory 1
 
 # Update a database
-redisctl cloud database update --subscription-id 12345 --id 67890 --data '{...}'
+redisctl cloud database update 12345:67890 --memory 10
 
 # Delete a database
-redisctl cloud database delete --subscription-id 12345 --id 67890
-
-# Pause/recover a database
-redisctl cloud database pause --subscription-id 12345 --id 67890
-redisctl cloud database recover --subscription-id 12345 --id 67890
+redisctl cloud database delete 12345:67890
 
 # Backup a database
-redisctl cloud database backup --subscription-id 12345 --id 67890
+redisctl cloud database backup 12345:67890
 ```
 
 ## Essentials / Fixed Tier
@@ -58,8 +55,8 @@ For smaller, fixed-price databases:
 
 ```bash
 redisctl cloud fixed-subscription list
-redisctl cloud fixed-database list --subscription-id 12345
-redisctl cloud fixed-database create --subscription-id 12345 --data '{...}'
+redisctl cloud fixed-database list 12345
+redisctl cloud fixed-database create 12345 --name mydb
 ```
 
 ## Task Tracking
@@ -71,10 +68,10 @@ Cloud operations are async. Track tasks:
 redisctl cloud task list
 
 # Get task status
-redisctl cloud task get --id <task-id>
+redisctl cloud task get <task-id>
 
 # Wait for a task to complete
-redisctl cloud task wait --id <task-id>
+redisctl cloud task wait <task-id>
 ```
 
 ## Workflows
@@ -93,7 +90,7 @@ redisctl cloud workflow subscription-setup
 redisctl cloud cost-report generate --start 2026-01-01 --end 2026-01-31
 
 # Download a generated report
-redisctl cloud cost-report download --id <report-id>
+redisctl cloud cost-report download <report-id>
 
 # Generate and download in one step
 redisctl cloud cost-report export --start 2026-01-01 --end 2026-01-31
@@ -105,18 +102,25 @@ redisctl cloud cost-report export --start 2026-01-01 --end 2026-01-31
 # Get account details
 redisctl cloud account get
 
-# List/manage users
+# List/manage users (no create — users are managed via the Redis Cloud console)
 redisctl cloud user list
-redisctl cloud user create --data '{...}'
+redisctl cloud user get <user-id>
+redisctl cloud user update <user-id> --data '{...}'
+redisctl cloud user delete <user-id>
 
-# ACL management
-redisctl cloud acl list
-redisctl cloud acl create --data '{...}'
+# ACL management — granular subcommands
+redisctl cloud acl list-redis-rules
+redisctl cloud acl create-redis-rule --data '{...}'
+redisctl cloud acl list-roles
+redisctl cloud acl create-role --data '{...}'
+redisctl cloud acl list-acl-users
+redisctl cloud acl create-acl-user --data '{...}'
 ```
 
 ## Tips
 
 - Use `--profile <name>` to target a specific Cloud profile
 - Use `--output json` for machine-readable output
-- Most create/update commands accept `--data` with a JSON payload or `--file` for a JSON file
-- Task IDs are returned from async operations -- use `cloud task wait` to block until completion
+- Most create/update commands accept `--data` with a JSON payload
+- Task IDs are returned from async operations — use `cloud task wait` to block until completion
+- Database IDs use the format `subscription_id:database_id` for most operations
