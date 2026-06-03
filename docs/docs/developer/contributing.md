@@ -6,7 +6,7 @@ How to contribute to redisctl.
 
 ### Prerequisites
 
-- Rust 1.75+ (edition 2024)
+- Rust 1.90+ (edition 2024)
 - Git
 
 ### Clone and Build
@@ -106,10 +106,10 @@ crates/
 
 ## Adding a New Command
 
-1. Add command enum in `crates/redisctl/src/cli.rs`
-2. Implement handler in `src/commands/`
-3. Add to command routing in `src/main.rs`
-4. Add tests in `tests/`
+1. Add command enum in `crates/redisctl/src/cli/mod.rs` (top-level) or the relevant domain file: `src/cli/cloud.rs` (Cloud), `src/cli/enterprise.rs` (Enterprise)
+2. Implement handler in `crates/redisctl/src/commands/` (subdirs: `cloud/`, `enterprise/`)
+3. Add to command routing in `crates/redisctl/src/main.rs`
+4. Add tests in `crates/redisctl/tests/`
 5. Update documentation
 
 ## Testing
@@ -146,7 +146,7 @@ async fn test_database_list() {
 
 ## Documentation
 
-- User docs: `mkdocs-site/docs/`
+- User docs: `docs/docs/`
 - API docs: Inline rustdoc comments
 - Build docs: `cargo doc --workspace`
 
