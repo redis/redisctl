@@ -27,16 +27,16 @@ redisctl enterprise status --brief
 redisctl enterprise database list
 
 # Get database details
-redisctl enterprise database get --id 1
+redisctl enterprise database get 1
 
 # Create a database
 redisctl enterprise database create --data '{...}'
 
 # Update a database
-redisctl enterprise database update --id 1 --data '{...}'
+redisctl enterprise database update 1 --data '{...}'
 
 # Delete a database
-redisctl enterprise database delete --id 1
+redisctl enterprise database delete 1
 ```
 
 ## Active-Active (CRDB)
@@ -46,17 +46,17 @@ redisctl enterprise database delete --id 1
 redisctl enterprise crdb list
 
 # Get CRDB details
-redisctl enterprise crdb get --id <guid>
+redisctl enterprise crdb get <guid>
 
 # Create a CRDB
 redisctl enterprise crdb create --data '{...}'
 
 # Update a CRDB
-redisctl enterprise crdb update --id <guid> --data '{...}'
+redisctl enterprise crdb update <guid> --data '{...}'
 
 # Check CRDB task status
 redisctl enterprise crdb-task list
-redisctl enterprise crdb-task get --id <task-id>
+redisctl enterprise crdb-task get <task-id>
 ```
 
 ## Stats and Metrics
@@ -71,24 +71,21 @@ redisctl enterprise stats node
 # Per-database stats
 redisctl enterprise stats database
 
-# Per-shard stats
-redisctl enterprise stats shard
+# Per-shard stats (by database)
+redisctl enterprise stats database-shards
 ```
 
 ## Logs and Alerts
 
 ```bash
-# View cluster logs
-redisctl enterprise logs cluster
-
-# View node-specific logs
-redisctl enterprise logs node
+# View cluster event logs
+redisctl enterprise logs list
 
 # List alerts
 redisctl enterprise alerts list
 
 # Get alert details
-redisctl enterprise alerts get --id <alert-id>
+redisctl enterprise alerts get <UID>
 ```
 
 ## Module Management
@@ -98,7 +95,7 @@ redisctl enterprise alerts get --id <alert-id>
 redisctl enterprise module list
 
 # Get module details
-redisctl enterprise module get --id <module-id>
+redisctl enterprise module get <UID>
 ```
 
 ## Nodes and Shards
@@ -108,13 +105,13 @@ redisctl enterprise module get --id <module-id>
 redisctl enterprise node list
 
 # Get node details
-redisctl enterprise node get --id 1
+redisctl enterprise node get 1
 
 # List shards
 redisctl enterprise shard list
 
 # Get shard details
-redisctl enterprise shard get --id 1
+redisctl enterprise shard get <UID>
 ```
 
 ## Tips
