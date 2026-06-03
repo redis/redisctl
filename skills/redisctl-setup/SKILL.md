@@ -13,7 +13,7 @@ Choose one method:
 
 ```bash
 # Homebrew (macOS/Linux)
-brew install redis-developer/tap/redisctl
+brew install redis/homebrew-tap/redisctl
 
 # Cargo (from source)
 cargo install redisctl
