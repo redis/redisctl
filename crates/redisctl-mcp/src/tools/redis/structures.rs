@@ -1,7 +1,8 @@
 //! Data structure Redis tools (hgetall, lrange, smembers, zrange, xinfo_stream, xrange, xlen,
 //! pubsub_channels, pubsub_numsub, hset, hdel, lpush, rpush, lpop, rpop, sadd, srem, zadd,
-//! zrem, xadd, xtrim, hget, hmget, hlen, hexists, hkeys, hvals, hincrby, scard, sismember,
-//! sunion, sinter, sdiff, zcard, zscore, zrank, zcount, zrangebyscore, llen, lindex)
+//! zrem, xadd, xtrim, hget, hmget, hlen, hexists, hkeys, hvals, hincrby, hexpire, scard,
+//! sismember, sunion, sinter, sdiff, zcard, zscore, zrank, zcount, zrangebyscore,
+//! zremrangebyscore, llen, lindex)
 
 use std::collections::HashMap;
 
@@ -61,6 +62,7 @@ mcp_module! {
     hkeys => "redis_hkeys",
     hvals => "redis_hvals",
     hincrby => "redis_hincrby",
+    hexpire => "redis_hexpire",
     scard => "redis_scard",
     sismember => "redis_sismember",
     sunion => "redis_sunion",
@@ -71,6 +73,7 @@ mcp_module! {
     zrank => "redis_zrank",
     zcount => "redis_zcount",
     zrangebyscore => "redis_zrangebyscore",
+    zremrangebyscore => "redis_zremrangebyscore",
     llen => "redis_llen",
     lindex => "redis_lindex",
 }
@@ -899,6 +902,34 @@ database_tool!(read_only, zrangebyscore, "redis_zrangebyscore",
     }
 );
 
+database_tool!(write, zremrangebyscore, "redis_zremrangebyscore",
+    "Remove all members from a sorted set with scores between min and max (inclusive). \
+     Use \"-inf\"/\"+inf\" for unbounded. Returns the number of removed members.\n\n\
+     Tip: use with timestamp scores to implement sliding-window cleanup \
+     (e.g. ZREMRANGEBYSCORE key -inf {now - window}).",
+    {
+        /// Sorted set key
+        pub key: String,
+        /// Minimum score (use "-inf" for no lower bound)
+        pub min: String,
+        /// Maximum score (use "+inf" for no upper bound)
+        pub max: String,
+    } => |conn, input| {
+        let removed: i64 = redis::cmd("ZREMRANGEBYSCORE")
+            .arg(&input.key)
+            .arg(&input.min)
+            .arg(&input.max)
+            .query_async(&mut conn)
+            .await
+            .tool_context("ZREMRANGEBYSCORE failed")?;
+
+        Ok(CallToolResult::text(format!(
+            "Removed {} member(s) from '{}' with scores in [{}, {}]",
+            removed, input.key, input.min, input.max
+        )))
+    }
+);
+
 // --- P1 List read tools ---
 
 database_tool!(read_only, llen, "redis_llen",
@@ -1385,6 +1416,81 @@ database_tool!(write, hincrby, "redis_hincrby",
         Ok(CallToolResult::text(format!(
             "{}.{}: {}",
             input.key, input.field, value
+        )))
+    }
+);
+
+database_tool!(write, hexpire, "redis_hexpire",
+    "Set a TTL (in seconds) on one or more hash fields (Redis 7.4+). \
+     Each field expires independently; when a field expires it is automatically deleted.\n\n\
+     Optional condition:\n\
+     - NX: set expiry only if the field has no expiry\n\
+     - XX: set expiry only if the field already has an expiry\n\
+     - GT: set expiry only if new TTL is greater than current TTL\n\
+     - LT: set expiry only if new TTL is less than current TTL\n\n\
+     Per-field result codes: 2 = field already expired/deleted, 1 = expiry set, \
+     0 = condition not met, -2 = field does not exist.",
+    {
+        /// Hash key
+        pub key: String,
+        /// TTL in seconds
+        #[serde(deserialize_with = "serde_helpers::string_or_i64::deserialize")]
+        pub seconds: i64,
+        /// Fields to set TTL on
+        pub fields: Vec<String>,
+        /// Optional condition: NX, XX, GT, or LT
+        #[serde(default)]
+        pub condition: Option<String>,
+    } => |conn, input| {
+        if let Some(ref cond) = input.condition {
+            let cond_upper = cond.to_uppercase();
+            if !matches!(cond_upper.as_str(), "NX" | "XX" | "GT" | "LT") {
+                return Err(tower_mcp::Error::tool(format!(
+                    "invalid condition '{}': must be NX, XX, GT, or LT",
+                    cond
+                )));
+            }
+        }
+
+        let mut cmd = redis::cmd("HEXPIRE");
+        cmd.arg(&input.key).arg(input.seconds);
+
+        if let Some(ref cond) = input.condition {
+            cmd.arg(cond.to_uppercase());
+        }
+
+        cmd.arg("FIELDS").arg(input.fields.len());
+        for field in &input.fields {
+            cmd.arg(field);
+        }
+
+        let results: Vec<i64> = cmd
+            .query_async(&mut conn)
+            .await
+            .tool_context("HEXPIRE failed")?;
+
+        let summary: Vec<String> = input
+            .fields
+            .iter()
+            .zip(results.iter())
+            .map(|(field, &code)| {
+                let status = match code {
+                    2 => "field already expired/deleted",
+                    1 => "expiry set",
+                    0 => "condition not met",
+                    -2 => "field not found",
+                    _ => "unknown result",
+                };
+                format!("  {}: {}", field, status)
+            })
+            .collect();
+
+        Ok(CallToolResult::text(format!(
+            "HEXPIRE '{}' ({}s) on {} field(s):\n{}",
+            input.key,
+            input.seconds,
+            input.fields.len(),
+            summary.join("\n")
         )))
     }
 );
