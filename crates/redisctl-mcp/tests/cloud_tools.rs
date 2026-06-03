@@ -967,9 +967,10 @@ async fn test_delete_acl_role_request_shape() {
 async fn test_update_subscription_request_shape() {
     let server = MockCloudServer::start().await;
 
-    // update_subscription sends an empty BaseSubscriptionUpdateRequest body via PUT.
+    // update_subscription requires at least one of name, payment_method_id, or payment_method.
     Mock::given(method("PUT"))
         .and(path("/subscriptions/123"))
+        .and(body_partial_json(json!({"name": "Updated Subscription"})))
         .respond_with(ResponseTemplate::new(202).set_body_json(json!({
             "taskId": "task-update-sub",
             "status": "processing-in-progress"
@@ -981,7 +982,14 @@ async fn test_update_subscription_request_shape() {
     let state = full_policy_state(client);
     let tool = cloud::update_subscription(state);
 
-    let result = call_tool_text(&tool, json!({"subscription_id": 123})).await;
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "name": "Updated Subscription"
+        }),
+    )
+    .await;
 
     assert!(
         result.contains("task-update-sub") || result.contains("taskId"),
