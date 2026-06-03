@@ -1,6 +1,6 @@
 # Tools Reference
 
-The redisctl MCP server exposes **340 tools** across 4 toolsets and 2 system tools for managing Redis Cloud, Redis Enterprise, and direct database operations.
+The redisctl MCP server exposes **392 tools** across 4 toolsets and 2 system tools for managing Redis Cloud, Redis Enterprise, and direct database operations.
 
 Tools are organized into **toolsets** (Cloud, Enterprise, Database, App) and further into **sub-modules** that can be selectively loaded with the [`--tools` flag](configuration.md#the-tools-flag).
 
@@ -18,7 +18,7 @@ These tools are always available regardless of `--tools` selection or visibility
 | `list_available_tools` | List all available tools grouped by toolset, showing active vs. hidden |
 | `show_policy` | Show the active safety tier, per-toolset overrides, and allow/deny lists |
 
-## Cloud Toolset (148 tools)
+## Cloud Toolset (151 tools)
 
 Redis Cloud management tools. Select with `--tools cloud` or target specific sub-modules.
 
@@ -37,7 +37,7 @@ Manages flexible subscriptions and their databases -- creation, configuration, b
 | `get_backup_status` | Get database backup status |
 | `get_database_tags` | Get database tags |
 
-### `cloud:account` (33 tools)
+### `cloud:account` (35 tools)
 
 Account management -- users, ACL users/roles/rules, cloud provider accounts, payment methods, cost reports, and task tracking.
 
@@ -52,7 +52,7 @@ Account management -- users, ACL users/roles/rules, cloud provider accounts, pay
 | `generate_cost_report` | Generate cost reports |
 | `list_tasks` | List recent async tasks |
 
-### `cloud:networking` (51 tools)
+### `cloud:networking` (52 tools)
 
 Network connectivity -- VPC peering, Transit Gateway, Private Service Connect (PSC), and AWS PrivateLink for both standard and Active-Active subscriptions.
 
@@ -183,7 +183,7 @@ System service lifecycle -- list, inspect, start, stop, restart, and status chec
 |------|-------------|
 | `enterprise_raw_api` | Execute arbitrary Redis Enterprise REST API requests |
 
-## Database Toolset (90 tools)
+## Database Toolset (139 tools)
 
 Direct Redis database operations. Requires `--database-url` connection. Select with `--tools database` or target specific sub-modules.
 
@@ -202,7 +202,7 @@ Server-level operations -- connectivity, server info, client listing, slow log, 
 | `redis_config_get` | Get config values |
 | `redis_config_set` | Set config values *(write)* |
 
-### `database:keys` (31 tools)
+### `database:keys` (33 tools)
 
 Key-space operations -- listing, scanning, get/set, type inspection, TTL, existence checks, memory usage, key mutation, multi-key operations, atomic counters, and string manipulation.
 
@@ -222,7 +222,7 @@ Key-space operations -- listing, scanning, get/set, type inspection, TTL, existe
 | `redis_incr` | Increment integer value *(write)* |
 | `redis_decr` | Decrement integer value *(write)* |
 
-### `database:structures` (40 tools)
+### `database:structures` (41 tools)
 
 Data structure operations -- hashes, lists, sets, sorted sets, streams, pub/sub inspection, set algebra, and granular field/member accessors.
 
@@ -251,7 +251,7 @@ Data structure operations -- hashes, lists, sets, sorted sets, streams, pub/sub 
 | `redis_xlen` | Get stream length |
 | `redis_pubsub_channels` | List active pub/sub channels |
 
-### `database:diagnostics` (4 tools)
+### `database:diagnostics` (5 tools)
 
 Higher-level diagnostic tools that aggregate information from multiple Redis commands.
 
@@ -261,6 +261,61 @@ Higher-level diagnostic tools that aggregate information from multiple Redis com
 | `redis_key_summary` | Key distribution summary |
 | `redis_hotkeys` | Hot key detection |
 | `redis_connection_summary` | Connection pool summary |
+| `redis_memory_doctor` | Memory usage analysis and recommendations |
+
+### `database:json` (16 tools)
+
+JSON document operations using RedisJSON -- get, set, merge, delete, increment, array/object manipulation, and path-based queries.
+
+| Representative Tools | Description |
+|---------------------|-------------|
+| `redis_json_get` | Get JSON value at path |
+| `redis_json_set` | Set JSON value at path *(write)* |
+| `redis_json_del` | Delete JSON value at path *(write)* |
+| `redis_json_mget` | Get JSON values from multiple keys |
+| `redis_json_type` | Get JSON type at path |
+| `redis_json_arrlen` | Get JSON array length |
+| `redis_json_objkeys` | Get JSON object keys |
+| `redis_json_numincrby` | Increment numeric JSON value *(write)* |
+
+### `database:search` (19 tools)
+
+Full-text and vector search via RediSearch -- index management, FT.SEARCH, FT.AGGREGATE, suggest, explain, profile, and cursor-based result iteration.
+
+| Representative Tools | Description |
+|---------------------|-------------|
+| `redis_ft_create` | Create a search index *(write)* |
+| `redis_ft_search` | Execute full-text search |
+| `redis_ft_aggregate` | Execute aggregation pipeline |
+| `redis_ft_info` | Get index information |
+| `redis_ft_list` | List all search indexes |
+| `redis_ft_explain` | Explain query execution plan |
+| `redis_ft_profile` | Profile query execution |
+| `redis_ft_sugadd` | Add suggestion to index *(write)* |
+
+### `database:aliases` (4 tools)
+
+Session-scoped command aliases -- save, list, run, and delete named command sequences for repeatable workflows.
+
+| Tool | Description |
+|------|-------------|
+| `redis_alias_set` | Save a named command alias *(write)* |
+| `redis_alias_list` | List all saved aliases |
+| `redis_alias_run` | Execute a saved alias |
+| `redis_alias_delete` | Delete a saved alias *(write)* |
+
+### `database:bulk` (6 tools)
+
+Bulk and batch operations -- multi-key get/delete, TTL management, key migration, and pattern-based bulk operations.
+
+| Representative Tools | Description |
+|---------------------|-------------|
+| `redis_bulk_get` | Get multiple keys by pattern |
+| `redis_bulk_delete` | Delete keys by pattern *(write)* |
+| `redis_bulk_expire` | Set TTL on multiple keys *(write)* |
+| `redis_bulk_copy` | Copy keys to another database *(write)* |
+| `redis_pipeline_exec` | Execute a batch of commands *(write)* |
+| `redis_bulk_ttl_report` | Report TTL distribution |
 
 ### `database:raw` (1 tool)
 
@@ -287,12 +342,12 @@ Profile and configuration management tools. Always compiled in; no sub-modules.
 
 | Toolset | Sub-modules | Tools |
 |---------|-------------|-------|
-| Cloud | `subscriptions` (36), `account` (33), `networking` (51), `fixed` (27), `raw` (1) | **148** |
+| Cloud | `subscriptions` (36), `account` (35), `networking` (52), `fixed` (27), `raw` (1) | **151** |
 | Enterprise | `cluster` (24), `databases` (20), `rbac` (20), `observability` (16), `proxy` (4), `services` (7), `raw` (1) | **92** |
-| Database | `server` (14), `keys` (31), `structures` (40), `diagnostics` (4), `raw` (1) | **90** |
+| Database | `server` (14), `keys` (33), `structures` (41), `diagnostics` (5), `json` (16), `search` (19), `aliases` (4), `bulk` (6), `raw` (1) | **139** |
 | App | *(flat)* | **8** |
 | System | *(always on)* | **2** |
-| **Total** | | **340** |
+| **Total** | | **392** |
 
 ## Example Tool Usage
 
