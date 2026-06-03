@@ -2907,7 +2907,7 @@ dependencies = [
 
 [[package]]
 name = "redisctl"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2957,7 +2957,7 @@ dependencies = [
 
 [[package]]
 name = "redisctl-core"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "clap",
  "directories",
@@ -2978,7 +2978,7 @@ dependencies = [
 
 [[package]]
 name = "redisctl-mcp"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "async-trait",

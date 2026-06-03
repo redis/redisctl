@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0](https://github.com/redis-developer/redisctl/compare/redisctl-mcp-v0.10.1...redisctl-mcp-v0.11.0) - 2026-03-20
+
+### Added
+
+- *(mcp)* cluster-aware connections + client_name ([#906](https://github.com/redis-developer/redisctl/pull/906))
+
+### Fixed
+
+- *(auth)* support Redis Cloud secret env var alias ([#913](https://github.com/redis-developer/redisctl/pull/913))
+- *(mcp)* preserve raw tool denies in synthesized policy ([#912](https://github.com/redis-developer/redisctl/pull/912))
+
 ## [0.10.1](https://github.com/redis-developer/redisctl/compare/redisctl-mcp-v0.10.0...redisctl-mcp-v0.10.1) - 2026-03-19
 
 ### Other

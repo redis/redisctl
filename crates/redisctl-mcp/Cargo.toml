@@ -21,7 +21,7 @@ tower-mcp = { version = "0.8.2", features = ["http", "oauth", "dynamic-tools"] }
 schemars = "1.2"
 
 # Internal crates
-redisctl-core = { version = "0.10.1", path = "../redisctl-core" }
+redisctl-core = { version = "0.11.0", path = "../redisctl-core" }
 
 # External API clients (optional, gated by features)
 redis-cloud = { workspace = true, optional = true }
