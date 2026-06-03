@@ -12,13 +12,13 @@ All Redis Cloud CLI commands.
 | [fixed-database](fixed-databases.md) | Manage Essentials databases |
 | [user](access-control.md) | User management |
 | [acl](access-control.md) | Access control lists |
-| [account](billing.md) | Account operations |
-| [payment-method](billing.md) | Payment method management |
+| account | Account operations |
+| payment-method | Payment method management |
 | [cost-report](cost-report.md) | Cost reporting (Beta) |
 | [connectivity](networking.md) | Network connectivity operations (VPC, PSC, TGW) |
-| [provider-account](networking.md) | Cloud provider account operations |
+| provider-account | Cloud provider account operations |
 | [task](tasks.md) | Async task monitoring |
-| [workflow](tasks.md) | Workflow operations for multi-step tasks |
+| workflow | Workflow operations for multi-step tasks |
 
 ## Getting Help
 
