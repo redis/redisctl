@@ -246,11 +246,13 @@ enterprise_tool!(write, import_enterprise_database, "import_enterprise_database"
 enterprise_tool!(write, create_enterprise_database, "create_enterprise_database",
     "Create a new database on the Enterprise cluster. \
      Prerequisites: 1) get_cluster -- verify the cluster is healthy and has capacity. \
-     2) list_enterprise_databases -- review existing databases.",
+     2) get_enterprise_cluster_policy -- check the default Redis version and rack-awareness settings. \
+     3) list_enterprise_databases -- check name uniqueness and review existing databases.",
     {
         /// Database name
         pub name: String,
-        /// Memory size in bytes (e.g., 1073741824 for 1GB)
+        /// Memory size in **bytes** (not GB — unlike Cloud tools). Example: 1073741824 = 1 GB.
+        /// IMPORTANT: passing a value in GB (e.g., 1.0) will create a 1-byte database.
         pub memory_size: Option<u64>,
         /// Port number (optional, cluster will assign if not specified)
         pub port: Option<u16>,

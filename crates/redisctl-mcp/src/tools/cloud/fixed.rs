@@ -58,7 +58,8 @@ mcp_module! {
 // ============================================================================
 
 cloud_tool!(read_only, list_fixed_subscriptions, "list_fixed_subscriptions",
-    "List all Fixed/Essentials subscriptions.",
+    "List all Fixed/Essentials tier subscriptions (pre-configured plans). \
+     Use list_subscriptions for Pro subscriptions.",
     {} => |client, _input| {
         let handler = FixedSubscriptionHandler::new(client);
         let subscriptions = handler
@@ -71,7 +72,8 @@ cloud_tool!(read_only, list_fixed_subscriptions, "list_fixed_subscriptions",
 );
 
 cloud_tool!(read_only, get_fixed_subscription, "get_fixed_subscription",
-    "Get subscription details by ID.",
+    "Get details for a Fixed/Essentials subscription by ID. \
+     Use get_subscription for Pro subscriptions.",
     {
         /// Fixed subscription ID
         pub subscription_id: i32,
@@ -175,7 +177,8 @@ cloud_tool!(destructive, delete_fixed_subscription, "delete_fixed_subscription",
 );
 
 cloud_tool!(read_only, list_fixed_plans, "list_fixed_plans",
-    "List available Fixed/Essentials plans.",
+    "List available Fixed/Essentials plans by size, region, and price. \
+     Call this before create_fixed_subscription to discover available plan IDs.",
     {
         /// Cloud provider filter (e.g., "AWS", "GCP", "Azure")
         #[serde(default)]
@@ -247,7 +250,8 @@ cloud_tool!(read_only, get_fixed_redis_versions, "get_fixed_redis_versions",
 // ============================================================================
 
 cloud_tool!(read_only, list_fixed_databases, "list_fixed_databases",
-    "List databases in a subscription.",
+    "List databases in a Fixed/Essentials subscription. \
+     Use list_databases for Pro subscriptions.",
     {
         /// Fixed subscription ID
         pub subscription_id: i32,
@@ -269,7 +273,8 @@ cloud_tool!(read_only, list_fixed_databases, "list_fixed_databases",
 );
 
 cloud_tool!(read_only, get_fixed_database, "get_fixed_database",
-    "Get database details by ID.",
+    "Get details for a database in a Fixed/Essentials subscription by ID. \
+     Use get_database for Pro subscriptions.",
     {
         /// Fixed subscription ID
         pub subscription_id: i32,
@@ -462,7 +467,7 @@ cloud_tool!(destructive, delete_fixed_database, "delete_fixed_database",
 // ============================================================================
 
 cloud_tool!(read_only, get_fixed_database_backup_status, "get_fixed_database_backup_status",
-    "Get latest backup status for a database.",
+    "Get latest backup status for a Fixed/Essentials database.",
     {
         /// Fixed subscription ID
         pub subscription_id: i32,
