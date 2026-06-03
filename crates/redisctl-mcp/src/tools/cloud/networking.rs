@@ -420,19 +420,14 @@ cloud_tool!(write, create_tgw_attachment, "create_tgw_attachment",
     {
         /// Subscription ID
         pub subscription_id: i32,
-        /// Transit Gateway ID
-        #[serde(default)]
-        pub tgw_id: Option<String>,
+        /// Transit Gateway ID (required)
+        pub tgw_id: String,
     } => |client, input| {
         // The attachment route now requires the TGW ID in the path; the
         // generic `create_attachment` was removed upstream.
-        let tgw_id = input
-            .tgw_id
-            .ok_or_else(|| ToolError::new("tgw_id is required".to_string()))?;
-
         let handler = TransitGatewayHandler::new(client);
         let result = handler
-            .create_attachment_with_id(input.subscription_id, &tgw_id)
+            .create_attachment_with_id(input.subscription_id, &input.tgw_id)
             .await
             .tool_context("Failed to create TGW attachment")?;
 
@@ -589,21 +584,16 @@ cloud_tool!(write, create_aa_tgw_attachment, "create_aa_tgw_attachment",
         /// AWS account ID
         #[serde(default)]
         pub aws_account_id: Option<String>,
-        /// Transit Gateway ID
-        #[serde(default)]
-        pub tgw_id: Option<String>,
+        /// Transit Gateway ID (required)
+        pub tgw_id: String,
         /// CIDR blocks to route through the TGW
         #[serde(default)]
         pub cidrs: Option<Vec<String>>,
     } => |client, input| {
         // The attachment route now requires the TGW ID in the path.
-        let tgw_id = input
-            .tgw_id
-            .clone()
-            .ok_or_else(|| ToolError::new("tgw_id is required".to_string()))?;
         let request = TgwAttachmentRequest {
             aws_account_id: input.aws_account_id,
-            tgw_id: input.tgw_id,
+            tgw_id: Some(input.tgw_id.clone()),
             cidrs: input.cidrs,
         };
 
@@ -612,7 +602,7 @@ cloud_tool!(write, create_aa_tgw_attachment, "create_aa_tgw_attachment",
             .create_attachment_active_active(
                 input.subscription_id,
                 input.region_id,
-                &tgw_id,
+                &input.tgw_id,
                 &request,
             )
             .await

@@ -95,14 +95,44 @@ enterprise_tool!(read_only, get_cluster_stats, "get_cluster_stats",
 );
 
 enterprise_tool!(write, update_cluster, "update_enterprise_cluster",
-    "Update cluster configuration settings. Pass fields to update as JSON.",
+    "Update cluster configuration settings. Typed fields cover the most common changes; \
+     use `extra` for any additional fields not listed here.",
     {
-        /// JSON object with cluster settings to update (e.g., {"name": "my-cluster", "email_alerts": true})
-        pub updates: Value,
+        /// Cluster display name
+        #[serde(default)]
+        pub name: Option<String>,
+        /// Enable or disable email alerts for the cluster
+        #[serde(default)]
+        pub email_alerts: Option<bool>,
+        /// Alert settings as a JSON object
+        #[serde(default)]
+        pub alert_settings: Option<Value>,
+        /// Block cluster configuration changes (maintenance mode)
+        #[serde(default)]
+        pub block_cluster_changes: Option<bool>,
+        /// Additional advanced cluster fields
+        #[serde(flatten)]
+        pub extra: Option<serde_json::Map<String, Value>>,
     } => |client, input| {
+        let mut body = serde_json::Map::new();
+        if let Some(name) = input.name {
+            body.insert("name".to_string(), serde_json::json!(name));
+        }
+        if let Some(email_alerts) = input.email_alerts {
+            body.insert("email_alerts".to_string(), serde_json::json!(email_alerts));
+        }
+        if let Some(alert_settings) = input.alert_settings {
+            body.insert("alert_settings".to_string(), alert_settings);
+        }
+        if let Some(block_cluster_changes) = input.block_cluster_changes {
+            body.insert("block_cluster_changes".to_string(), serde_json::json!(block_cluster_changes));
+        }
+        if let Some(extra) = input.extra {
+            body.extend(extra);
+        }
         let handler = ClusterHandler::new(client);
         let result = handler
-            .update(input.updates)
+            .update(Value::Object(body))
             .await
             .tool_context("Failed to update cluster")?;
 
@@ -125,15 +155,56 @@ enterprise_tool!(read_only, get_cluster_policy, "get_enterprise_cluster_policy",
 );
 
 enterprise_tool!(write, update_cluster_policy, "update_enterprise_cluster_policy",
-    "Update cluster policy settings. Pass fields to update as JSON.",
+    "Update cluster policy settings. Typed fields cover the most common changes; \
+     use `extra` for any additional fields not listed here.",
     {
-        /// JSON object with policy settings to update
-        /// (e.g., {"default_shards_placement": "sparse", "rack_aware": true, "default_provisioned_redis_version": "7.2"})
-        pub policy: Value,
+        /// Default shards placement: "dense" or "sparse"
+        #[serde(default)]
+        pub default_shards_placement: Option<String>,
+        /// Enable rack-aware shard placement
+        #[serde(default)]
+        pub rack_aware: Option<bool>,
+        /// Default Redis version for new databases (e.g., "7.2")
+        #[serde(default)]
+        pub default_provisioned_redis_version: Option<String>,
+        /// Redis upgrade policy: "major" or "latest"
+        #[serde(default)]
+        pub redis_upgrade_policy: Option<String>,
+        /// Default proxy policy for non-sharded databases
+        #[serde(default)]
+        pub default_non_sharded_proxy_policy: Option<String>,
+        /// Default proxy policy for sharded databases
+        #[serde(default)]
+        pub default_sharded_proxy_policy: Option<String>,
+        /// Additional advanced policy fields
+        #[serde(flatten)]
+        pub extra: Option<serde_json::Map<String, Value>>,
     } => |client, input| {
+        let mut body = serde_json::Map::new();
+        if let Some(default_shards_placement) = input.default_shards_placement {
+            body.insert("default_shards_placement".to_string(), serde_json::json!(default_shards_placement));
+        }
+        if let Some(rack_aware) = input.rack_aware {
+            body.insert("rack_aware".to_string(), serde_json::json!(rack_aware));
+        }
+        if let Some(default_provisioned_redis_version) = input.default_provisioned_redis_version {
+            body.insert("default_provisioned_redis_version".to_string(), serde_json::json!(default_provisioned_redis_version));
+        }
+        if let Some(redis_upgrade_policy) = input.redis_upgrade_policy {
+            body.insert("redis_upgrade_policy".to_string(), serde_json::json!(redis_upgrade_policy));
+        }
+        if let Some(default_non_sharded_proxy_policy) = input.default_non_sharded_proxy_policy {
+            body.insert("default_non_sharded_proxy_policy".to_string(), serde_json::json!(default_non_sharded_proxy_policy));
+        }
+        if let Some(default_sharded_proxy_policy) = input.default_sharded_proxy_policy {
+            body.insert("default_sharded_proxy_policy".to_string(), serde_json::json!(default_sharded_proxy_policy));
+        }
+        if let Some(extra) = input.extra {
+            body.extend(extra);
+        }
         let handler = ClusterHandler::new(client);
         let result = handler
-            .policy_update(input.policy)
+            .policy_update(Value::Object(body))
             .await
             .tool_context("Failed to update cluster policy")?;
 

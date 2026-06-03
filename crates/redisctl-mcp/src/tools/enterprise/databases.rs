@@ -296,16 +296,54 @@ enterprise_tool!(write, create_enterprise_database, "create_enterprise_database"
 );
 
 enterprise_tool!(write, update_enterprise_database, "update_enterprise_database",
-    "Update database configuration. Pass fields to update as JSON.",
+    "Update database configuration. Commonly used fields are available as typed parameters; \
+     use `extra` for any additional fields not listed here. \
+     memory_size is in bytes (e.g., 1073741824 = 1 GB).",
     {
         /// Database UID to update
         pub uid: u32,
-        /// JSON object with fields to update (e.g., {"memory_size": 2147483648, "replication": true})
-        pub updates: Value,
+        /// New database name
+        #[serde(default)]
+        pub name: Option<String>,
+        /// Memory limit in bytes (e.g., 1073741824 for 1 GB)
+        #[serde(default)]
+        pub memory_size: Option<u64>,
+        /// Enable or disable replication for high availability
+        #[serde(default)]
+        pub replication: Option<bool>,
+        /// Persistence mode: "disabled", "aof", "snapshot", "aof_and_snapshot"
+        #[serde(default)]
+        pub persistence: Option<String>,
+        /// Eviction policy: "noeviction", "allkeys-lru", "volatile-lru", etc.
+        #[serde(default)]
+        pub eviction_policy: Option<String>,
+        /// Additional fields to update (advanced use — any valid BDB field)
+        #[serde(flatten)]
+        pub extra: Option<serde_json::Map<String, Value>>,
     } => |client, input| {
+        // Merge all typed fields and extra fields into one JSON object for the API call.
+        let mut body = serde_json::Map::new();
+        if let Some(name) = input.name {
+            body.insert("name".to_string(), serde_json::json!(name));
+        }
+        if let Some(memory_size) = input.memory_size {
+            body.insert("memory_size".to_string(), serde_json::json!(memory_size));
+        }
+        if let Some(replication) = input.replication {
+            body.insert("replication".to_string(), serde_json::json!(replication));
+        }
+        if let Some(persistence) = input.persistence {
+            body.insert("persistence".to_string(), serde_json::json!(persistence));
+        }
+        if let Some(eviction_policy) = input.eviction_policy {
+            body.insert("eviction_policy".to_string(), serde_json::json!(eviction_policy));
+        }
+        if let Some(extra) = input.extra {
+            body.extend(extra);
+        }
         let handler = DatabaseHandler::new(client);
         let database = handler
-            .update(input.uid, input.updates)
+            .update(input.uid, Value::Object(body))
             .await
             .tool_context("Failed to update database")?;
 
@@ -479,13 +517,48 @@ enterprise_tool!(read_only, get_enterprise_crdb_tasks, "get_enterprise_crdb_task
 );
 
 enterprise_tool!(write, create_enterprise_crdb, "create_enterprise_crdb",
-    "Create a new Active-Active (CRDB) database. Pass full configuration as JSON.",
+    "Create a new Active-Active (CRDB) database across multiple clusters. \
+     name, memory_size (bytes), and instances are required. \
+     Each instance needs at minimum a `cluster` URL. \
+     Use `extra` for advanced fields.",
     {
-        /// Full CRDB configuration as JSON (name, memory_size, instances, etc.)
-        pub request: Value,
+        /// Database name (required)
+        pub name: String,
+        /// Memory size in bytes (e.g., 1073741824 for 1 GB) (required)
+        pub memory_size: u64,
+        /// List of participating cluster instances. Each must have at minimum {"cluster": "<url>"}.
+        pub instances: Vec<Value>,
+        /// Enable encryption at rest
+        #[serde(default)]
+        pub encryption: Option<bool>,
+        /// Persistence mode: "disabled", "aof", "snapshot"
+        #[serde(default)]
+        pub data_persistence: Option<String>,
+        /// Eviction policy: "noeviction", "allkeys-lru", etc.
+        #[serde(default)]
+        pub eviction_policy: Option<String>,
+        /// Additional advanced fields
+        #[serde(flatten)]
+        pub extra: Option<serde_json::Map<String, Value>>,
     } => |client, input| {
+        let mut body = serde_json::Map::new();
+        body.insert("name".to_string(), serde_json::json!(input.name));
+        body.insert("memory_size".to_string(), serde_json::json!(input.memory_size));
+        body.insert("instances".to_string(), serde_json::json!(input.instances));
+        if let Some(encryption) = input.encryption {
+            body.insert("encryption".to_string(), serde_json::json!(encryption));
+        }
+        if let Some(data_persistence) = input.data_persistence {
+            body.insert("data_persistence".to_string(), serde_json::json!(data_persistence));
+        }
+        if let Some(eviction_policy) = input.eviction_policy {
+            body.insert("eviction_policy".to_string(), serde_json::json!(eviction_policy));
+        }
+        if let Some(extra) = input.extra {
+            body.extend(extra);
+        }
         let crdb: Value = client
-            .post("/v1/crdbs", &input.request)
+            .post("/v1/crdbs", &Value::Object(body))
             .await
             .tool_context("Failed to create CRDB")?;
 
@@ -494,16 +567,46 @@ enterprise_tool!(write, create_enterprise_crdb, "create_enterprise_crdb",
 );
 
 enterprise_tool!(write, update_enterprise_crdb, "update_enterprise_crdb",
-    "Update an Active-Active (CRDB) database. Pass fields to update as JSON.",
+    "Update an Active-Active (CRDB) database. Typed fields cover the most common changes; \
+     use `extra` for any additional fields.",
     {
         /// CRDB GUID (globally unique identifier)
         pub guid: String,
-        /// JSON object with fields to update
-        pub updates: Value,
+        /// New database name
+        #[serde(default)]
+        pub name: Option<String>,
+        /// Memory size in bytes
+        #[serde(default)]
+        pub memory_size: Option<u64>,
+        /// Persistence mode: "disabled", "aof", "snapshot"
+        #[serde(default)]
+        pub data_persistence: Option<String>,
+        /// Eviction policy
+        #[serde(default)]
+        pub eviction_policy: Option<String>,
+        /// Additional advanced fields
+        #[serde(flatten)]
+        pub extra: Option<serde_json::Map<String, Value>>,
     } => |client, input| {
+        let mut body = serde_json::Map::new();
+        if let Some(name) = input.name {
+            body.insert("name".to_string(), serde_json::json!(name));
+        }
+        if let Some(memory_size) = input.memory_size {
+            body.insert("memory_size".to_string(), serde_json::json!(memory_size));
+        }
+        if let Some(data_persistence) = input.data_persistence {
+            body.insert("data_persistence".to_string(), serde_json::json!(data_persistence));
+        }
+        if let Some(eviction_policy) = input.eviction_policy {
+            body.insert("eviction_policy".to_string(), serde_json::json!(eviction_policy));
+        }
+        if let Some(extra) = input.extra {
+            body.extend(extra);
+        }
         let handler = CrdbHandler::new(client);
         let crdb = handler
-            .update(&input.guid, input.updates)
+            .update(&input.guid, Value::Object(body))
             .await
             .tool_context("Failed to update CRDB")?;
 
