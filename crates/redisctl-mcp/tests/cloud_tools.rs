@@ -967,9 +967,10 @@ async fn test_delete_acl_role_request_shape() {
 async fn test_update_subscription_request_shape() {
     let server = MockCloudServer::start().await;
 
-    // update_subscription sends an empty BaseSubscriptionUpdateRequest body via PUT.
+    // update_subscription requires at least one of name, payment_method_id, or payment_method.
     Mock::given(method("PUT"))
         .and(path("/subscriptions/123"))
+        .and(body_partial_json(json!({"name": "Updated Subscription"})))
         .respond_with(ResponseTemplate::new(202).set_body_json(json!({
             "taskId": "task-update-sub",
             "status": "processing-in-progress"
@@ -981,7 +982,14 @@ async fn test_update_subscription_request_shape() {
     let state = full_policy_state(client);
     let tool = cloud::update_subscription(state);
 
-    let result = call_tool_text(&tool, json!({"subscription_id": 123})).await;
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "name": "Updated Subscription"
+        }),
+    )
+    .await;
 
     assert!(
         result.contains("task-update-sub") || result.contains("taskId"),
@@ -1479,5 +1487,1337 @@ async fn test_get_database_certificate_request_shape() {
     assert!(
         result.get("publicCertificatePemString").is_some(),
         "Expected certificate PEM in response, got: {result}"
+    );
+}
+
+// ============================================================================
+// Section 4: Networking breadth — request shapes for every tool family
+//
+// These tests exercise at least one tool per networking primitive (VPC peering,
+// Transit Gateway, PSC, PrivateLink) in both Pro and Active-Active variants.
+// Each test mounts a method+path (and, where a body matters, a body_partial_json)
+// matcher. If the tool builds the wrong URL or drops the body, wiremock returns
+// 404 and the tool surfaces "Failed", which the assertions catch.
+// ============================================================================
+
+/// Standard 202 task response used by write/destructive networking tools.
+fn net_task_body() -> serde_json::Value {
+    json!({"taskId": "task-net-test", "status": "processing-in-progress"})
+}
+
+// ===========================================================================
+// Section A: VPC Peering — remaining Pro + all Active-Active
+// ===========================================================================
+
+#[tokio::test]
+async fn test_update_vpc_peering_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/subscriptions/123/peerings/456"))
+        .and(body_partial_json(json!({"vpcCidr": "10.0.0.0/16"})))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::update_vpc_peering(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "peering_id": 456,
+            "vpc_cidr": "10.0.0.0/16"
+        }),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "PUT peerings/456 with vpcCidr should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_aa_vpc_peering_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/123/regions/peerings"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_aa_vpc_peering(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "GET regions/peerings should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_aa_vpc_peering_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/subscriptions/123/regions/peerings/456"))
+        .and(body_partial_json(json!({"vpcCidr": "10.1.0.0/16"})))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::update_aa_vpc_peering(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "peering_id": 456,
+            "vpc_cidr": "10.1.0.0/16"
+        }),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "PUT regions/peerings/456 with vpcCidr should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_delete_aa_vpc_peering_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/subscriptions/123/regions/peerings/456"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::delete_aa_vpc_peering(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123, "peering_id": 456})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "DELETE regions/peerings/456 should have matched, got: {result}"
+    );
+}
+
+// ===========================================================================
+// Section B: Transit Gateway (Pro)
+// ===========================================================================
+
+#[tokio::test]
+async fn test_get_tgw_attachments_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/123/transitGateways"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_tgw_attachments(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "GET transitGateways should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_tgw_invitations_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/123/transitGateways/invitations"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_tgw_invitations(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "GET transitGateways/invitations should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_tgw_attachment_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path(
+            "/subscriptions/123/transitGateways/tgw-abc/attachment",
+        ))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::create_tgw_attachment(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123, "tgw_id": "tgw-abc"})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "POST transitGateways/tgw-abc/attachment should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_tgw_attachment_cidrs_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // TgwAttachmentRequest serializes to camelCase: awsAccountId, tgwId, cidrs.
+    Mock::given(method("PUT"))
+        .and(path(
+            "/subscriptions/123/transitGateways/attach-1/attachment",
+        ))
+        .and(body_partial_json(json!({"cidrs": ["10.0.0.0/24"]})))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::update_tgw_attachment_cidrs(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "attachment_id": "attach-1",
+            "cidrs": ["10.0.0.0/24"]
+        }),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "PUT transitGateways/attach-1/attachment with cidrs should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_delete_tgw_attachment_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path(
+            "/subscriptions/123/transitGateways/attach-1/attachment",
+        ))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::delete_tgw_attachment(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({"subscription_id": 123, "attachment_id": "attach-1"}),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "DELETE transitGateways/attach-1/attachment should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_accept_tgw_invitation_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path(
+            "/subscriptions/123/transitGateways/invitations/inv-1/accept",
+        ))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::accept_tgw_invitation(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({"subscription_id": 123, "invitation_id": "inv-1"}),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "PUT transitGateways/invitations/inv-1/accept should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_reject_tgw_invitation_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path(
+            "/subscriptions/123/transitGateways/invitations/inv-1/reject",
+        ))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::reject_tgw_invitation(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({"subscription_id": 123, "invitation_id": "inv-1"}),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "PUT transitGateways/invitations/inv-1/reject should have matched, got: {result}"
+    );
+}
+
+// ===========================================================================
+// Section C: Transit Gateway (Active-Active)
+// ===========================================================================
+
+#[tokio::test]
+async fn test_get_aa_tgw_attachments_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/123/regions/1/transitGateways"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_aa_tgw_attachments(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123, "region_id": 1})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "GET regions/1/transitGateways should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_aa_tgw_invitations_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path(
+            "/subscriptions/123/regions/1/transitGateways/invitations",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_aa_tgw_invitations(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123, "region_id": 1})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "GET regions/1/transitGateways/invitations should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_aa_tgw_attachment_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path(
+            "/subscriptions/123/regions/1/transitGateways/tgw-abc/attachment",
+        ))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::create_aa_tgw_attachment(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({"subscription_id": 123, "region_id": 1, "tgw_id": "tgw-abc"}),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "POST regions/1/transitGateways/tgw-abc/attachment should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_aa_tgw_attachment_cidrs_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path(
+            "/subscriptions/123/regions/1/transitGateways/attach-1/attachment",
+        ))
+        .and(body_partial_json(json!({"cidrs": ["10.2.0.0/24"]})))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::update_aa_tgw_attachment_cidrs(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "region_id": 1,
+            "attachment_id": "attach-1",
+            "cidrs": ["10.2.0.0/24"]
+        }),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "PUT regions/1/transitGateways/attach-1/attachment with cidrs should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_delete_aa_tgw_attachment_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path(
+            "/subscriptions/123/regions/1/transitGateways/attach-1/attachment",
+        ))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::delete_aa_tgw_attachment(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({"subscription_id": 123, "region_id": 1, "attachment_id": "attach-1"}),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "DELETE regions/1/transitGateways/attach-1/attachment should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_accept_aa_tgw_invitation_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path(
+            "/subscriptions/123/regions/1/transitGateways/invitations/inv-1/accept",
+        ))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::accept_aa_tgw_invitation(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({"subscription_id": 123, "region_id": 1, "invitation_id": "inv-1"}),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "PUT regions/1/transitGateways/invitations/inv-1/accept should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_reject_aa_tgw_invitation_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path(
+            "/subscriptions/123/regions/1/transitGateways/invitations/inv-1/reject",
+        ))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::reject_aa_tgw_invitation(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({"subscription_id": 123, "region_id": 1, "invitation_id": "inv-1"}),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "PUT regions/1/transitGateways/invitations/inv-1/reject should have matched, got: {result}"
+    );
+}
+
+// ===========================================================================
+// Section D: Private Service Connect (Pro)
+// ===========================================================================
+
+#[tokio::test]
+async fn test_get_psc_service_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/123/private-service-connect"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_psc_service(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "GET private-service-connect should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_psc_service_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/subscriptions/123/private-service-connect"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::create_psc_service(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "POST private-service-connect should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_delete_psc_service_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/subscriptions/123/private-service-connect"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::delete_psc_service(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "DELETE private-service-connect should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_psc_endpoints_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/123/private-service-connect/10"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_psc_endpoints(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123, "psc_service_id": 10})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "GET private-service-connect/10 should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_psc_endpoint_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // PscEndpointUpdateRequest serializes gcp_project_id -> "gcpProjectId".
+    Mock::given(method("POST"))
+        .and(path("/subscriptions/123/private-service-connect/10"))
+        .and(body_partial_json(json!({"gcpProjectId": "my-gcp-project"})))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::create_psc_endpoint(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "psc_service_id": 10,
+            "endpoint_id": 20,
+            "gcp_project_id": "my-gcp-project"
+        }),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "POST private-service-connect/10 with gcpProjectId should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_psc_endpoint_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path(
+            "/subscriptions/123/private-service-connect/10/endpoints/20",
+        ))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::update_psc_endpoint(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "psc_service_id": 10,
+            "endpoint_id": 20,
+            "gcp_project_id": "my-gcp-project"
+        }),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "PUT private-service-connect/10/endpoints/20 should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_delete_psc_endpoint_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path(
+            "/subscriptions/123/private-service-connect/10/endpoints/20",
+        ))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::delete_psc_endpoint(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({"subscription_id": 123, "psc_service_id": 10, "endpoint_id": 20}),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "DELETE private-service-connect/10/endpoints/20 should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_psc_creation_script_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // The handler returns Result<String>; the client deserializes a JSON string.
+    Mock::given(method("GET"))
+        .and(path(
+            "/subscriptions/123/private-service-connect/10/endpoints/20/creationScripts",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!("#!/bin/bash\necho create-endpoint")),
+        )
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_psc_creation_script(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({"subscription_id": 123, "psc_service_id": 10, "endpoint_id": 20}),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed") && result.contains("create-endpoint"),
+        "GET creationScripts should have returned script text, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_psc_deletion_script_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path(
+            "/subscriptions/123/private-service-connect/10/endpoints/20/deletionScripts",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!("#!/bin/bash\necho delete-endpoint")),
+        )
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_psc_deletion_script(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({"subscription_id": 123, "psc_service_id": 10, "endpoint_id": 20}),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed") && result.contains("delete-endpoint"),
+        "GET deletionScripts should have returned script text, got: {result}"
+    );
+}
+
+// ===========================================================================
+// Section E: Private Service Connect (Active-Active)
+// ===========================================================================
+
+#[tokio::test]
+async fn test_get_aa_psc_service_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/123/regions/1/private-service-connect"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_aa_psc_service(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123, "region_id": 1})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "GET regions/1/private-service-connect should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_aa_psc_service_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/subscriptions/123/regions/1/private-service-connect"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::create_aa_psc_service(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123, "region_id": 1})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "POST regions/1/private-service-connect should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_delete_aa_psc_service_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/subscriptions/123/regions/1/private-service-connect"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::delete_aa_psc_service(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123, "region_id": 1})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "DELETE regions/1/private-service-connect should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_aa_psc_endpoints_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path(
+            "/subscriptions/123/regions/1/private-service-connect/10",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_aa_psc_endpoints(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({"subscription_id": 123, "region_id": 1, "psc_service_id": 10}),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "GET regions/1/private-service-connect/10 should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_aa_psc_endpoint_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path(
+            "/subscriptions/123/regions/1/private-service-connect/10",
+        ))
+        .and(body_partial_json(json!({"gcpProjectId": "my-gcp-project"})))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::create_aa_psc_endpoint(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "region_id": 1,
+            "psc_service_id": 10,
+            "endpoint_id": 20,
+            "gcp_project_id": "my-gcp-project"
+        }),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "POST regions/1/private-service-connect/10 with gcpProjectId should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_aa_psc_endpoint_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path(
+            "/subscriptions/123/regions/1/private-service-connect/10/endpoints/20",
+        ))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::update_aa_psc_endpoint(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "region_id": 1,
+            "psc_service_id": 10,
+            "endpoint_id": 20,
+            "gcp_project_id": "my-gcp-project"
+        }),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "PUT regions/1/private-service-connect/10/endpoints/20 should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_delete_aa_psc_endpoint_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path(
+            "/subscriptions/123/regions/1/private-service-connect/10/endpoints/20",
+        ))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::delete_aa_psc_endpoint(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "region_id": 1,
+            "psc_service_id": 10,
+            "endpoint_id": 20
+        }),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "DELETE regions/1/private-service-connect/10/endpoints/20 should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_aa_psc_creation_script_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path(
+            "/subscriptions/123/regions/1/private-service-connect/10/endpoints/20/creationScripts",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!("#!/bin/bash\necho aa-create")),
+        )
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_aa_psc_creation_script(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "region_id": 1,
+            "psc_service_id": 10,
+            "endpoint_id": 20
+        }),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed") && result.contains("aa-create"),
+        "GET AA creationScripts should have returned script text, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_aa_psc_deletion_script_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path(
+            "/subscriptions/123/regions/1/private-service-connect/10/endpoints/20/deletionScripts",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!("#!/bin/bash\necho aa-delete")),
+        )
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_aa_psc_deletion_script(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "region_id": 1,
+            "psc_service_id": 10,
+            "endpoint_id": 20
+        }),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed") && result.contains("aa-delete"),
+        "GET AA deletionScripts should have returned script text, got: {result}"
+    );
+}
+
+// ===========================================================================
+// Section F: PrivateLink (Pro)
+// ===========================================================================
+
+#[tokio::test]
+async fn test_get_private_link_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/123/private-link"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_private_link(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "GET private-link should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_private_link_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // PrivateLinkCreateRequest serializes share_name -> "shareName",
+    // principal_type -> "type" with snake_case PrincipalType values.
+    Mock::given(method("POST"))
+        .and(path("/subscriptions/123/private-link"))
+        .and(body_partial_json(json!({
+            "shareName": "my-share",
+            "principal": "123456789012",
+            "type": "aws_account"
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::create_private_link(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "share_name": "my-share",
+            "principal": "123456789012",
+            "principal_type": "aws_account"
+        }),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "POST private-link with shareName/principal/type should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_delete_private_link_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/subscriptions/123/private-link"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::delete_private_link(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "DELETE private-link should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_add_private_link_principals_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/subscriptions/123/private-link/principals"))
+        .and(body_partial_json(json!({"principal": "123456789012"})))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::add_private_link_principals(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({"subscription_id": 123, "principal": "123456789012"}),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "POST private-link/principals should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_remove_private_link_principals_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // remove_principals uses a bodyful DELETE; the body carries the principal.
+    Mock::given(method("DELETE"))
+        .and(path("/subscriptions/123/private-link/principals"))
+        .and(body_partial_json(json!({"principal": "123456789012"})))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::remove_private_link_principals(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({"subscription_id": 123, "principal": "123456789012"}),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "DELETE private-link/principals with body should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_private_link_endpoint_script_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/123/private-link/endpoint-script"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_private_link_endpoint_script(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "GET private-link/endpoint-script should have matched, got: {result}"
+    );
+}
+
+// ===========================================================================
+// Section G: PrivateLink (Active-Active)
+// ===========================================================================
+
+#[tokio::test]
+async fn test_get_aa_private_link_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/123/regions/1/private-link"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_aa_private_link(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123, "region_id": 1})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "GET regions/1/private-link should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_aa_private_link_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/subscriptions/123/regions/1/private-link"))
+        .and(body_partial_json(json!({
+            "shareName": "my-share",
+            "principal": "123456789012",
+            "type": "aws_account"
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::create_aa_private_link(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "region_id": 1,
+            "share_name": "my-share",
+            "principal": "123456789012",
+            "principal_type": "aws_account"
+        }),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "POST regions/1/private-link should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_add_aa_private_link_principals_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/subscriptions/123/regions/1/private-link/principals"))
+        .and(body_partial_json(json!({"principal": "123456789012"})))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::add_aa_private_link_principals(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({"subscription_id": 123, "region_id": 1, "principal": "123456789012"}),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "POST regions/1/private-link/principals should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_remove_aa_private_link_principals_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/subscriptions/123/regions/1/private-link/principals"))
+        .and(body_partial_json(json!({"principal": "123456789012"})))
+        .respond_with(ResponseTemplate::new(202).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::remove_aa_private_link_principals(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({"subscription_id": 123, "region_id": 1, "principal": "123456789012"}),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "DELETE regions/1/private-link/principals with body should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_aa_private_link_endpoint_script_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path(
+            "/subscriptions/123/regions/1/private-link/endpoint-script",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(net_task_body()))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_aa_private_link_endpoint_script(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123, "region_id": 1})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "GET regions/1/private-link/endpoint-script should have matched, got: {result}"
     );
 }
