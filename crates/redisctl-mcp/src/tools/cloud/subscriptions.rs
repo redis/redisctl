@@ -124,7 +124,7 @@ mcp_module! {
 // ============================================================================
 
 cloud_tool!(read_only, list_subscriptions, "list_subscriptions",
-    "List all subscriptions.",
+    "List all Pro (Flexible) subscriptions. Use list_fixed_subscriptions for Essentials/Fixed subscriptions.",
     {} => |client, _input| {
         let handler = SubscriptionHandler::new(client);
         let account_subs = handler
@@ -137,7 +137,7 @@ cloud_tool!(read_only, list_subscriptions, "list_subscriptions",
 );
 
 cloud_tool!(read_only, get_subscription, "get_subscription",
-    "Get subscription details by ID.",
+    "Get Pro subscription details by ID. Use get_fixed_subscription for Essentials/Fixed subscriptions.",
     {
         /// Subscription ID
         pub subscription_id: i32,
@@ -153,7 +153,7 @@ cloud_tool!(read_only, get_subscription, "get_subscription",
 );
 
 cloud_tool!(read_only, list_databases, "list_databases",
-    "List all databases in a subscription.",
+    "List all databases in a Pro (Flexible) subscription. Use list_fixed_databases for Essentials/Fixed subscriptions.",
     {
         /// Subscription ID
         pub subscription_id: i32,
@@ -187,7 +187,7 @@ cloud_tool!(read_only, get_database, "get_database",
 );
 
 cloud_tool!(read_only, get_backup_status, "get_backup_status",
-    "Get backup status and history for a database.",
+    "Get backup status and history for a database. The region_name parameter is required for Active-Active databases.",
     {
         /// Subscription ID
         pub subscription_id: i32,
@@ -482,7 +482,11 @@ cloud_tool!(write, create_database, "create_database",
 );
 
 cloud_tool!(write, update_database, "update_database",
-    "Update a database configuration.",
+    "Update a database configuration. \
+     Valid values for data_persistence: \"none\", \"aof-every-1-second\", \"aof-every-write\", \
+     \"snapshot-every-1-hour\", \"snapshot-every-6-hours\", \"snapshot-every-12-hours\". \
+     Valid values for data_eviction_policy: \"noeviction\", \"allkeys-lru\", \"volatile-lru\", \
+     \"allkeys-lfu\", \"volatile-lfu\", \"allkeys-random\", \"volatile-random\", \"volatile-ttl\".",
     {
         /// Subscription ID containing the database
         pub subscription_id: i32,
@@ -706,23 +710,45 @@ cloud_tool!(write, create_subscription, "create_subscription",
 );
 
 cloud_tool!(write, update_subscription, "update_subscription",
-    "Update a subscription.",
+    "Update a Pro subscription's name or payment method. \
+     At least one of name, payment_method_id, or payment_method must be provided. \
+     Use list_payment_methods to find valid payment method IDs.",
     {
         /// Subscription ID to update
         pub subscription_id: i32,
+        /// New subscription name (optional)
+        #[serde(default)]
+        pub name: Option<String>,
+        /// Payment method ID to use for this subscription (optional). \
+        /// Required when payment_method is "credit-card". \
+        /// Use list_payment_methods to get valid IDs.
+        #[serde(default)]
+        pub payment_method_id: Option<i32>,
+        /// Payment method: "credit-card" or "marketplace" (optional)
+        #[serde(default)]
+        pub payment_method: Option<String>,
     } => |client, input| {
-        use redis_cloud::flexible::subscriptions::BaseSubscriptionUpdateRequest;
+        use redis_cloud::flexible::subscriptions::SubscriptionUpdateRequest;
+        use redis_cloud::types::TaskStateUpdate;
 
-        let request = BaseSubscriptionUpdateRequest {
+        if input.name.is_none() && input.payment_method_id.is_none() && input.payment_method.is_none() {
+            return Err(tower_mcp::Error::tool(
+                "At least one of name, payment_method_id, or payment_method must be provided",
+            ));
+        }
+
+        let request = SubscriptionUpdateRequest {
+            name: input.name.clone(),
+            payment_method_id: input.payment_method_id,
+            payment_method: input.payment_method.clone(),
             subscription_id: None,
             command_type: None,
         };
 
-        let handler = SubscriptionHandler::new(client);
-        let result = handler
-            .update_subscription(input.subscription_id, &request)
+        let result: TaskStateUpdate = client
+            .put(&format!("/subscriptions/{}", input.subscription_id), &request)
             .await
-            .tool_context("Failed to update subscription")?;
+            .map_err(|e| tower_mcp::Error::tool(format!("Failed to update subscription: {e}")))?;
 
         CallToolResult::from_serialize(&result)
     }
@@ -1072,7 +1098,7 @@ cloud_tool!(write, update_crdb_local_properties, "update_crdb_local_properties",
 // ============================================================================
 
 cloud_tool!(destructive, delete_database, "delete_database",
-    "DANGEROUS: Delete a database and all its data.",
+    "DANGEROUS: Permanently delete a database and all its data. This operation is irreversible. Recommended: run backup_database first.",
     {
         /// Subscription ID containing the database
         pub subscription_id: i32,
@@ -1102,7 +1128,7 @@ cloud_tool!(destructive, delete_database, "delete_database",
 );
 
 cloud_tool!(destructive, delete_subscription, "delete_subscription",
-    "DANGEROUS: Delete a subscription. All databases must be deleted first.",
+    "DANGEROUS: Permanently delete a subscription. This operation is irreversible. All databases must be deleted first (use delete_database for each database in the subscription).",
     {
         /// Subscription ID to delete
         pub subscription_id: i32,
@@ -1128,7 +1154,7 @@ cloud_tool!(destructive, delete_subscription, "delete_subscription",
 );
 
 cloud_tool!(destructive, flush_database, "flush_database",
-    "DANGEROUS: Removes all data from a database.",
+    "DANGEROUS: Permanently remove all data from a database. This operation is irreversible — all keys are deleted and cannot be recovered. Recommended: run backup_database first.",
     {
         /// Subscription ID containing the database
         pub subscription_id: i32,
@@ -1158,8 +1184,10 @@ cloud_tool!(destructive, flush_database, "flush_database",
 );
 
 cloud_tool!(destructive, flush_crdb_database, "flush_crdb_database",
-    "DANGEROUS: Removes all data from an Active-Active (CRDB) database. \
-     Use this instead of regular flush for Active-Active databases.",
+    "DANGEROUS: Permanently remove all data from an Active-Active (CRDB) database across ALL regions. \
+     This operation is irreversible — all keys are deleted globally and cannot be recovered. \
+     Use this instead of flush_database for Active-Active databases. \
+     Recommended: back up all regions before running.",
     {
         /// Subscription ID containing the database
         pub subscription_id: i32,
