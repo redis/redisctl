@@ -10,10 +10,15 @@ All Redis Cloud CLI commands.
 | [database](databases.md) | Manage Pro databases |
 | [fixed-subscription](fixed-subscriptions.md) | Manage Essentials subscriptions |
 | [fixed-database](fixed-databases.md) | Manage Essentials databases |
-| [acl](access-control.md) | Access control lists |
 | [user](access-control.md) | User management |
+| [acl](access-control.md) | Access control lists |
+| [account](billing.md) | Account operations |
+| [payment-method](billing.md) | Payment method management |
+| [cost-report](cost-report.md) | Cost reporting (Beta) |
+| [connectivity](networking.md) | Network connectivity operations (VPC, PSC, TGW) |
+| [provider-account](networking.md) | Cloud provider account operations |
 | [task](tasks.md) | Async task monitoring |
-| [peering](networking.md) | VPC peering |
+| [workflow](tasks.md) | Workflow operations for multi-step tasks |
 
 ## Getting Help
 
