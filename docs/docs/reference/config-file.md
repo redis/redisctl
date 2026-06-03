@@ -109,7 +109,7 @@ Every profile requires a `deployment_type` field (`cloud`, `enterprise`, or `dat
 | `password` | Redis password (optional) |
 | `username` | Redis ACL username (optional, default: `default`) |
 | `tls` | Enable TLS (`true`/`false`, default: `true`) |
-| `db` | Redis database number (optional, default: `0`) |
+| `database` | Redis database number (optional, default: `0`) |
 
 ### Global Settings
 
