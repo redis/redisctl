@@ -13,30 +13,30 @@ Advanced cluster administration tasks: access control, security, licensing, main
 
 ```bash
 redisctl enterprise user list
-redisctl enterprise user get --id 1
+redisctl enterprise user get 1
 redisctl enterprise user create --data '{...}'
-redisctl enterprise user update --id 1 --data '{...}'
-redisctl enterprise user delete --id 1
+redisctl enterprise user update 1 --data '{...}'
+redisctl enterprise user delete 1
 ```
 
 ### Roles
 
 ```bash
 redisctl enterprise role list
-redisctl enterprise role get --id 1
+redisctl enterprise role get 1
 redisctl enterprise role create --data '{...}'
-redisctl enterprise role update --id 1 --data '{...}'
-redisctl enterprise role delete --id 1
+redisctl enterprise role update 1 --data '{...}'
+redisctl enterprise role delete 1
 ```
 
 ### ACLs
 
 ```bash
 redisctl enterprise acl list
-redisctl enterprise acl get --id 1
+redisctl enterprise acl get 1
 redisctl enterprise acl create --data '{...}'
-redisctl enterprise acl update --id 1 --data '{...}'
-redisctl enterprise acl delete --id 1
+redisctl enterprise acl update 1 --data '{...}'
+redisctl enterprise acl delete 1
 ```
 
 ## LDAP Integration
@@ -54,8 +54,8 @@ redisctl enterprise ldap test
 # Manage LDAP role mappings
 redisctl enterprise ldap-mappings list
 redisctl enterprise ldap-mappings create --data '{...}'
-redisctl enterprise ldap-mappings update --id 1 --data '{...}'
-redisctl enterprise ldap-mappings delete --id 1
+redisctl enterprise ldap-mappings update 1 --data '{...}'
+redisctl enterprise ldap-mappings delete 1
 ```
 
 ## Cluster Configuration
@@ -88,16 +88,26 @@ redisctl enterprise cluster disable-maintenance-mode
 # Get current license info
 redisctl enterprise license get
 
-# Update license
-redisctl enterprise license update --file license.key
+# Upload a license file
+redisctl enterprise license upload --file license.key
+
+# Update license with a key string or JSON data
+redisctl enterprise license update --license-key <KEY>
+redisctl enterprise license update --data @license.json
+
+# Validate, check expiry, and view licensed features/usage
+redisctl enterprise license validate
+redisctl enterprise license expiry
+redisctl enterprise license features
+redisctl enterprise license usage
 ```
 
 ## Proxy Management
 
 ```bash
 redisctl enterprise proxy list
-redisctl enterprise proxy get --id 1
-redisctl enterprise proxy update --id 1 --data '{...}'
+redisctl enterprise proxy get <UID>
+redisctl enterprise proxy update <UID> --data '{...}'
 ```
 
 ## Service Management
@@ -111,19 +121,31 @@ redisctl enterprise services update --name <service> --data '{...}'
 ## Diagnostics
 
 ```bash
-# Cluster diagnostics
-redisctl enterprise diagnostics cluster
+# Get / update diagnostics configuration
+redisctl enterprise diagnostics get
+redisctl enterprise diagnostics update --data '{...}'
 
-# Node diagnostics
-redisctl enterprise diagnostics node
+# Run diagnostic checks
+redisctl enterprise diagnostics run
 
-# Debug info collection
-redisctl enterprise debug-info
+# List available checks and reports
+redisctl enterprise diagnostics list-checks
+redisctl enterprise diagnostics list-reports
+
+# Get the last or a specific diagnostic report
+redisctl enterprise diagnostics last-report
+redisctl enterprise diagnostics get-report <ID>
 
 # Support package for Redis support
-redisctl enterprise support-package create
-redisctl enterprise support-package status --id <pkg-id>
-redisctl enterprise support-package download --id <pkg-id>
+redisctl enterprise support-package cluster
+redisctl enterprise support-package database
+redisctl enterprise support-package node
+
+# Check status of an async support-package generation task
+redisctl enterprise support-package status <task-id>
+
+# List previously generated support packages
+redisctl enterprise support-package list
 ```
 
 ## Tips
