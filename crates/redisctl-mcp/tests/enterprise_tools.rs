@@ -13,8 +13,23 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
 // Import the tools and state from the MCP crate
+use redisctl_mcp::policy::{Policy, PolicyConfig, SafetyTier};
 use redisctl_mcp::state::AppState;
 use redisctl_mcp::tools::enterprise;
+
+/// Build an AppState with a full-tier policy so destructive tools are permitted.
+fn full_policy_state(client: redis_enterprise::EnterpriseClient) -> Arc<AppState> {
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = Arc::new(Policy::new(
+        PolicyConfig {
+            tier: SafetyTier::Full,
+            ..Default::default()
+        },
+        std::collections::HashMap::new(),
+        "test-full".to_string(),
+    ));
+    Arc::new(state)
+}
 
 /// Helper to call a tool and get text result
 async fn call_tool_text(tool: &Tool, input: serde_json::Value) -> String {
@@ -1116,4 +1131,582 @@ async fn test_restart_enterprise_service() {
     let result = call_tool_json(&tool, json!({"service_id": "cm_server"})).await;
 
     assert_eq!(result["status"], "ok");
+}
+
+// ============================================================================
+// Database Read Tools (endpoints + alerts)
+// ============================================================================
+
+#[tokio::test]
+async fn test_get_database_endpoints() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/bdbs/1/endpoints"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {
+                "uid": "1:1",
+                "addr": ["10.0.0.1"],
+                "port": 12000,
+                "dns_name": "redis-12000.cluster.local",
+                "addr_type": "external"
+            }
+        ])))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::get_database_endpoints(state);
+
+    let result = call_tool_json(&tool, json!({"uid": 1})).await;
+
+    let endpoints = result["endpoints"]
+        .as_array()
+        .expect("expected endpoints array");
+    assert_eq!(endpoints.len(), 1);
+    assert_eq!(endpoints[0]["port"], 12000);
+    assert_eq!(endpoints[0]["dns_name"], "redis-12000.cluster.local");
+}
+
+#[tokio::test]
+async fn test_list_database_alerts() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/bdbs/1/alerts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {
+                "uid": "alert-1",
+                "name": "bdb_high_latency",
+                "severity": "WARNING",
+                "state": "true",
+                "entity_type": "bdb",
+                "entity_uid": "1"
+            }
+        ])))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::list_database_alerts(state);
+
+    let result = call_tool_json(&tool, json!({"uid": 1})).await;
+
+    let alerts = result["alerts"].as_array().expect("expected alerts array");
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0]["name"], "bdb_high_latency");
+    assert_eq!(alerts[0]["severity"], "WARNING");
+}
+
+// ============================================================================
+// Database Write Tools
+// ============================================================================
+
+#[tokio::test]
+async fn test_create_enterprise_database() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/bdbs"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "uid": 42,
+            "name": "new-db",
+            "status": "active"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::create_enterprise_database(state);
+
+    let result = call_tool_json(
+        &tool,
+        json!({"name": "new-db", "memory_size": 1073741824u64}),
+    )
+    .await;
+
+    assert_eq!(result["uid"], 42);
+    assert_eq!(result["name"], "new-db");
+}
+
+#[tokio::test]
+async fn test_create_enterprise_database_blocked_in_read_only() {
+    let server = MockEnterpriseServer::start().await;
+
+    let client = server.client();
+    // Default test policy is read-only.
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::create_enterprise_database(state);
+
+    let result = tool
+        .call(json!({"name": "new-db", "memory_size": 1073741824u64}))
+        .await;
+
+    assert!(
+        result.is_error,
+        "create should be blocked under read-only policy"
+    );
+}
+
+#[tokio::test]
+async fn test_update_enterprise_database() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/v1/bdbs/1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "uid": 1,
+            "name": "cache-primary",
+            "memory_size": 2147483648u64
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::update_enterprise_database(state);
+
+    let result = call_tool_json(
+        &tool,
+        json!({"uid": 1, "updates": {"memory_size": 2147483648u64}}),
+    )
+    .await;
+
+    assert_eq!(result["uid"], 1);
+    assert_eq!(result["memory_size"], 2147483648u64);
+}
+
+#[tokio::test]
+async fn test_backup_enterprise_database() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/bdbs/1/actions/backup"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "action_uid": "backup-action-1"
+        })))
+        .mount(server.inner())
+        .await;
+
+    // The Layer 2 workflow polls the action until it reports completed.
+    Mock::given(method("GET"))
+        .and(path("/v1/actions/backup-action-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "action_uid": "backup-action-1",
+            "name": "backup",
+            "status": "completed",
+            "progress": "100"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::backup_enterprise_database(state);
+
+    let result = call_tool_json(&tool, json!({"bdb_uid": 1, "timeout_seconds": 5})).await;
+
+    assert_eq!(result["bdb_uid"], 1);
+    assert_eq!(result["message"], "Backup completed successfully");
+}
+
+#[tokio::test]
+async fn test_import_enterprise_database() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/bdbs/1/actions/import"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "action_uid": "import-action-1",
+            "status": "queued"
+        })))
+        .mount(server.inner())
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/actions/import-action-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "action_uid": "import-action-1",
+            "name": "import",
+            "status": "completed",
+            "progress": "100"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::import_enterprise_database(state);
+
+    let result = call_tool_json(
+        &tool,
+        json!({
+            "bdb_uid": 1,
+            "import_location": "s3://bucket/dump.rdb",
+            "timeout_seconds": 5
+        }),
+    )
+    .await;
+
+    assert_eq!(result["bdb_uid"], 1);
+    assert_eq!(result["import_location"], "s3://bucket/dump.rdb");
+    assert_eq!(result["message"], "Import completed successfully");
+}
+
+#[tokio::test]
+async fn test_export_enterprise_database() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/bdbs/1/actions/export"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "action_uid": "export-action-1",
+            "status": "queued"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::export_enterprise_database(state);
+
+    let result = call_tool_json(
+        &tool,
+        json!({"uid": 1, "export_location": "s3://bucket/export.rdb"}),
+    )
+    .await;
+
+    assert_eq!(result["action_uid"], "export-action-1");
+}
+
+#[tokio::test]
+async fn test_restore_enterprise_database() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/bdbs/1/actions/restore"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "action_uid": "restore-action-1"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::restore_enterprise_database(state);
+
+    let result = call_tool_json(&tool, json!({"uid": 1, "backup_uid": "backup-99"})).await;
+
+    assert_eq!(result["action_uid"], "restore-action-1");
+}
+
+#[tokio::test]
+async fn test_upgrade_enterprise_database_redis() {
+    let server = MockEnterpriseServer::start().await;
+
+    // The client posts the upgrade request to the path-segment-style action.
+    Mock::given(method("POST"))
+        .and(path("/v1/bdbs/1/upgrade"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "action_uid": "upgrade-action-1"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::upgrade_enterprise_database_redis(state);
+
+    let result = call_tool_json(&tool, json!({"uid": 1, "redis_version": "7.2"})).await;
+
+    assert_eq!(result["action_uid"], "upgrade-action-1");
+}
+
+// ============================================================================
+// Database Destructive Tools (delete + flush)
+// ============================================================================
+
+#[tokio::test]
+async fn test_delete_enterprise_database() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/v1/bdbs/1"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(server.inner())
+        .await;
+
+    let state = full_policy_state(server.client());
+    let tool = enterprise::delete_enterprise_database(state);
+
+    let result = call_tool_json(&tool, json!({"uid": 1})).await;
+
+    assert_eq!(result["uid"], 1);
+    assert_eq!(result["message"], "Database deleted successfully");
+}
+
+#[tokio::test]
+async fn test_delete_enterprise_database_blocked_in_read_only() {
+    let server = MockEnterpriseServer::start().await;
+
+    // Default test policy is read-only; destructive tools require full tier.
+    let state = Arc::new(AppState::with_enterprise_client(server.client()));
+    let tool = enterprise::delete_enterprise_database(state);
+
+    let result = tool.call(json!({"uid": 1})).await;
+
+    assert!(
+        result.is_error,
+        "delete should be blocked under read-only policy"
+    );
+}
+
+#[tokio::test]
+async fn test_flush_enterprise_database() {
+    let server = MockEnterpriseServer::start().await;
+
+    // The client issues PUT /v1/bdbs/{uid}/flush (path-segment action),
+    // then the Layer 2 workflow polls the action to completion.
+    Mock::given(method("PUT"))
+        .and(path("/v1/bdbs/1/flush"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "action_uid": "flush-action-1"
+        })))
+        .mount(server.inner())
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/actions/flush-action-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "action_uid": "flush-action-1",
+            "name": "flush",
+            "status": "completed",
+            "progress": "100"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let state = full_policy_state(server.client());
+    let tool = enterprise::flush_enterprise_database(state);
+
+    let result = call_tool_json(&tool, json!({"bdb_uid": 1, "timeout_seconds": 5})).await;
+
+    assert_eq!(result["bdb_uid"], 1);
+    assert_eq!(result["message"], "Database flushed successfully");
+}
+
+#[tokio::test]
+async fn test_flush_enterprise_database_blocked_in_read_only() {
+    let server = MockEnterpriseServer::start().await;
+
+    let state = Arc::new(AppState::with_enterprise_client(server.client()));
+    let tool = enterprise::flush_enterprise_database(state);
+
+    let result = tool.call(json!({"bdb_uid": 1})).await;
+
+    assert!(
+        result.is_error,
+        "flush should be blocked under read-only policy"
+    );
+}
+
+// ============================================================================
+// CRDB (Active-Active) Tools
+// ============================================================================
+
+#[tokio::test]
+async fn test_list_enterprise_crdbs() {
+    let server = MockEnterpriseServer::start().await;
+
+    // The CRDB list endpoint wraps the array under a `crdbs` key.
+    Mock::given(method("GET"))
+        .and(path("/v1/crdbs"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "crdbs": [
+                {
+                    "guid": "crdb-guid-1",
+                    "name": "global-cache",
+                    "status": "active",
+                    "memory_size": 1073741824u64,
+                    "instances": []
+                }
+            ]
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::list_enterprise_crdbs(state);
+
+    let result = call_tool_json(&tool, json!({})).await;
+
+    let crdbs = result["crdbs"].as_array().expect("expected crdbs array");
+    assert_eq!(crdbs.len(), 1);
+    assert_eq!(crdbs[0]["name"], "global-cache");
+    assert_eq!(crdbs[0]["guid"], "crdb-guid-1");
+}
+
+#[tokio::test]
+async fn test_get_enterprise_crdb() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/crdbs/crdb-guid-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "guid": "crdb-guid-1",
+            "name": "global-cache",
+            "status": "active",
+            "memory_size": 1073741824u64,
+            "instances": []
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::get_enterprise_crdb(state);
+
+    let result = call_tool_json(&tool, json!({"guid": "crdb-guid-1"})).await;
+
+    assert_eq!(result["guid"], "crdb-guid-1");
+    assert_eq!(result["name"], "global-cache");
+}
+
+#[tokio::test]
+async fn test_get_enterprise_crdb_tasks() {
+    let server = MockEnterpriseServer::start().await;
+
+    // CRDB tasks live under the per-CRDB route, not /v1/crdbs/tasks.
+    Mock::given(method("GET"))
+        .and(path("/v1/crdbs/crdb-guid-1/tasks"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"id": "task-1", "status": "completed"}
+        ])))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::get_enterprise_crdb_tasks(state);
+
+    let result = call_tool_json(&tool, json!({"guid": "crdb-guid-1"})).await;
+
+    let tasks = result.as_array().expect("expected tasks array");
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0]["id"], "task-1");
+}
+
+#[tokio::test]
+async fn test_create_enterprise_crdb() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/crdbs"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "guid": "crdb-guid-new",
+            "name": "new-aa-db",
+            "status": "active"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::create_enterprise_crdb(state);
+
+    let result = call_tool_json(
+        &tool,
+        json!({"request": {"name": "new-aa-db", "memory_size": 1073741824u64}}),
+    )
+    .await;
+
+    assert_eq!(result["guid"], "crdb-guid-new");
+    assert_eq!(result["name"], "new-aa-db");
+}
+
+#[tokio::test]
+async fn test_update_enterprise_crdb() {
+    let server = MockEnterpriseServer::start().await;
+
+    // The client issues PATCH /v1/crdbs/{guid} for updates.
+    Mock::given(method("PATCH"))
+        .and(path("/v1/crdbs/crdb-guid-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "guid": "crdb-guid-1",
+            "name": "global-cache",
+            "status": "active",
+            "memory_size": 2147483648u64,
+            "instances": []
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::update_enterprise_crdb(state);
+
+    let result = call_tool_json(
+        &tool,
+        json!({"guid": "crdb-guid-1", "updates": {"memory_size": 2147483648u64}}),
+    )
+    .await;
+
+    assert_eq!(result["guid"], "crdb-guid-1");
+    assert_eq!(result["memory_size"], 2147483648u64);
+}
+
+#[tokio::test]
+async fn test_delete_enterprise_crdb() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/v1/crdbs/crdb-guid-1"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(server.inner())
+        .await;
+
+    let state = full_policy_state(server.client());
+    let tool = enterprise::delete_enterprise_crdb(state);
+
+    let result = call_tool_json(&tool, json!({"guid": "crdb-guid-1"})).await;
+
+    assert_eq!(result["guid"], "crdb-guid-1");
+    assert_eq!(result["message"], "CRDB deleted successfully");
+}
+
+#[tokio::test]
+async fn test_delete_enterprise_crdb_blocked_in_read_only() {
+    let server = MockEnterpriseServer::start().await;
+
+    let state = Arc::new(AppState::with_enterprise_client(server.client()));
+    let tool = enterprise::delete_enterprise_crdb(state);
+
+    let result = tool.call(json!({"guid": "crdb-guid-1"})).await;
+
+    assert!(
+        result.is_error,
+        "delete CRDB should be blocked under read-only policy"
+    );
 }
