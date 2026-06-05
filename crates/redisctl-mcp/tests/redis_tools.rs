@@ -836,6 +836,14 @@ async fn test_hash_write_tools() {
     assert!(text.contains("counter"), "hgetall verify: {}", text);
     assert!(text.contains("15"), "hgetall verify: {}", text);
 
+    // redis_hexpire -- set a 300s TTL on field "counter" (requires Redis 7.4+)
+    let text = call_tool_text(
+        &redis::hexpire(state.clone()),
+        json!({"key": format!("{p}h"), "fields": ["counter"], "seconds": 300}),
+    )
+    .await;
+    assert!(text.contains("expiry set"), "hexpire: {}", text);
+
     cleanup(&mut conn, p).await;
 }
 
@@ -1136,6 +1144,7 @@ async fn test_sorted_set_read_tools() {
 async fn test_sorted_set_write_tools() {
     let ctx = get_redis().await.expect("Failed to get Redis container");
     let state = make_rw_state(ctx.port);
+    let ro_state = make_state(ctx.port);
     let mut conn = get_conn(ctx.port).await;
     let p = "zw_";
 
@@ -1156,6 +1165,52 @@ async fn test_sorted_set_write_tools() {
     )
     .await;
     assert!(text.contains("Removed 1"), "zrem: {}", text);
+
+    // Clear the key and re-seed three members for zremrangebyscore coverage
+    let _: () = ::redis::cmd("DEL")
+        .arg(format!("{p}z"))
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    let text = call_tool_text(
+        &redis::zadd(state.clone()),
+        json!({"key": format!("{p}z"), "members": [
+            {"score": 1.0, "member": "alice"},
+            {"score": 2.0, "member": "bob"},
+            {"score": 3.0, "member": "charlie"}
+        ]}),
+    )
+    .await;
+    assert!(text.contains("3"), "zadd reseed: {}", text);
+
+    // redis_zremrangebyscore -- remove bob (score 2) only
+    let text = call_tool_text(
+        &redis::zremrangebyscore(state.clone()),
+        json!({"key": format!("{p}z"), "min": "2", "max": "2"}),
+    )
+    .await;
+    assert!(text.contains("Removed 1"), "zremrangebyscore: {}", text);
+
+    // Verify alice and charlie remain, bob is gone
+    let text = call_tool_text(
+        &redis::zrange(ro_state.clone()),
+        json!({"key": format!("{p}z")}),
+    )
+    .await;
+    assert!(
+        text.contains("alice") && text.contains("charlie"),
+        "zrange after remove: {}",
+        text
+    );
+    assert!(!text.contains("bob"), "bob should be gone: {}", text);
+
+    // Unbounded: remove all remaining members with -inf/+inf
+    let text = call_tool_text(
+        &redis::zremrangebyscore(state.clone()),
+        json!({"key": format!("{p}z"), "min": "-inf", "max": "+inf"}),
+    )
+    .await;
+    assert!(text.contains("Removed 2"), "zremrangebyscore all: {}", text);
 
     cleanup(&mut conn, p).await;
 }
