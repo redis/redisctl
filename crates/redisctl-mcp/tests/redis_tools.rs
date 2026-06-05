@@ -415,6 +415,30 @@ async fn test_key_read_tools() {
     .await;
     assert!(text.contains("idle"), "object_idletime: {}", text);
 
+    // redis_object_freq error path: default Docker Redis is not configured with an
+    // LFU eviction policy, so OBJECT FREQ must surface a useful error rather than
+    // panic/unwrap. (If another test concurrently switches the policy to LFU, the
+    // call succeeds and its "LFU frequency counter" message also satisfies the
+    // assertion, so this stays robust under concurrent runs.)
+    let result = redis::object_freq(state.clone())
+        .call(json!({"key": format!("{p}key1")}))
+        .await;
+    let freq_text = result
+        .content
+        .first()
+        .and_then(|c: &tower_mcp::Content| c.as_text())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        result.is_error
+            || freq_text.contains("LFU")
+            || freq_text.contains("lfu")
+            || freq_text.contains("not allowed"),
+        "object_freq on non-LFU instance should error or mention LFU policy: is_error={}, text={}",
+        result.is_error,
+        freq_text
+    );
+
     // redis_object_help
     let text = call_tool_text(&redis::object_help(state.clone()), json!({})).await;
     assert!(text.contains("OBJECT"), "object_help: {}", text);
@@ -456,6 +480,73 @@ async fn test_key_read_tools() {
     )
     .await;
     assert!(text.contains("2"), "touch: {}", text);
+
+    cleanup(&mut conn, p).await;
+}
+
+/// Happy-path coverage for `redis_object_freq`, which requires an LFU eviction
+/// policy. Kept separate from `test_key_read_tools` so the default-config suite
+/// is not perturbed by the `maxmemory-policy` switch. Uses an RW state so
+/// `config_set` is permitted.
+#[tokio::test]
+#[ignore = "Requires Docker"]
+async fn test_object_freq_lfu() {
+    let ctx = get_redis().await.expect("Failed to get Redis container");
+    let state = make_rw_state(ctx.port);
+    let mut conn = get_conn(ctx.port).await;
+    let p = "objfreq_"; // key prefix
+
+    cleanup(&mut conn, p).await;
+
+    // Switch to an LFU eviction policy so OBJECT FREQ is permitted.
+    let text = call_tool_text(
+        &redis::config_set(state.clone()),
+        json!({"parameter": "maxmemory-policy", "value": "allkeys-lfu"}),
+    )
+    .await;
+    assert!(text.contains("OK"), "config_set lfu: {}", text);
+
+    // Seed and access the key so it accrues a frequency counter.
+    let _: () = ::redis::cmd("SET")
+        .arg(format!("{p}key1"))
+        .arg("value1")
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    let _: String = ::redis::cmd("GET")
+        .arg(format!("{p}key1"))
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+
+    // OBJECT FREQ should now succeed and report a numeric counter.
+    let text = call_tool_text(
+        &redis::object_freq(state.clone()),
+        json!({"key": format!("{p}key1")}),
+    )
+    .await;
+    assert!(
+        text.contains("LFU frequency counter ="),
+        "object_freq lfu: {}",
+        text
+    );
+    let counter = text
+        .rsplit('=')
+        .next()
+        .map(str::trim)
+        .and_then(|s| s.parse::<i64>().ok());
+    assert!(
+        counter.is_some_and(|c| c >= 0),
+        "object_freq should report a non-negative numeric counter: {}",
+        text
+    );
+
+    // Reset the eviction policy to the default to avoid leaking state to other tests.
+    let _ = call_tool_text(
+        &redis::config_set(state.clone()),
+        json!({"parameter": "maxmemory-policy", "value": "noeviction"}),
+    )
+    .await;
 
     cleanup(&mut conn, p).await;
 }
