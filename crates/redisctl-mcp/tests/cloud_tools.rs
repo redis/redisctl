@@ -2821,3 +2821,541 @@ async fn test_get_aa_private_link_endpoint_script_request_shape() {
         "GET regions/1/private-link/endpoint-script should have matched, got: {result}"
     );
 }
+
+// ============================================================================
+// Section 5: Subscription write / destructive / read-only tools — request shapes
+//
+// Covers the 13 cloud subscription tools that previously had zero test coverage
+// (see #991): create/update/backup/import database, create subscription,
+// update CRDB local properties (write); delete subscription/database,
+// flush database, flush CRDB database (destructive); and get backup status,
+// slow log, and tags (read-only).
+//
+// Several write/destructive tools run the Layer-2 `*_and_wait` workflow: they
+// fire the mutating call (returns a task), then poll `GET /tasks/{id}` until the
+// task reaches a terminal state, then (for create/update) fetch the resource.
+// The task mock returns `processing-completed` on the *first* poll, so the
+// workflow never sleeps. Destructive tools additionally assert the
+// `destructive_hint` annotation carried by the tool builder.
+// ============================================================================
+
+/// A task body that completes immediately, optionally pointing at a resource.
+fn completed_task(task_id: &str, resource_id: Option<i64>) -> serde_json::Value {
+    let mut body = json!({
+        "taskId": task_id,
+        "status": "processing-completed",
+    });
+    if let Some(id) = resource_id {
+        body["response"] = json!({ "resourceId": id });
+    }
+    body
+}
+
+#[tokio::test]
+async fn test_create_subscription_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // POST /subscriptions carries the nested cloudProviders + databases shape.
+    Mock::given(method("POST"))
+        .and(path("/subscriptions"))
+        .and(body_partial_json(json!({
+            "name": "demo-sub",
+            "cloudProviders": [{"provider": "AWS", "regions": [{"region": "us-east-1"}]}],
+            "databases": [{"name": "demo-db", "memoryLimitInGb": 1.0}]
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-create-sub",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    // Task completes on first poll, pointing at the new subscription.
+    Mock::given(method("GET"))
+        .and(path("/tasks/task-create-sub"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(completed_task("task-create-sub", Some(555))),
+        )
+        .mount(server.inner())
+        .await;
+
+    // Step 3: the workflow fetches the created subscription.
+    let subscription = SubscriptionFixture::new(555, "demo-sub")
+        .status("active")
+        .build();
+    server.mock_subscription_get(555, subscription).await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::create_subscription(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "name": "demo-sub",
+            "cloud_provider": "AWS",
+            "region": "us-east-1",
+            "database_name": "demo-db",
+            "memory_limit_in_gb": 1.0,
+            "timeout_seconds": 5
+        }),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed") && (result.contains("555") || result.contains("demo-sub")),
+        "Expected created subscription, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_database_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/subscriptions/123/databases"))
+        .and(body_partial_json(json!({
+            "name": "demo-db",
+            "memoryLimitInGb": 1.0
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-create-db",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/tasks/task-create-db"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(completed_task("task-create-db", Some(1001))),
+        )
+        .mount(server.inner())
+        .await;
+
+    let database = DatabaseFixture::new(1001, "demo-db").build();
+    server.mock_database_get(123, 1001, database).await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::create_database(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "name": "demo-db",
+            "memory_limit_in_gb": 1.0,
+            "timeout_seconds": 5
+        }),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed") && (result.contains("demo-db") || result.contains("1001")),
+        "Expected created database, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_database_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/subscriptions/123/databases/1001"))
+        .and(body_partial_json(json!({ "memoryLimitInGb": 2.0 })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-update-db",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/tasks/task-update-db"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(completed_task("task-update-db", Some(1001))),
+        )
+        .mount(server.inner())
+        .await;
+
+    let database = DatabaseFixture::new(1001, "demo-db")
+        .memory_limit_in_gb(2.0)
+        .build();
+    server.mock_database_get(123, 1001, database).await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::update_database(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "database_id": 1001,
+            "memory_limit_in_gb": 2.0,
+            "timeout_seconds": 5
+        }),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "Expected updated database, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_backup_database_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/subscriptions/123/databases/1001/backup"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-backup-db",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/tasks/task-backup-db"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(completed_task("task-backup-db", None)),
+        )
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::backup_database(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "database_id": 1001,
+            "timeout_seconds": 5
+        }),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "Expected successful backup, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_import_database_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/subscriptions/123/databases/1001/import"))
+        .and(body_partial_json(json!({
+            "sourceType": "http",
+            "importFromUri": ["https://example.com/dump.rdb"]
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-import-db",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/tasks/task-import-db"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(completed_task("task-import-db", None)),
+        )
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::import_database(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "database_id": 1001,
+            "source_type": "http",
+            "import_from_uri": "https://example.com/dump.rdb",
+            "timeout_seconds": 5
+        }),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "Expected successful import, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_crdb_local_properties_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // PUT /subscriptions/{s}/databases/{d}/regions — returns a task directly
+    // (no _and_wait poll for this tool).
+    Mock::given(method("PUT"))
+        .and(path("/subscriptions/123/databases/1001/regions"))
+        .and(body_partial_json(json!({ "name": "aa-db" })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-crdb-update",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::update_crdb_local_properties(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "database_id": 1001,
+            "name": "aa-db"
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("task-crdb-update") || result.contains("taskId"),
+        "Expected task response for CRDB update, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_delete_subscription_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/subscriptions/123"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-delete-sub",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/tasks/task-delete-sub"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(completed_task("task-delete-sub", None)),
+        )
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::delete_subscription(state);
+
+    assert!(
+        tool.annotations
+            .as_ref()
+            .is_some_and(|a| a.destructive_hint),
+        "delete_subscription must carry the destructive annotation"
+    );
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123, "timeout_seconds": 5})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "Expected successful delete_subscription, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_delete_database_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/subscriptions/123/databases/1001"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-delete-db",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/tasks/task-delete-db"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(completed_task("task-delete-db", None)),
+        )
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::delete_database(state);
+
+    assert!(
+        tool.annotations
+            .as_ref()
+            .is_some_and(|a| a.destructive_hint),
+        "delete_database must carry the destructive annotation"
+    );
+
+    let result = call_tool_text(
+        &tool,
+        json!({"subscription_id": 123, "database_id": 1001, "timeout_seconds": 5}),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "Expected successful delete_database, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_flush_database_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // Standard flush is a PUT with an empty body to .../flush.
+    Mock::given(method("PUT"))
+        .and(path("/subscriptions/123/databases/1001/flush"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-flush-db",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/tasks/task-flush-db"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(completed_task("task-flush-db", None)),
+        )
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::flush_database(state);
+
+    assert!(
+        tool.annotations
+            .as_ref()
+            .is_some_and(|a| a.destructive_hint),
+        "flush_database must carry the destructive annotation"
+    );
+
+    let result = call_tool_text(
+        &tool,
+        json!({"subscription_id": 123, "database_id": 1001, "timeout_seconds": 5}),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "Expected successful flush_database, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_flush_crdb_database_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // CRDB flush is a PUT to the same .../flush path, returning a task directly.
+    Mock::given(method("PUT"))
+        .and(path("/subscriptions/123/databases/1001/flush"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-flush-crdb",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::flush_crdb_database(state);
+
+    assert!(
+        tool.annotations
+            .as_ref()
+            .is_some_and(|a| a.destructive_hint),
+        "flush_crdb_database must carry the destructive annotation"
+    );
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123, "database_id": 1001})).await;
+
+    assert!(
+        result.contains("task-flush-crdb") || result.contains("taskId"),
+        "Expected task response for flush_crdb_database, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_backup_status_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/123/databases/1001/backup"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "taskId": "task-backup-status",
+            "status": "processing-completed"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_backup_status(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123, "database_id": 1001})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "Expected successful GET backup status, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_slow_log_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/123/databases/1001/slow-log"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "entries": [] })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_slow_log(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123, "database_id": 1001})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "Expected successful GET slow log, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_database_tags_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/123/databases/1001/tags"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "tags": [] })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_tags(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123, "database_id": 1001})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "Expected successful GET database tags, got: {result}"
+    );
+}
