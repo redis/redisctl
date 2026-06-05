@@ -2228,3 +2228,627 @@ async fn test_remove_enterprise_node_blocked_in_read_only() {
         "remove node should be blocked under read-only policy"
     );
 }
+
+// ============================================================================
+// RBAC: User Write/Destructive Tools
+// ============================================================================
+//
+// NOTE: several paths differ from the #992 issue text; these tests follow the
+// actual `redis-enterprise` handler source:
+//   - get_enterprise_user_permissions -> GET  /v1/users/permissions
+//   - get_enterprise_builtin_roles    -> GET  /v1/roles/builtin
+//   - LDAP config tools               -> GET/PUT /v1/cluster/ldap
+//   - validate_enterprise_acl is a read_only tool (POST /v1/redis_acls/validate)
+
+#[tokio::test]
+async fn test_create_enterprise_user() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/users"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "uid": 5,
+            "email": "new@example.com",
+            "name": "New User",
+            "role": "db_member"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::create_enterprise_user(state);
+
+    let result = call_tool_json(
+        &tool,
+        json!({
+            "email": "new@example.com",
+            "password": "s3cr3t!",
+            "role": "db_member",
+            "name": "New User"
+        }),
+    )
+    .await;
+
+    assert_eq!(result["uid"], 5);
+    assert_eq!(result["email"], "new@example.com");
+}
+
+#[tokio::test]
+async fn test_create_enterprise_user_blocked_in_read_only() {
+    let server = MockEnterpriseServer::start().await;
+
+    let state = Arc::new(AppState::with_enterprise_client(server.client()));
+    let tool = enterprise::create_enterprise_user(state);
+
+    let result = tool
+        .call(json!({
+            "email": "new@example.com",
+            "password": "s3cr3t!",
+            "role": "db_member"
+        }))
+        .await;
+
+    assert!(
+        result.is_error,
+        "create user should be blocked under read-only policy"
+    );
+}
+
+#[tokio::test]
+async fn test_update_enterprise_user() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/v1/users/5"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "uid": 5,
+            "email": "new@example.com",
+            "name": "Renamed User",
+            "role": "db_viewer"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::update_enterprise_user(state);
+
+    let result = call_tool_json(
+        &tool,
+        json!({"uid": 5, "name": "Renamed User", "role": "db_viewer"}),
+    )
+    .await;
+
+    assert_eq!(result["uid"], 5);
+    assert_eq!(result["name"], "Renamed User");
+    assert_eq!(result["role"], "db_viewer");
+}
+
+#[tokio::test]
+async fn test_delete_enterprise_user() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/v1/users/5"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(server.inner())
+        .await;
+
+    let state = full_policy_state(server.client());
+    let tool = enterprise::delete_enterprise_user(state);
+
+    let result = call_tool_json(&tool, json!({"uid": 5})).await;
+
+    assert_eq!(result["uid"], 5);
+    assert_eq!(result["message"], "User deleted successfully");
+}
+
+#[tokio::test]
+async fn test_delete_enterprise_user_blocked_in_read_only() {
+    let server = MockEnterpriseServer::start().await;
+
+    // Default test policy is read-only; destructive tools require full tier.
+    let state = Arc::new(AppState::with_enterprise_client(server.client()));
+    let tool = enterprise::delete_enterprise_user(state);
+
+    let result = tool.call(json!({"uid": 5})).await;
+
+    assert!(
+        result.is_error,
+        "delete user should be blocked under read-only policy"
+    );
+}
+
+#[tokio::test]
+async fn test_get_enterprise_user_permissions() {
+    let server = MockEnterpriseServer::start().await;
+
+    // The handler reads GET /v1/users/permissions (not /v1/users/{uid}/permissions).
+    Mock::given(method("GET"))
+        .and(path("/v1/users/permissions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"name": "view_cluster_info", "description": "View cluster information"},
+            {"name": "update_bdb", "description": "Update database configuration"}
+        ])))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::get_enterprise_user_permissions(state);
+
+    let result = call_tool_json(&tool, json!({})).await;
+
+    let permissions = result.as_array().expect("expected permissions array");
+    assert_eq!(permissions.len(), 2);
+    assert_eq!(permissions[0]["name"], "view_cluster_info");
+}
+
+// ============================================================================
+// RBAC: Role Tools
+// ============================================================================
+
+#[tokio::test]
+async fn test_list_enterprise_roles() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/roles"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"uid": 1, "name": "Admin", "management": "admin"},
+            {"uid": 2, "name": "Developer", "management": "db_member"}
+        ])))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::list_roles(state);
+
+    let result = call_tool_json(&tool, json!({})).await;
+
+    assert_eq!(result["count"], 2);
+    let roles = result["roles"].as_array().expect("expected roles array");
+    assert_eq!(roles.len(), 2);
+    assert_eq!(roles[0]["name"], "Admin");
+    assert_eq!(roles[1]["name"], "Developer");
+}
+
+#[tokio::test]
+async fn test_get_enterprise_role() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/roles/2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "uid": 2,
+            "name": "Developer",
+            "management": "db_member",
+            "data_access": "redis_acl"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::get_role(state);
+
+    let result = call_tool_json(&tool, json!({"uid": 2})).await;
+
+    assert_eq!(result["uid"], 2);
+    assert_eq!(result["name"], "Developer");
+    assert_eq!(result["management"], "db_member");
+}
+
+#[tokio::test]
+async fn test_create_enterprise_role() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/roles"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "uid": 3,
+            "name": "ReadOnly",
+            "management": "db_viewer"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::create_enterprise_role(state);
+
+    let result = call_tool_json(
+        &tool,
+        json!({"name": "ReadOnly", "management": "db_viewer"}),
+    )
+    .await;
+
+    assert_eq!(result["uid"], 3);
+    assert_eq!(result["name"], "ReadOnly");
+}
+
+#[tokio::test]
+async fn test_create_enterprise_role_blocked_in_read_only() {
+    let server = MockEnterpriseServer::start().await;
+
+    let state = Arc::new(AppState::with_enterprise_client(server.client()));
+    let tool = enterprise::create_enterprise_role(state);
+
+    let result = tool.call(json!({"name": "ReadOnly"})).await;
+
+    assert!(
+        result.is_error,
+        "create role should be blocked under read-only policy"
+    );
+}
+
+#[tokio::test]
+async fn test_update_enterprise_role() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/v1/roles/3"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "uid": 3,
+            "name": "ReadOnlyRenamed",
+            "management": "cluster_viewer"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::update_enterprise_role(state);
+
+    let result = call_tool_json(
+        &tool,
+        json!({"uid": 3, "name": "ReadOnlyRenamed", "management": "cluster_viewer"}),
+    )
+    .await;
+
+    assert_eq!(result["uid"], 3);
+    assert_eq!(result["name"], "ReadOnlyRenamed");
+}
+
+#[tokio::test]
+async fn test_delete_enterprise_role() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/v1/roles/3"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(server.inner())
+        .await;
+
+    let state = full_policy_state(server.client());
+    let tool = enterprise::delete_enterprise_role(state);
+
+    let result = call_tool_json(&tool, json!({"uid": 3})).await;
+
+    assert_eq!(result["uid"], 3);
+    assert_eq!(result["message"], "Role deleted successfully");
+}
+
+#[tokio::test]
+async fn test_delete_enterprise_role_blocked_in_read_only() {
+    let server = MockEnterpriseServer::start().await;
+
+    // Default test policy is read-only; destructive tools require full tier.
+    let state = Arc::new(AppState::with_enterprise_client(server.client()));
+    let tool = enterprise::delete_enterprise_role(state);
+
+    let result = tool.call(json!({"uid": 3})).await;
+
+    assert!(
+        result.is_error,
+        "delete role should be blocked under read-only policy"
+    );
+}
+
+#[tokio::test]
+async fn test_get_enterprise_builtin_roles() {
+    let server = MockEnterpriseServer::start().await;
+
+    // The handler reads GET /v1/roles/builtin (not /v1/roles/built_in_roles).
+    Mock::given(method("GET"))
+        .and(path("/v1/roles/builtin"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"uid": 1, "name": "admin", "management": "admin"},
+            {"uid": 2, "name": "db_viewer", "management": "db_viewer"}
+        ])))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::get_enterprise_builtin_roles(state);
+
+    let result = call_tool_json(&tool, json!({})).await;
+
+    assert_eq!(result["count"], 2);
+    let roles = result["roles"].as_array().expect("expected roles array");
+    assert_eq!(roles.len(), 2);
+    assert_eq!(roles[0]["name"], "admin");
+}
+
+// ============================================================================
+// RBAC: Redis ACL Tools
+// ============================================================================
+
+#[tokio::test]
+async fn test_list_enterprise_acls() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/redis_acls"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"uid": 1, "name": "full-access", "acl": "+@all ~*"},
+            {"uid": 2, "name": "read-only", "acl": "+@read ~*"}
+        ])))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::list_redis_acls(state);
+
+    let result = call_tool_json(&tool, json!({})).await;
+
+    assert_eq!(result["count"], 2);
+    let acls = result["acls"].as_array().expect("expected acls array");
+    assert_eq!(acls.len(), 2);
+    assert_eq!(acls[0]["name"], "full-access");
+    assert_eq!(acls[1]["name"], "read-only");
+}
+
+#[tokio::test]
+async fn test_get_enterprise_acl() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/redis_acls/1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "uid": 1,
+            "name": "full-access",
+            "acl": "+@all ~*"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::get_redis_acl(state);
+
+    let result = call_tool_json(&tool, json!({"uid": 1})).await;
+
+    assert_eq!(result["uid"], 1);
+    assert_eq!(result["name"], "full-access");
+    assert_eq!(result["acl"], "+@all ~*");
+}
+
+#[tokio::test]
+async fn test_create_enterprise_acl() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/redis_acls"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "uid": 3,
+            "name": "cache-only",
+            "acl": "+get +set ~cache:*"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::create_enterprise_acl(state);
+
+    let result = call_tool_json(
+        &tool,
+        json!({"name": "cache-only", "acl": "+get +set ~cache:*"}),
+    )
+    .await;
+
+    assert_eq!(result["uid"], 3);
+    assert_eq!(result["name"], "cache-only");
+}
+
+#[tokio::test]
+async fn test_create_enterprise_acl_blocked_in_read_only() {
+    let server = MockEnterpriseServer::start().await;
+
+    let state = Arc::new(AppState::with_enterprise_client(server.client()));
+    let tool = enterprise::create_enterprise_acl(state);
+
+    let result = tool
+        .call(json!({"name": "cache-only", "acl": "+get +set ~cache:*"}))
+        .await;
+
+    assert!(
+        result.is_error,
+        "create ACL should be blocked under read-only policy"
+    );
+}
+
+#[tokio::test]
+async fn test_update_enterprise_acl() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/v1/redis_acls/3"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "uid": 3,
+            "name": "cache-only",
+            "acl": "+@read ~cache:*"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::update_enterprise_acl(state);
+
+    let result = call_tool_json(
+        &tool,
+        json!({"uid": 3, "name": "cache-only", "acl": "+@read ~cache:*"}),
+    )
+    .await;
+
+    assert_eq!(result["uid"], 3);
+    assert_eq!(result["acl"], "+@read ~cache:*");
+}
+
+#[tokio::test]
+async fn test_delete_enterprise_acl() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/v1/redis_acls/3"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(server.inner())
+        .await;
+
+    let state = full_policy_state(server.client());
+    let tool = enterprise::delete_enterprise_acl(state);
+
+    let result = call_tool_json(&tool, json!({"uid": 3})).await;
+
+    assert_eq!(result["uid"], 3);
+    assert_eq!(result["message"], "ACL deleted successfully");
+}
+
+#[tokio::test]
+async fn test_delete_enterprise_acl_blocked_in_read_only() {
+    let server = MockEnterpriseServer::start().await;
+
+    // Default test policy is read-only; destructive tools require full tier.
+    let state = Arc::new(AppState::with_enterprise_client(server.client()));
+    let tool = enterprise::delete_enterprise_acl(state);
+
+    let result = tool.call(json!({"uid": 3})).await;
+
+    assert!(
+        result.is_error,
+        "delete ACL should be blocked under read-only policy"
+    );
+}
+
+#[tokio::test]
+async fn test_validate_enterprise_acl() {
+    let server = MockEnterpriseServer::start().await;
+
+    // validate() POSTs the candidate rule to /v1/redis_acls/validate.
+    Mock::given(method("POST"))
+        .and(path("/v1/redis_acls/validate"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "valid": true,
+            "message": "ACL is valid"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::validate_enterprise_acl(state);
+
+    let result = call_tool_json(&tool, json!({"name": "candidate", "acl": "+@all ~*"})).await;
+
+    assert_eq!(result["valid"], true);
+    assert_eq!(result["message"], "ACL is valid");
+}
+
+// ============================================================================
+// RBAC: LDAP Tools
+// ============================================================================
+
+#[tokio::test]
+async fn test_get_enterprise_ldap_config() {
+    let server = MockEnterpriseServer::start().await;
+
+    // The handler reads GET /v1/cluster/ldap (not /v1/ldap).
+    Mock::given(method("GET"))
+        .and(path("/v1/cluster/ldap"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "enabled": true,
+            "bind_dn": "cn=admin,dc=example,dc=com",
+            "authentication_query_suffix": "ou=users,dc=example,dc=com"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::get_enterprise_ldap_config(state);
+
+    let result = call_tool_json(&tool, json!({})).await;
+
+    assert_eq!(result["enabled"], true);
+    assert_eq!(result["bind_dn"], "cn=admin,dc=example,dc=com");
+}
+
+#[tokio::test]
+async fn test_update_enterprise_ldap_config() {
+    let server = MockEnterpriseServer::start().await;
+
+    // The handler writes PUT /v1/cluster/ldap.
+    Mock::given(method("PUT"))
+        .and(path("/v1/cluster/ldap"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "enabled": true,
+            "bind_dn": "cn=svc,dc=example,dc=com",
+            "cache_refresh_interval": 300
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::update_enterprise_ldap_config(state);
+
+    let result = call_tool_json(
+        &tool,
+        json!({
+            "config": {
+                "enabled": true,
+                "bind_dn": "cn=svc,dc=example,dc=com",
+                "cache_refresh_interval": 300
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(result["enabled"], true);
+    assert_eq!(result["bind_dn"], "cn=svc,dc=example,dc=com");
+}
+
+#[tokio::test]
+async fn test_update_enterprise_ldap_config_blocked_in_read_only() {
+    let server = MockEnterpriseServer::start().await;
+
+    let state = Arc::new(AppState::with_enterprise_client(server.client()));
+    let tool = enterprise::update_enterprise_ldap_config(state);
+
+    let result = tool.call(json!({"config": {"enabled": false}})).await;
+
+    assert!(
+        result.is_error,
+        "update LDAP config should be blocked under read-only policy"
+    );
+}
