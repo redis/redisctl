@@ -1710,3 +1710,521 @@ async fn test_delete_enterprise_crdb_blocked_in_read_only() {
         "delete CRDB should be blocked under read-only policy"
     );
 }
+
+// ============================================================================
+// Cluster Write Tools
+// ============================================================================
+//
+// NOTE: several paths differ from the #989 issue text; these tests follow the
+// actual `redis-enterprise` handler source:
+//   - update_enterprise_cluster_certificates -> PUT /v1/cluster/update_cert
+//   - validate_enterprise_license            -> POST /v1/license/validate
+//   - get_enterprise_cluster_services        -> GET /v1/cluster/services_configuration
+//   - maintenance mode tools                 -> PUT /v1/cluster (block_cluster_changes)
+//   - update_enterprise_license              -> PUT /v1/license then GET /v1/license
+
+#[tokio::test]
+async fn test_update_enterprise_cluster() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/v1/cluster"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "name": "renamed-cluster",
+            "email_alerts": true
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::update_cluster(state);
+
+    let result = call_tool_json(
+        &tool,
+        json!({"updates": {"name": "renamed-cluster", "email_alerts": true}}),
+    )
+    .await;
+
+    assert_eq!(result["name"], "renamed-cluster");
+    assert_eq!(result["email_alerts"], true);
+}
+
+#[tokio::test]
+async fn test_update_enterprise_cluster_blocked_in_read_only() {
+    let server = MockEnterpriseServer::start().await;
+
+    let state = Arc::new(AppState::with_enterprise_client(server.client()));
+    let tool = enterprise::update_cluster(state);
+
+    let result = tool.call(json!({"updates": {"name": "x"}})).await;
+
+    assert!(
+        result.is_error,
+        "update cluster should be blocked under read-only policy"
+    );
+}
+
+#[tokio::test]
+async fn test_get_enterprise_cluster_policy() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/cluster/policy"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "default_shards_placement": "dense",
+            "rack_aware": false,
+            "default_provisioned_redis_version": "7.2"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::get_cluster_policy(state);
+
+    let result = call_tool_json(&tool, json!({})).await;
+
+    assert_eq!(result["default_shards_placement"], "dense");
+    assert_eq!(result["rack_aware"], false);
+}
+
+#[tokio::test]
+async fn test_update_enterprise_cluster_policy() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/v1/cluster/policy"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rack_aware": true,
+            "default_shards_placement": "sparse"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::update_cluster_policy(state);
+
+    let result = call_tool_json(
+        &tool,
+        json!({"policy": {"rack_aware": true, "default_shards_placement": "sparse"}}),
+    )
+    .await;
+
+    assert_eq!(result["rack_aware"], true);
+    assert_eq!(result["default_shards_placement"], "sparse");
+}
+
+#[tokio::test]
+async fn test_enable_enterprise_maintenance_mode() {
+    let server = MockEnterpriseServer::start().await;
+
+    // The tool toggles block_cluster_changes via PUT /v1/cluster.
+    Mock::given(method("PUT"))
+        .and(path("/v1/cluster"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "block_cluster_changes": true
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::enable_maintenance_mode(state);
+
+    let result = call_tool_json(&tool, json!({})).await;
+
+    assert_eq!(result["message"], "Maintenance mode enabled");
+    assert_eq!(result["result"]["block_cluster_changes"], true);
+}
+
+#[tokio::test]
+async fn test_disable_enterprise_maintenance_mode() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/v1/cluster"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "block_cluster_changes": false
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::disable_maintenance_mode(state);
+
+    let result = call_tool_json(&tool, json!({})).await;
+
+    assert_eq!(result["message"], "Maintenance mode disabled");
+    assert_eq!(result["result"]["block_cluster_changes"], false);
+}
+
+#[tokio::test]
+async fn test_get_enterprise_cluster_certificates() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/cluster/certificates"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "proxy_cert": "-----BEGIN CERTIFICATE-----proxy-----END CERTIFICATE-----",
+            "syncer_cert": "-----BEGIN CERTIFICATE-----syncer-----END CERTIFICATE-----"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::get_cluster_certificates(state);
+
+    let result = call_tool_json(&tool, json!({})).await;
+
+    assert!(result.get("proxy_cert").is_some());
+    assert!(result.get("syncer_cert").is_some());
+}
+
+#[tokio::test]
+async fn test_rotate_enterprise_cluster_certificates() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/cluster/certificates/rotate"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"status": "ok"})))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::rotate_cluster_certificates(state);
+
+    let result = call_tool_json(&tool, json!({})).await;
+
+    assert_eq!(result["message"], "Certificate rotation initiated");
+}
+
+#[tokio::test]
+async fn test_update_enterprise_cluster_certificates() {
+    let server = MockEnterpriseServer::start().await;
+
+    // The handler PUTs to /v1/cluster/update_cert (not /v1/cluster/certificates).
+    Mock::given(method("PUT"))
+        .and(path("/v1/cluster/update_cert"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"status": "ok"})))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::update_cluster_certificates(state);
+
+    let result = call_tool_json(
+        &tool,
+        json!({
+            "name": "proxy",
+            "certificate": "-----BEGIN CERTIFICATE-----...-----END CERTIFICATE-----",
+            "key": "-----BEGIN PRIVATE KEY-----...-----END PRIVATE KEY-----"
+        }),
+    )
+    .await;
+
+    assert_eq!(result["message"], "Certificate updated successfully");
+    assert_eq!(result["name"], "proxy");
+}
+
+#[tokio::test]
+async fn test_get_enterprise_cluster_services() {
+    let server = MockEnterpriseServer::start().await;
+
+    // get_enterprise_cluster_services reads the services_configuration route.
+    Mock::given(method("GET"))
+        .and(path("/v1/cluster/services_configuration"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "cm_server": {"operating_mode": "enabled"},
+            "mdns_server": {"operating_mode": "enabled"}
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::get_enterprise_cluster_services(state);
+
+    let result = call_tool_json(&tool, json!({})).await;
+
+    assert!(result.get("cm_server").is_some());
+    assert!(result.get("mdns_server").is_some());
+}
+
+// ============================================================================
+// License Write Tools
+// ============================================================================
+
+#[tokio::test]
+async fn test_update_enterprise_license() {
+    let server = MockEnterpriseServer::start().await;
+
+    // update() PUTs the new key (200/empty body tolerated) then GETs the
+    // installed license to return it.
+    Mock::given(method("PUT"))
+        .and(path("/v1/license"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(server.inner())
+        .await;
+
+    let license = LicenseFixture::new().shards_limit(250).build();
+    server.mock_license(license).await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::update_license(state);
+
+    let result = call_tool_json(&tool, json!({"license_key": "NEW-LICENSE-KEY"})).await;
+
+    assert_eq!(result["expired"], false);
+    assert_eq!(result["shards_limit"], 250);
+}
+
+#[tokio::test]
+async fn test_update_enterprise_license_blocked_in_read_only() {
+    let server = MockEnterpriseServer::start().await;
+
+    let state = Arc::new(AppState::with_enterprise_client(server.client()));
+    let tool = enterprise::update_license(state);
+
+    let result = tool.call(json!({"license_key": "NEW-LICENSE-KEY"})).await;
+
+    assert!(
+        result.is_error,
+        "update license should be blocked under read-only policy"
+    );
+}
+
+#[tokio::test]
+async fn test_validate_enterprise_license() {
+    let server = MockEnterpriseServer::start().await;
+
+    // validate() POSTs the candidate key to /v1/license/validate.
+    Mock::given(method("POST"))
+        .and(path("/v1/license/validate"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "expired": false,
+            "type": "commercial",
+            "shards_limit": 100
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::validate_license(state);
+
+    let result = call_tool_json(&tool, json!({"license_key": "SOME-LICENSE-KEY"})).await;
+
+    assert_eq!(result["expired"], false);
+    assert_eq!(result["type"], "commercial");
+}
+
+// ============================================================================
+// Node Write Tools
+// ============================================================================
+
+#[tokio::test]
+async fn test_enable_enterprise_node_maintenance() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/nodes/1/actions/maintenance_on"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "action_uid": "maint-on-1",
+            "description": "Enabling maintenance mode"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::enable_node_maintenance(state);
+
+    let result = call_tool_json(&tool, json!({"uid": 1})).await;
+
+    assert_eq!(result["message"], "Node maintenance mode enabled");
+    assert_eq!(result["node_uid"], 1);
+    assert_eq!(result["action_uid"], "maint-on-1");
+}
+
+#[tokio::test]
+async fn test_disable_enterprise_node_maintenance() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/nodes/1/actions/maintenance_off"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "action_uid": "maint-off-1",
+            "description": "Disabling maintenance mode"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::disable_node_maintenance(state);
+
+    let result = call_tool_json(&tool, json!({"uid": 1})).await;
+
+    assert_eq!(result["message"], "Node maintenance mode disabled");
+    assert_eq!(result["node_uid"], 1);
+    assert_eq!(result["action_uid"], "maint-off-1");
+}
+
+#[tokio::test]
+async fn test_rebalance_enterprise_node() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/nodes/1/actions/rebalance"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "action_uid": "rebalance-1",
+            "description": "Rebalancing shards"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::rebalance_node(state);
+
+    let result = call_tool_json(&tool, json!({"uid": 1})).await;
+
+    assert_eq!(result["message"], "Node rebalance initiated");
+    assert_eq!(result["node_uid"], 1);
+    assert_eq!(result["action_uid"], "rebalance-1");
+}
+
+#[tokio::test]
+async fn test_drain_enterprise_node() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/nodes/1/actions/drain"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "action_uid": "drain-1",
+            "description": "Draining shards"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::drain_node(state);
+
+    let result = call_tool_json(&tool, json!({"uid": 1})).await;
+
+    assert_eq!(result["message"], "Node drain initiated");
+    assert_eq!(result["node_uid"], 1);
+    assert_eq!(result["action_uid"], "drain-1");
+}
+
+#[tokio::test]
+async fn test_update_enterprise_node() {
+    let server = MockEnterpriseServer::start().await;
+
+    let node = NodeFixture::new(1, "10.0.0.1").cores(8).build();
+
+    Mock::given(method("PUT"))
+        .and(path("/v1/nodes/1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(node))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::update_enterprise_node(state);
+
+    let result = call_tool_json(
+        &tool,
+        json!({"uid": 1, "updates": {"external_addr": ["10.0.0.99"]}}),
+    )
+    .await;
+
+    assert_eq!(result["uid"], 1);
+    assert_eq!(result["addr"], "10.0.0.1");
+}
+
+#[tokio::test]
+async fn test_update_enterprise_node_blocked_in_read_only() {
+    let server = MockEnterpriseServer::start().await;
+
+    let state = Arc::new(AppState::with_enterprise_client(server.client()));
+    let tool = enterprise::update_enterprise_node(state);
+
+    let result = tool.call(json!({"uid": 1, "updates": {}})).await;
+
+    assert!(
+        result.is_error,
+        "update node should be blocked under read-only policy"
+    );
+}
+
+// ============================================================================
+// Node Destructive Tools
+// ============================================================================
+
+#[tokio::test]
+async fn test_remove_enterprise_node() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/v1/nodes/1"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(server.inner())
+        .await;
+
+    let state = full_policy_state(server.client());
+    let tool = enterprise::remove_enterprise_node(state);
+
+    let result = call_tool_json(&tool, json!({"uid": 1})).await;
+
+    assert_eq!(result["uid"], 1);
+    assert_eq!(result["message"], "Node removed successfully");
+}
+
+#[tokio::test]
+async fn test_remove_enterprise_node_blocked_in_read_only() {
+    let server = MockEnterpriseServer::start().await;
+
+    // Default test policy is read-only; destructive tools require full tier.
+    let state = Arc::new(AppState::with_enterprise_client(server.client()));
+    let tool = enterprise::remove_enterprise_node(state);
+
+    let result = tool.call(json!({"uid": 1})).await;
+
+    assert!(
+        result.is_error,
+        "remove node should be blocked under read-only policy"
+    );
+}
