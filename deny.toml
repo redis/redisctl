@@ -18,6 +18,9 @@ ignore = [
     # Tracking: https://github.com/redis-rs/redis-rs/issues/1234
     # This is a transitive dependency we cannot directly update
     "RUSTSEC-2025-0134",
+    # proc-macro-error2 is unmaintained (pulled via tabled -> tabled_derive); no safe upgrade
+    # available. Benign EOL notice, not a vulnerability. Revisit when tabled drops it.
+    "RUSTSEC-2026-0173",
 ]
 
 [licenses]
