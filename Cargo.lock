@@ -1120,15 +1120,16 @@ checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
 name = "files-sdk"
-version = "0.3.1"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e1b158d0e399fe9f99e4b6ba8ba979b0536e0133a4c1270ac3386f00104336e"
+checksum = "31761b878a03696bd2a5260dda6ed5584a9a9c45ff95518fb19cbae81cade8de"
 dependencies = [
  "async-stream",
  "futures",
  "reqwest 0.12.23",
  "serde",
  "serde_json",
+ "serde_path_to_error",
  "thiserror 2.0.17",
  "tokio",
  "url",
