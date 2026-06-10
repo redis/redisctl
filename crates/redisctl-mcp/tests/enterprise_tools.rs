@@ -2852,3 +2852,193 @@ async fn test_update_enterprise_ldap_config_blocked_in_read_only() {
         "update LDAP config should be blocked under read-only policy"
     );
 }
+
+// ============================================================================
+// Shard Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_list_shards() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/shards"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"uid": "1", "bdb_uid": 1, "node_uid": "1", "role": "master", "status": "active"},
+            {"uid": "2", "bdb_uid": 1, "node_uid": "2", "role": "slave", "status": "active"}
+        ])))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::list_shards(state);
+
+    let result = call_tool_json(&tool, json!({})).await;
+
+    assert_eq!(result["count"], 2);
+    let shards = result["shards"].as_array().unwrap();
+    assert_eq!(shards.len(), 2);
+    assert_eq!(shards[0]["uid"], "1");
+}
+
+#[tokio::test]
+async fn test_get_shard() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/shards/1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "uid": "1",
+            "bdb_uid": 1,
+            "node_uid": "1",
+            "role": "master",
+            "status": "active"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::get_shard(state);
+
+    let result = call_tool_json(&tool, json!({"uid": "1"})).await;
+
+    assert_eq!(result["uid"], "1");
+    assert_eq!(result["role"], "master");
+}
+
+#[tokio::test]
+async fn test_list_shards_by_database() {
+    let server = MockEnterpriseServer::start().await;
+
+    // ShardHandler::list_by_database() uses a path segment: GET /v1/bdbs/{bdb_uid}/shards
+    Mock::given(method("GET"))
+        .and(path("/v1/bdbs/1/shards"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"uid": "1", "bdb_uid": 1, "node_uid": "1", "role": "master", "status": "active"}
+        ])))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::list_shards_by_database(state);
+
+    let result = call_tool_json(&tool, json!({"bdb_uid": 1})).await;
+
+    assert_eq!(result["count"], 1);
+    let shards = result["shards"].as_array().unwrap();
+    assert_eq!(shards[0]["bdb_uid"], 1);
+}
+
+#[tokio::test]
+async fn test_list_shards_by_node() {
+    let server = MockEnterpriseServer::start().await;
+
+    // ShardHandler::list_by_node() uses a path segment: GET /v1/nodes/{node_uid}/shards
+    Mock::given(method("GET"))
+        .and(path("/v1/nodes/2/shards"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"uid": "2", "bdb_uid": 1, "node_uid": "2", "role": "slave", "status": "active"}
+        ])))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_enterprise_client(client));
+    let tool = enterprise::list_shards_by_node(state);
+
+    let result = call_tool_json(&tool, json!({"node_uid": 2})).await;
+
+    assert_eq!(result["count"], 1);
+    let shards = result["shards"].as_array().unwrap();
+    assert_eq!(shards[0]["node_uid"], "2");
+}
+
+// ============================================================================
+// Alert Write Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_acknowledge_enterprise_alert() {
+    let server = MockEnterpriseServer::start().await;
+
+    // acknowledge_enterprise_alert uses client.delete(), so the HTTP method is DELETE.
+    Mock::given(method("DELETE"))
+        .and(path("/v1/alerts/high_memory_usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::acknowledge_enterprise_alert(state);
+
+    let result = call_tool_json(&tool, json!({"alert_uid": "high_memory_usage"})).await;
+
+    assert!(result.get("message").is_some());
+    assert_eq!(result["alert_uid"], "high_memory_usage");
+}
+
+#[tokio::test]
+async fn test_acknowledge_enterprise_alert_blocked_in_read_only() {
+    let server = MockEnterpriseServer::start().await;
+
+    let state = Arc::new(AppState::with_enterprise_client(server.client()));
+    let tool = enterprise::acknowledge_enterprise_alert(state);
+
+    let result = tool.call(json!({"alert_uid": "some_alert"})).await;
+
+    assert!(
+        result.is_error,
+        "acknowledge alert should be blocked under read-only policy"
+    );
+}
+
+// ============================================================================
+// Debug Info Write Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_create_debug_info() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/debuginfo"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "task_id": "debug-789",
+            "status": "queued"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let mut state = AppState::with_enterprise_client(client);
+    state.policy = AppState::test_write_policy();
+    let state = Arc::new(state);
+    let tool = enterprise::create_debug_info(state);
+
+    let result = call_tool_json(&tool, json!({})).await;
+
+    assert!(result.get("task_id").is_some());
+    assert_eq!(result["task_id"], "debug-789");
+    assert_eq!(result["status"], "queued");
+}
+
+#[tokio::test]
+async fn test_create_debug_info_blocked_in_read_only() {
+    let server = MockEnterpriseServer::start().await;
+
+    let state = Arc::new(AppState::with_enterprise_client(server.client()));
+    let tool = enterprise::create_debug_info(state);
+
+    let result = tool.call(json!({})).await;
+
+    assert!(
+        result.is_error,
+        "create debug info should be blocked under read-only policy"
+    );
+}
