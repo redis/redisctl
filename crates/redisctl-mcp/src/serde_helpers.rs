@@ -245,6 +245,12 @@ mod tests {
     }
 
     #[test]
+    fn opt_i64_present_negative_string() {
+        let t: TestOptI64 = serde_json::from_value(json!({"val": "-5"})).unwrap();
+        assert_eq!(t.val, Some(-5));
+    }
+
+    #[test]
     fn u64_from_number() {
         let t: TestU64 = serde_json::from_value(json!({"val": 100})).unwrap();
         assert_eq!(t.val, 100);
@@ -284,6 +290,12 @@ mod tests {
         assert_eq!(t.val, None);
         let t: TestOptUsize = serde_json::from_value(json!({"val": "1000"})).unwrap();
         assert_eq!(t.val, Some(1000));
+    }
+
+    #[test]
+    fn opt_usize_present_number() {
+        let t: TestOptUsize = serde_json::from_value(json!({"val": 50})).unwrap();
+        assert_eq!(t.val, Some(50));
     }
 
     #[test]
