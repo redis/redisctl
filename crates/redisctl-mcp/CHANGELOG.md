@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1](https://github.com/redis/redisctl/compare/redisctl-mcp-v0.11.0...redisctl-mcp-v0.11.1) - 2026-06-11
+
+### Other
+
+- *(mcp)* add mock tests for enterprise observability gaps (closes #995) ([#1020](https://github.com/redis/redisctl/pull/1020))
+- *(mcp)* add missing opt_i64 string and opt_usize number test coverage ([#1019](https://github.com/redis/redisctl/pull/1019))
+- *(mcp)* add mock tests for enterprise RBAC tools ([#1007](https://github.com/redis/redisctl/pull/1007))
+- *(mcp)* add mock tests for enterprise cluster write and destructive tools ([#1006](https://github.com/redis/redisctl/pull/1006))
+- *(mcp)* cover redis_object_freq error and LFU happy paths (closes #996) ([#1005](https://github.com/redis/redisctl/pull/1005))
+- *(mcp)* cover cloud subscription write/destructive/read-only tools ([#1004](https://github.com/redis/redisctl/pull/1004))
+- *(mcp)* add mock tests for enterprise database write/destructive tools and CRDB tools ([#1003](https://github.com/redis/redisctl/pull/1003))
+- *(mcp)* cover redis_hexpire and redis_zremrangebyscore (closes #993) ([#1002](https://github.com/redis/redisctl/pull/1002))
+
 ## [0.11.0](https://github.com/redis-developer/redisctl/compare/redisctl-mcp-v0.10.1...redisctl-mcp-v0.11.0) - 2026-03-20
 
 ### Added
