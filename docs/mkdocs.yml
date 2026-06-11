@@ -3,7 +3,7 @@ site_description: The CLI and MCP Server for Redis
 site_url: https://redis-field-engineering.github.io/redisctl-docs
 repo_url: https://github.com/redis/redisctl
 repo_name: redis/redisctl
-edit_uri: edit/main/mkdocs-site/docs/
+edit_uri: edit/main/docs/docs/
 
 theme:
   name: material
