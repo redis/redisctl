@@ -73,8 +73,8 @@ full = ["cloud", "enterprise", "upload"]
 cloud = []
 enterprise = []
 upload = ["dep:files-sdk"]
-# Note: secure-storage may not work on musl targets due to keyring native dependencies
-# Build with --no-default-features --features full for musl
+# secure-storage uses keyring (linux-keyutils on Linux — pure Rust, no C deps), which
+# builds for x86_64-unknown-linux-musl; the default-feature musl binary ships in releases.
 secure-storage = ["redisctl-core/secure-storage", "dep:keyring"]
 
 [dev-dependencies]
