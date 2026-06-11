@@ -3570,7 +3570,7 @@ async fn test_generate_cost_report_request_shape() {
 
     // CostReportCreateRequest: start_date -> "startDate", end_date -> "endDate" (camelCase)
     Mock::given(method("POST"))
-        .and(path("/reports"))
+        .and(path("/cost-report"))
         .and(body_partial_json(json!({
             "startDate": "2024-01-01",
             "endDate": "2024-01-31"
@@ -3954,7 +3954,7 @@ async fn test_download_cost_report_request_shape() {
     let server = MockCloudServer::start().await;
 
     Mock::given(method("GET"))
-        .and(path("/reports/rpt-001"))
+        .and(path("/cost-report/rpt-001"))
         .respond_with(ResponseTemplate::new(200).set_body_string("date,cost\n2024-01-01,100.00"))
         .mount(server.inner())
         .await;
