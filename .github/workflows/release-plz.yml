@@ -9,6 +9,9 @@ on:
   push:
     branches:
       - main
+  # Manual trigger: re-run release-plz on demand (e.g. to refresh the release PR
+  # or publish a version the push trigger missed) without needing a new commit.
+  workflow_dispatch:
 
 concurrency:
   group: release-plz
