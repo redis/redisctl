@@ -3359,3 +3359,727 @@ async fn test_get_database_tags_request_shape() {
         "Expected successful GET database tags, got: {result}"
     );
 }
+
+// ============================================================================
+// Section 8: Account write / destructive / read-only tools -- request shapes
+//
+// Covers the 22 cloud account tools with zero test coverage (see #994).
+// ============================================================================
+
+#[tokio::test]
+async fn test_update_acl_role_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // AclRoleUpdateRequest: redis_rules -> "redisRules", rule_name -> "ruleName"
+    Mock::given(method("PUT"))
+        .and(path("/acl/roles/42"))
+        .and(body_partial_json(json!({
+            "name": "readonly-role",
+            "redisRules": [{
+                "ruleName": "+@read",
+                "databases": [{"subscriptionId": 1, "databaseId": 2}]
+            }]
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-update-role",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::update_acl_role(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "role_id": 42,
+            "name": "readonly-role",
+            "redis_rules": [{
+                "rule_name": "+@read",
+                "databases": [{"subscription_id": 1, "database_id": 2}]
+            }]
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("task-update-role") || result.contains("taskId"),
+        "Expected task response for update_acl_role, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_acl_role_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/acl/roles"))
+        .and(body_partial_json(json!({
+            "name": "dev-role",
+            "redisRules": [{
+                "ruleName": "+@all",
+                "databases": [{"subscriptionId": 10, "databaseId": 20}]
+            }]
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-create-role",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::create_acl_role(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "name": "dev-role",
+            "redis_rules": [{
+                "rule_name": "+@all",
+                "databases": [{"subscription_id": 10, "database_id": 20}]
+            }]
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("task-create-role") || result.contains("taskId"),
+        "Expected task response for create_acl_role, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_redis_rule_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // AclRedisRuleUpdateRequest: redis_rule -> "redisRule" (camelCase)
+    Mock::given(method("PUT"))
+        .and(path("/acl/redisRules/5"))
+        .and(body_partial_json(json!({
+            "name": "read-only-rule",
+            "redisRule": "+@read ~*"
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-update-redis-rule",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::update_redis_rule(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "rule_id": 5,
+            "name": "read-only-rule",
+            "redis_rule": "+@read ~*"
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("task-update-redis-rule") || result.contains("taskId"),
+        "Expected task response for update_redis_rule, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_acl_user_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // AclUserUpdateRequest: role -> "role", password -> "password"
+    Mock::given(method("PUT"))
+        .and(path("/acl/users/3"))
+        .and(body_partial_json(json!({
+            "role": "dev-role"
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-update-acl-user",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::update_acl_user(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "user_id": 3,
+            "role": "dev-role"
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("task-update-acl-user") || result.contains("taskId"),
+        "Expected task response for update_acl_user, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_account_user_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // AccountUserUpdateRequest: name -> "name", role -> "role"
+    Mock::given(method("PUT"))
+        .and(path("/users/1"))
+        .and(body_partial_json(json!({
+            "name": "Alice Updated",
+            "role": "member"
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-update-account-user",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::update_account_user(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "user_id": 1,
+            "name": "Alice Updated",
+            "role": "member"
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("task-update-account-user") || result.contains("taskId"),
+        "Expected task response for update_account_user, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_generate_cost_report_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // CostReportCreateRequest: start_date -> "startDate", end_date -> "endDate" (camelCase)
+    Mock::given(method("POST"))
+        .and(path("/reports"))
+        .and(body_partial_json(json!({
+            "startDate": "2024-01-01",
+            "endDate": "2024-01-31"
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-cost-report",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::generate_cost_report(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "start_date": "2024-01-01",
+            "end_date": "2024-01-31"
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("task-cost-report") || result.contains("taskId"),
+        "Expected task response -- startDate/endDate must serialize as camelCase, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_cloud_account_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // CloudAccountCreateRequest: all fields are camelCase
+    Mock::given(method("POST"))
+        .and(path("/cloud-accounts"))
+        .and(body_partial_json(json!({
+            "name": "my-aws-account",
+            "accessKeyId": "AKIAIOSFODNN7EXAMPLE",
+            "consoleUsername": "admin",
+            "signInLoginUrl": "https://console.aws.amazon.com"
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-create-cloud-account",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::create_cloud_account(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "name": "my-aws-account",
+            "access_key_id": "AKIAIOSFODNN7EXAMPLE",
+            "access_secret_key": "wJalrXUtnFEMI/bPxRfiCYEXAMPLEKEY",
+            "console_username": "admin",
+            "console_password": "s3cr3t",
+            "sign_in_login_url": "https://console.aws.amazon.com"
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("task-create-cloud-account") || result.contains("taskId"),
+        "Expected task response for create_cloud_account, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_cloud_account_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // CloudAccountUpdateRequest: camelCase field names
+    Mock::given(method("PUT"))
+        .and(path("/cloud-accounts/10"))
+        .and(body_partial_json(json!({
+            "accessKeyId": "AKIAIOSFODNN7UPDATED",
+            "consoleUsername": "admin"
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-update-cloud-account",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::update_cloud_account(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "cloud_account_id": 10,
+            "access_key_id": "AKIAIOSFODNN7UPDATED",
+            "access_secret_key": "wJalrXUtnFEMI/bPxRfiCYUPDATEDKEY",
+            "console_username": "admin",
+            "console_password": "newpassword"
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("task-update-cloud-account") || result.contains("taskId"),
+        "Expected task response for update_cloud_account, got: {result}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Section 8B: Destructive tools -- path+method + destructive_hint annotation
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_delete_account_user_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/users/1"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-delete-account-user",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::delete_account_user(state);
+
+    assert!(
+        tool.annotations
+            .as_ref()
+            .is_some_and(|a| a.destructive_hint),
+        "delete_account_user must carry the destructive annotation"
+    );
+
+    let result = call_tool_text(&tool, json!({"user_id": 1})).await;
+
+    assert!(
+        result.contains("task-delete-account-user") || result.contains("taskId"),
+        "Expected task response for delete_account_user, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_delete_acl_user_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/acl/users/3"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-delete-acl-user",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::delete_acl_user(state);
+
+    assert!(
+        tool.annotations
+            .as_ref()
+            .is_some_and(|a| a.destructive_hint),
+        "delete_acl_user must carry the destructive annotation"
+    );
+
+    let result = call_tool_text(&tool, json!({"user_id": 3})).await;
+
+    assert!(
+        result.contains("task-delete-acl-user") || result.contains("taskId"),
+        "Expected task response for delete_acl_user, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_delete_redis_rule_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/acl/redisRules/5"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-delete-redis-rule",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::delete_redis_rule(state);
+
+    assert!(
+        tool.annotations
+            .as_ref()
+            .is_some_and(|a| a.destructive_hint),
+        "delete_redis_rule must carry the destructive annotation"
+    );
+
+    let result = call_tool_text(&tool, json!({"rule_id": 5})).await;
+
+    assert!(
+        result.contains("task-delete-redis-rule") || result.contains("taskId"),
+        "Expected task response for delete_redis_rule, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_delete_cloud_account_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/cloud-accounts/10"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-delete-cloud-account",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::delete_cloud_account(state);
+
+    assert!(
+        tool.annotations
+            .as_ref()
+            .is_some_and(|a| a.destructive_hint),
+        "delete_cloud_account must carry the destructive annotation"
+    );
+
+    let result = call_tool_text(&tool, json!({"cloud_account_id": 10})).await;
+
+    assert!(
+        result.contains("task-delete-cloud-account") || result.contains("taskId"),
+        "Expected task response for delete_cloud_account, got: {result}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Section 8C: Read-only tools -- correct URL construction
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_get_account_user_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/users/5"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": 5,
+            "name": "Alice",
+            "email": "alice@example.com",
+            "role": "owner"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_account_user(state);
+
+    let result = call_tool_text(&tool, json!({"user_id": 5})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "Expected successful GET /users/5, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_list_acl_users_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/acl/users"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "accountId": 12345,
+            "users": []
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::list_acl_users(state);
+
+    let result = call_tool_text(&tool, json!({})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "Expected successful GET /acl/users, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_acl_user_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/acl/users/3"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": 3,
+            "name": "db-user",
+            "role": "readonly-role",
+            "status": "active"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_acl_user(state);
+
+    let result = call_tool_text(&tool, json!({"user_id": 3})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "Expected successful GET /acl/users/3, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_list_acl_roles_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/acl/roles"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "accountId": 12345,
+            "roles": []
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::list_acl_roles(state);
+
+    let result = call_tool_text(&tool, json!({})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "Expected successful GET /acl/roles, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_list_redis_rules_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/acl/redisRules"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "accountId": 12345,
+            "redisRules": []
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::list_redis_rules(state);
+
+    let result = call_tool_text(&tool, json!({})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "Expected successful GET /acl/redisRules, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_download_cost_report_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/reports/rpt-001"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("date,cost\n2024-01-01,100.00"))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::download_cost_report(state);
+
+    let result = call_tool_text(&tool, json!({"cost_report_id": "rpt-001"})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "Expected successful GET /reports/rpt-001, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_list_payment_methods_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/payment-methods"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "paymentMethods": []
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::list_payment_methods(state);
+
+    let result = call_tool_text(&tool, json!({})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "Expected successful GET /payment-methods, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_list_cloud_accounts_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/cloud-accounts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "cloudAccounts": []
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::list_cloud_accounts(state);
+
+    let result = call_tool_text(&tool, json!({})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "Expected successful GET /cloud-accounts, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_cloud_account_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/cloud-accounts/10"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": 10,
+            "name": "my-aws-account",
+            "status": "active",
+            "provider": "AWS"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_cloud_account(state);
+
+    let result = call_tool_text(&tool, json!({"cloud_account_id": 10})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "Expected successful GET /cloud-accounts/10, got: {result}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Section 8D: Polling helper -- wait_for_cloud_task timeout path
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_wait_for_cloud_task_timeout() {
+    let server = MockCloudServer::start().await;
+
+    // Task always returns in-progress -- exercises the timeout path.
+    Mock::given(method("GET"))
+        .and(path("/tasks/wait-task-001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "taskId": "wait-task-001",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::wait_for_cloud_task(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "task_id": "wait-task-001",
+            "timeout_seconds": 1,
+            "interval_seconds": 1
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("timeout"),
+        "Expected timeout response from wait_for_cloud_task, got: {result}"
+    );
+}
