@@ -120,3 +120,8 @@ debug = true
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+# DRY-RUN ONLY (remove before PR): build against local redis-cloud 0.11 until
+# v0.11.0 is published to crates.io.
+[patch.crates-io]
+redis-cloud = { path = "../redis-cloud-rs" }

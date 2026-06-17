@@ -1466,7 +1466,7 @@ async fn test_get_database_certificate_request_shape() {
     Mock::given(method("GET"))
         .and(path("/subscriptions/123/databases/1001/certificate"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "publicCertificatePemString": "-----BEGIN CERTIFICATE-----\nMIIBx...\n-----END CERTIFICATE-----"
+            "publicCertificatePEMString": "-----BEGIN CERTIFICATE-----\nMIIBx...\n-----END CERTIFICATE-----"
         })))
         .mount(server.inner())
         .await;
@@ -1485,7 +1485,7 @@ async fn test_get_database_certificate_request_shape() {
     .await;
 
     assert!(
-        result.get("publicCertificatePemString").is_some(),
+        result.get("publicCertificatePEMString").is_some(),
         "Expected certificate PEM in response, got: {result}"
     );
 }
