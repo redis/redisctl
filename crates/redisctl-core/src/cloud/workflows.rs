@@ -10,7 +10,7 @@ use redis_cloud::databases::{
     DatabaseUpdateRequest,
 };
 use redis_cloud::subscriptions::{
-    BaseSubscriptionUpdateRequest, Subscription, SubscriptionCreateRequest,
+    Subscription, SubscriptionCreateRequest, SubscriptionUpdateRequest,
 };
 use redis_cloud::{CloudClient, DatabaseHandler, SubscriptionHandler};
 use std::time::Duration;
@@ -440,14 +440,13 @@ pub async fn create_subscription_and_wait(
 /// # Example
 ///
 /// ```rust,ignore
-/// use redis_cloud::subscriptions::BaseSubscriptionUpdateRequest;
+/// use redis_cloud::subscriptions::SubscriptionUpdateRequest;
 /// use redisctl_core::cloud::update_subscription_and_wait;
 /// use std::time::Duration;
 ///
-/// let request = BaseSubscriptionUpdateRequest {
-///     subscription_id: None,
-///     command_type: None,
-/// };
+/// let request = SubscriptionUpdateRequest::builder()
+///     .name("renamed-subscription")
+///     .build();
 ///
 /// let subscription = update_subscription_and_wait(
 ///     &client,
@@ -460,7 +459,7 @@ pub async fn create_subscription_and_wait(
 pub async fn update_subscription_and_wait(
     client: &CloudClient,
     subscription_id: i32,
-    request: &BaseSubscriptionUpdateRequest,
+    request: &SubscriptionUpdateRequest,
     timeout: Duration,
     on_progress: Option<ProgressCallback>,
 ) -> Result<Subscription> {

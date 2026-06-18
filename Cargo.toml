@@ -99,7 +99,7 @@ pretty_assertions = "1.4"
 redis = { version = "0.27", features = ["tokio-comp", "tokio-rustls-comp", "connection-manager", "cluster-async"] }
 
 # External crates (git for dev, version required for crates.io publish)
-redis-cloud = { version = "0.10.0" }
+redis-cloud = { version = "0.11" }
 redis-enterprise = { version = "0.9.1" }
 
 # Windows CI workaround - ensure these are available in workspace

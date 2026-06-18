@@ -743,6 +743,7 @@ cloud_tool!(write, update_subscription, "update_subscription",
             payment_method: input.payment_method.clone(),
             subscription_id: None,
             command_type: None,
+            public_endpoint_access: None,
         };
 
         let result: TaskStateUpdate = client
