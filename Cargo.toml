@@ -99,7 +99,7 @@ pretty_assertions = "1.4"
 redis = { version = "0.27", features = ["tokio-comp", "tokio-rustls-comp", "connection-manager", "cluster-async"] }
 
 # External crates (git for dev, version required for crates.io publish)
-redis-cloud = { version = "0.10.0" }
+redis-cloud = { version = "0.11" }
 redis-enterprise = { version = "0.9.1" }
 
 # Windows CI workaround - ensure these are available in workspace
@@ -120,8 +120,3 @@ debug = true
 [profile.dist]
 inherits = "release"
 lto = "thin"
-
-# DRY-RUN ONLY (remove before PR): build against local redis-cloud 0.11 until
-# v0.11.0 is published to crates.io.
-[patch.crates-io]
-redis-cloud = { path = "../redis-cloud-rs" }
