@@ -853,6 +853,115 @@ async fn test_delete_fixed_subscription_request_shape() {
 }
 
 // ============================================================================
+// Section 3B: Fixed plan listing — response-content assertions (#1027)
+//
+// redis-cloud <0.11 silently dropped the `plans` array from FixedSubscriptionsPlans
+// responses. 0.11 populates it. These tests feed a response WITH plans and assert
+// the tool surfaces them.
+// ============================================================================
+
+#[tokio::test]
+async fn test_list_fixed_plans_populated() {
+    // Verify list_fixed_plans surfaces the `plans` array from the response.
+    // In redis-cloud <0.11 the plans array was silently dropped; 0.11 populates it.
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/fixed/plans"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "plans": [
+                {
+                    "id": 1,
+                    "name": "30MB",
+                    "size": 30,
+                    "sizeMeasurementUnit": "MB",
+                    "provider": "AWS",
+                    "region": "us-east-1",
+                    "price": 7,
+                    "priceCurrency": "USD",
+                    "pricePeriod": "Month"
+                },
+                {
+                    "id": 2,
+                    "name": "250MB",
+                    "size": 250,
+                    "sizeMeasurementUnit": "MB",
+                    "provider": "AWS",
+                    "region": "us-east-1",
+                    "price": 30,
+                    "priceCurrency": "USD",
+                    "pricePeriod": "Month"
+                }
+            ]
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::list_fixed_plans(state);
+
+    let result = call_tool_json(&tool, json!({})).await;
+
+    let plans = result["plans"]
+        .as_array()
+        .expect("plans array must be present in list_fixed_plans response");
+    assert_eq!(plans.len(), 2, "Expected 2 plans, got: {result}");
+    assert_eq!(plans[0]["id"], 1, "Expected first plan id=1, got: {result}");
+    assert_eq!(
+        plans[0]["name"], "30MB",
+        "Expected first plan name=30MB, got: {result}"
+    );
+    assert_eq!(
+        plans[1]["id"], 2,
+        "Expected second plan id=2, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_fixed_plans_by_subscription_populated() {
+    // Verify get_fixed_plans_by_subscription surfaces the `plans` array.
+    // In redis-cloud <0.11 the plans array was silently dropped; 0.11 populates it.
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/fixed/plans/subscriptions/789"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "plans": [
+                {
+                    "id": 3,
+                    "name": "1GB",
+                    "size": 1,
+                    "sizeMeasurementUnit": "GB",
+                    "provider": "GCP",
+                    "region": "us-central1",
+                    "price": 98,
+                    "priceCurrency": "USD",
+                    "pricePeriod": "Month"
+                }
+            ]
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_fixed_plans_by_subscription(state);
+
+    let result = call_tool_json(&tool, json!({"subscription_id": 789})).await;
+
+    let plans = result["plans"]
+        .as_array()
+        .expect("plans array must be present in get_fixed_plans_by_subscription response");
+    assert_eq!(plans.len(), 1, "Expected 1 plan, got: {result}");
+    assert_eq!(plans[0]["id"], 3, "Expected plan id=3, got: {result}");
+    assert_eq!(
+        plans[0]["name"], "1GB",
+        "Expected plan name=1GB, got: {result}"
+    );
+}
+
+// ============================================================================
 // Section 4: Account / ACL — strict request shapes
 // ============================================================================
 
@@ -1319,6 +1428,92 @@ async fn test_update_database_tags_request_shape() {
     assert!(
         !result.contains("Failed"),
         "Expected successful update tags response — body_partial_json matcher was not satisfied: {result}"
+    );
+}
+
+// ============================================================================
+// Section 6B: Database tag response-content assertions (#1027)
+//
+// redis-cloud <0.11 silently dropped the `tags` array from CloudTags responses.
+// 0.11 populates it. These tests feed a response WITH tags and assert the tool
+// surfaces them (Pro and Essentials).
+// ============================================================================
+
+#[tokio::test]
+async fn test_get_database_tags_populated() {
+    // Verify get_tags (Pro) surfaces the `tags` array with actual tag data.
+    // In redis-cloud <0.11 the tags array was silently dropped; 0.11 populates it.
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/123/databases/1001/tags"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "tags": [
+                {"key": "env", "value": "prod"},
+                {"key": "tier", "value": "standard"}
+            ]
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_tags(state);
+
+    let result = call_tool_json(&tool, json!({"subscription_id": 123, "database_id": 1001})).await;
+
+    let tags = result["tags"]
+        .as_array()
+        .expect("tags array must be present in get_tags response");
+    assert_eq!(tags.len(), 2, "Expected 2 tags, got: {result}");
+    assert_eq!(
+        tags[0]["key"], "env",
+        "Expected first tag key=env, got: {result}"
+    );
+    assert_eq!(
+        tags[0]["value"], "prod",
+        "Expected first tag value=prod, got: {result}"
+    );
+    assert_eq!(
+        tags[1]["key"], "tier",
+        "Expected second tag key=tier, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_fixed_database_tags_populated() {
+    // Verify get_fixed_database_tags (Essentials) surfaces the `tags` array.
+    // Endpoint: GET /fixed/subscriptions/{subId}/databases/{dbId}/tags
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/fixed/subscriptions/789/databases/2001/tags"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "tags": [
+                {"key": "app", "value": "web"},
+                {"key": "owner", "value": "platform"}
+            ]
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_fixed_database_tags(state);
+
+    let result = call_tool_json(&tool, json!({"subscription_id": 789, "database_id": 2001})).await;
+
+    let tags = result["tags"]
+        .as_array()
+        .expect("tags array must be present in get_fixed_database_tags response");
+    assert_eq!(tags.len(), 2, "Expected 2 tags, got: {result}");
+    assert_eq!(
+        tags[0]["key"], "app",
+        "Expected first tag key=app, got: {result}"
+    );
+    assert_eq!(
+        tags[1]["key"], "owner",
+        "Expected second tag key=owner, got: {result}"
     );
 }
 
