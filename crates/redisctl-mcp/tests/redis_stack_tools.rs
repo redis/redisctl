@@ -471,6 +471,11 @@ async fn test_bulk_seed_tools() {
 
     cleanup(&mut conn, "bulk_").await;
     cleanup(&mut conn, "seed_user:").await;
+    cleanup(&mut conn, "seed_str:").await;
+    cleanup(&mut conn, "seed_list:").await;
+    cleanup(&mut conn, "seed_set:").await;
+    cleanup(&mut conn, "seed_zs:").await;
+    cleanup(&mut conn, "seed_json:").await;
 
     // redis_bulk_load -- 3 SET commands
     let text = call_tool_text(
@@ -531,8 +536,151 @@ async fn test_bulk_seed_tools() {
     .await;
     assert!(text.contains("1"), "json_get bulk_json:1: {}", text);
 
+    // redis_seed -- string type with value_pattern + ttl
+    let text = call_tool_text(
+        &redis::seed(state.clone()),
+        json!({
+            "data_type": "string",
+            "key_pattern": "seed_str:{i}",
+            "count": 3,
+            "value_pattern": "val_{i}",
+            "ttl": 3600
+        }),
+    )
+    .await;
+    assert!(text.contains("3"), "seed string: {}", text);
+
+    let value: String = ::redis::cmd("GET")
+        .arg("seed_str:0")
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(value, "val_0", "seed string value");
+    let ttl: i64 = ::redis::cmd("TTL")
+        .arg("seed_str:0")
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    assert!(ttl > 0, "seed string ttl should be positive: {}", ttl);
+
+    // redis_seed -- list type with member_pattern
+    let text = call_tool_text(
+        &redis::seed(state.clone()),
+        json!({
+            "data_type": "list",
+            "key_pattern": "seed_list:{i}",
+            "count": 3,
+            "member_pattern": "item_{i}"
+        }),
+    )
+    .await;
+    assert!(text.contains("3"), "seed list: {}", text);
+
+    let members: Vec<String> = ::redis::cmd("LRANGE")
+        .arg("seed_list:1")
+        .arg(0)
+        .arg(-1)
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(members, vec!["item_1".to_string()], "seed list members");
+
+    // redis_seed -- set type with member_pattern
+    let text = call_tool_text(
+        &redis::seed(state.clone()),
+        json!({
+            "data_type": "set",
+            "key_pattern": "seed_set:{i}",
+            "count": 3,
+            "member_pattern": "item_{i}"
+        }),
+    )
+    .await;
+    assert!(text.contains("3"), "seed set: {}", text);
+
+    let members: Vec<String> = ::redis::cmd("SMEMBERS")
+        .arg("seed_set:2")
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(members, vec!["item_2".to_string()], "seed set members");
+
+    // redis_seed -- sorted_set type with member_pattern
+    let text = call_tool_text(
+        &redis::seed(state.clone()),
+        json!({
+            "data_type": "sorted_set",
+            "key_pattern": "seed_zs:{i}",
+            "count": 2,
+            "member_pattern": "member_{i}"
+        }),
+    )
+    .await;
+    assert!(text.contains("2"), "seed sorted_set: {}", text);
+
+    let members: Vec<String> = ::redis::cmd("ZRANGE")
+        .arg("seed_zs:0")
+        .arg(0)
+        .arg(-1)
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(
+        members,
+        vec!["member_0".to_string()],
+        "seed sorted_set members"
+    );
+
+    // redis_seed -- json type with value_pattern
+    let text = call_tool_text(
+        &redis::seed(state.clone()),
+        json!({
+            "data_type": "json",
+            "key_pattern": "seed_json:{i}",
+            "count": 2,
+            "value_pattern": "{\"id\":{i}}"
+        }),
+    )
+    .await;
+    assert!(text.contains("2"), "seed json: {}", text);
+
+    let doc = call_tool_text(
+        &redis::json_get(state.clone()),
+        json!({"key": "seed_json:1"}),
+    )
+    .await;
+    assert!(doc.contains("1"), "seed json get seed_json:1: {}", doc);
+
+    // Error path: hash type without field_values
+    let result = redis::seed(state.clone())
+        .call(json!({
+            "data_type": "hash",
+            "key_pattern": "seed_err:{i}",
+            "count": 1
+        }))
+        .await;
+    assert!(
+        result.is_error,
+        "seed hash without field_values should error"
+    );
+
+    // Error path: invalid data_type
+    let result = redis::seed(state.clone())
+        .call(json!({
+            "data_type": "bogus",
+            "key_pattern": "seed_err:{i}",
+            "count": 1
+        }))
+        .await;
+    assert!(result.is_error, "seed with invalid data_type should error");
+
     cleanup(&mut conn, "bulk_").await;
     cleanup(&mut conn, "seed_user:").await;
+    cleanup(&mut conn, "seed_str:").await;
+    cleanup(&mut conn, "seed_list:").await;
+    cleanup(&mut conn, "seed_set:").await;
+    cleanup(&mut conn, "seed_zs:").await;
+    cleanup(&mut conn, "seed_json:").await;
 }
 
 // ============================================================================
