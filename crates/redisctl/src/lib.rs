@@ -86,5 +86,4 @@ pub(crate) mod commands;
 pub(crate) mod connection;
 pub(crate) mod error;
 pub(crate) mod output;
-pub(crate) mod resilience;
 pub(crate) mod workflows;

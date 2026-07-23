@@ -998,7 +998,6 @@ mod tests {
                 api_url: "https://api.redislabs.com/v1".to_string(),
             },
             files_api_key: None,
-            resilience: None,
             tags: vec![],
         }
     }
@@ -1014,7 +1013,6 @@ mod tests {
                 ca_cert: None,
             },
             files_api_key: None,
-            resilience: None,
             tags: vec![],
         }
     }
@@ -1031,7 +1029,6 @@ mod tests {
                 database: 0,
             },
             files_api_key: None,
-            resilience: None,
             tags: vec![],
         }
     }

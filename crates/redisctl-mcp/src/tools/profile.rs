@@ -887,7 +887,6 @@ pub fn create_profile(state: Arc<AppState>) -> Tool {
                     deployment_type,
                     credentials,
                     files_api_key: None,
-                    resilience: None,
                     tags: vec![],
                 };
 

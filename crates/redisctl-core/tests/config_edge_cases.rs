@@ -243,7 +243,6 @@ fn tags_round_trip_save_and_reload() {
                 api_url: "https://api.redislabs.com/v1".to_string(),
             },
             files_api_key: None,
-            resilience: None,
             tags: vec!["prod".to_string(), "us-east".to_string()],
         },
     );
@@ -279,7 +278,6 @@ fn empty_tags_not_serialized() {
                 database: 0,
             },
             files_api_key: None,
-            resilience: None,
             tags: vec![],
         },
     );
