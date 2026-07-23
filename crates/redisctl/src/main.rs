@@ -652,7 +652,7 @@ async fn execute_enterprise_command(
         Alerts(alerts_cmd) => alerts_cmd
             .execute(&conn_mgr.config, profile, output, query)
             .await
-            .map_err(|e| RedisCtlError::Configuration(e.to_string())),
+            .map_err(RedisCtlError::from),
         BdbGroup(bdb_group_cmd) => {
             commands::enterprise::bdb_group::handle_bdb_group_command(
                 conn_mgr,
@@ -834,7 +834,7 @@ async fn execute_enterprise_command(
         License(license_cmd) => license_cmd
             .execute(&conn_mgr.config, profile, output, query)
             .await
-            .map_err(|e| RedisCtlError::Configuration(e.to_string())),
+            .map_err(RedisCtlError::from),
         Migration(migration_cmd) => {
             commands::enterprise::migration::handle_migration_command(
                 conn_mgr,
@@ -1089,7 +1089,7 @@ async fn handle_enterprise_workflow_command(
         License(license_workflow_cmd) => license_workflow_cmd
             .execute(&conn_mgr.config, output, None)
             .await
-            .map_err(|e| RedisCtlError::Configuration(e.to_string())),
+            .map_err(RedisCtlError::from),
         InitCluster {
             name,
             username,

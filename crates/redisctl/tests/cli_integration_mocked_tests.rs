@@ -63,6 +63,22 @@ default_enterprise = "test"
     fs::write(config_path, config_content)
 }
 
+// anyhow-wrapped API failures must not be mislabeled "Configuration error"
+// and must keep the cause chain. Regression for CODE-01 / CODE-08.
+#[test]
+fn api_failure_is_not_labeled_configuration_error() {
+    let temp_dir = TempDir::new().unwrap();
+    // Unreachable host, so the request fails inside a .context() wrap.
+    create_cloud_profile(&temp_dir, "https://cloud.invalid/v1").unwrap();
+
+    test_cmd(&temp_dir)
+        .args(["cloud", "provider-account", "list"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Configuration error").not())
+        .stderr(predicate::str::contains("Failed to list cloud accounts"));
+}
+
 // A destructive command with no TTY and without --force must fail with a
 // non-zero exit rather than silently exit 0 having done nothing. Otherwise a
 // non-interactive `set -e` script would proceed believing the resource was
