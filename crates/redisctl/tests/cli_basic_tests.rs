@@ -498,6 +498,17 @@ fn test_completions_help() {
         .stdout(predicate::str::contains("zsh"));
 }
 
+// Generating completions walks the entire command tree, which is what trips
+// clap's duplicate-short debug assert. `completions --help` does not build the
+// subtree, so it cannot catch a duplicate short flag. Generate for every shell
+// so a future collision fails here instead of only in a debug build.
+#[test]
+fn test_completions_generate_all_shells() {
+    for shell in ["bash", "zsh", "fish", "powershell", "elvish"] {
+        redisctl().arg("completions").arg(shell).assert().success();
+    }
+}
+
 // === CLOUD SUBCOMMAND HELP TESTS ===
 
 #[test]

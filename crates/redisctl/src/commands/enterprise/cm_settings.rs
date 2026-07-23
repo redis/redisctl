@@ -77,7 +77,7 @@ pub enum CmSettingsCommands {
         file: String,
 
         /// Force import without confirmation
-        #[arg(short, long)]
+        #[arg(long)]
         force: bool,
     },
 
