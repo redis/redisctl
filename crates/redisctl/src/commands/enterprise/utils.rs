@@ -1,41 +1,12 @@
 //! Utility functions for Enterprise commands
 use crate::error::Result as CliResult;
-use anyhow::Context;
-use dialoguer::Confirm;
 use serde_json::Value;
 
 pub use crate::commands::cloud::utils::{
-    DetailRow, extract_field, format_memory_size, format_status, output_with_pager, truncate_string,
+    DetailRow, confirm_action, extract_field, format_memory_size, format_status, output_with_pager,
+    truncate_string,
 };
 pub use crate::output::{apply_jmespath, handle_output, print_formatted_output, resolve_auto};
-
-/// Confirm an action with the user
-pub fn confirm_action(message: &str) -> CliResult<bool> {
-    #[cfg(unix)]
-    {
-        use std::io::IsTerminal;
-        if std::io::stdin().is_terminal() {
-            Ok(Confirm::new()
-                .with_prompt(message)
-                .default(false)
-                .interact()
-                .context("Failed to get user confirmation")?)
-        } else {
-            // In non-interactive mode, print warning and return false
-            eprintln!("Warning: {} Use --force to skip confirmation.", message);
-            Ok(false)
-        }
-    }
-
-    #[cfg(not(unix))]
-    {
-        Ok(Confirm::new()
-            .with_prompt(message)
-            .default(false)
-            .interact()
-            .context("Failed to get user confirmation")?)
-    }
-}
 
 /// Read JSON data from string, file, or stdin
 pub fn read_json_data(data: &str) -> CliResult<Value> {

@@ -109,6 +109,11 @@ pub enum RedisCtlError {
     #[error("Invalid input: {message}")]
     InvalidInput { message: String },
 
+    #[error(
+        "Confirmation required: {prompt} Re-run with --force to proceed in a non-interactive session."
+    )]
+    Cancelled { prompt: String },
+
     #[error("Command not supported for deployment type '{deployment_type}'")]
     UnsupportedDeploymentType { deployment_type: String },
     #[error("File error for '{path}': {message}")]
@@ -225,6 +230,10 @@ impl RedisCtlError {
                 format!("Check that file exists: {}", path),
                 "Verify file permissions are correct".to_string(),
                 "Ensure file path is correct (use absolute path if needed)".to_string(),
+            ],
+            RedisCtlError::Cancelled { .. } => vec![
+                "Re-run with --force to skip the confirmation prompt".to_string(),
+                "Confirmation prompts require an interactive terminal".to_string(),
             ],
             _ => vec![],
         }

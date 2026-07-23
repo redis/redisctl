@@ -408,21 +408,14 @@ async fn handle_delete(
     force: bool,
 ) -> CliResult<()> {
     // Confirmation prompt unless --force is used
-    if !force {
-        use dialoguer::Confirm;
-        let confirm = Confirm::new()
-            .with_prompt(format!(
-                "Are you sure you want to delete PrivateLink for subscription {}?",
-                params.subscription_id
-            ))
-            .default(false)
-            .interact()
-            .map_err(|e| anyhow::anyhow!("Failed to read confirmation: {}", e))?;
-
-        if !confirm {
-            println!("Delete operation cancelled");
-            return Ok(());
-        }
+    if !force
+        && !crate::commands::cloud::utils::confirm_action(&format!(
+            "Are you sure you want to delete PrivateLink for subscription {}?",
+            params.subscription_id
+        ))?
+    {
+        println!("Delete operation cancelled");
+        return Ok(());
     }
 
     let result = handler

@@ -235,20 +235,14 @@ pub async fn delete_subscription(
     }
 
     // Confirmation prompt unless --force is used
-    if !force {
-        use dialoguer::Confirm;
-        let confirm = Confirm::new()
-            .with_prompt(format!("Are you sure you want to delete subscription {}? This will delete all databases in the subscription!", id))
-            .default(false)
-            .interact()
-            .map_err(|e| RedisCtlError::InvalidInput {
-                message: format!("Failed to read confirmation: {}", e),
-            })?;
-
-        if !confirm {
-            println!("Subscription deletion cancelled");
-            return Ok(());
-        }
+    if !force
+        && !super::utils::confirm_action(&format!(
+            "Are you sure you want to delete subscription {}? This will delete all databases in the subscription!",
+            id
+        ))?
+    {
+        println!("Subscription deletion cancelled");
+        return Ok(());
     }
 
     // Use Layer 2 workflow when --wait is specified
@@ -903,24 +897,15 @@ pub async fn delete_aa_regions(
 ) -> CliResult<()> {
     // Confirmation prompt unless --force is used
     if !force {
-        use dialoguer::Confirm;
         let region_list = if regions.is_empty() {
             "specified regions".to_string()
         } else {
             regions.join(", ")
         };
-        let confirm = Confirm::new()
-            .with_prompt(format!(
-                "Are you sure you want to delete regions ({}) from Active-Active subscription {}?",
-                region_list, id
-            ))
-            .default(false)
-            .interact()
-            .map_err(|e| RedisCtlError::InvalidInput {
-                message: format!("Failed to read confirmation: {}", e),
-            })?;
-
-        if !confirm {
+        if !super::utils::confirm_action(&format!(
+            "Are you sure you want to delete regions ({}) from Active-Active subscription {}?",
+            region_list, id
+        ))? {
             println!("Region deletion cancelled");
             return Ok(());
         }
