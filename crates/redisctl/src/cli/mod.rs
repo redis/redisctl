@@ -98,26 +98,6 @@ pub struct Cli {
     #[arg(long, short, global = true, action = clap::ArgAction::Count)]
     pub verbose: u8,
 
-    /// Disable all resilience patterns (circuit breaker, retry, rate limiting)
-    #[arg(long, global = true)]
-    pub no_resilience: bool,
-
-    /// Disable circuit breaker only
-    #[arg(long, global = true)]
-    pub no_circuit_breaker: bool,
-
-    /// Disable retry only
-    #[arg(long, global = true)]
-    pub no_retry: bool,
-
-    /// Override retry attempts (implies --retry-enabled if set)
-    #[arg(long, global = true)]
-    pub retry_attempts: Option<u32>,
-
-    /// Set rate limit (requests per minute, implies --rate-limit-enabled if set)
-    #[arg(long, global = true)]
-    pub rate_limit: Option<u32>,
-
     #[command(subcommand)]
     pub command: Commands,
 }

@@ -18,10 +18,8 @@
 pub mod config;
 pub mod credential;
 pub mod error;
-pub mod resilience;
 
 // Re-export main types for convenience
 pub use config::{Config, DeploymentType, Profile, ProfileCredentials};
 pub use credential::{CredentialStorage, CredentialStore};
 pub use error::{ConfigError, Result};
-pub use resilience::ResilienceConfig;

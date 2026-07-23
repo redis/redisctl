@@ -47,9 +47,6 @@ pub struct Profile {
     /// Supports keyring: prefix for secure storage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files_api_key: Option<String>,
-    /// Resilience configuration for this profile
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resilience: Option<super::ResilienceConfig>,
     /// Tags for organizing profiles
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
@@ -691,7 +688,6 @@ mod tests {
                 api_url: "https://api.redislabs.com/v1".to_string(),
             },
             files_api_key: None,
-            resilience: None,
             tags: vec![],
         };
 
@@ -715,7 +711,6 @@ mod tests {
                 api_url: "url".to_string(),
             },
             files_api_key: None,
-            resilience: None,
             tags: vec![],
         };
 
@@ -852,7 +847,6 @@ api_url = "${REDIS_TEST_URL:-https://api.redislabs.com/v1}"
                 ca_cert: None,
             },
             files_api_key: None,
-            resilience: None,
             tags: vec![],
         };
         config.set_profile("ent1".to_string(), enterprise_profile);
@@ -884,7 +878,6 @@ api_url = "${REDIS_TEST_URL:-https://api.redislabs.com/v1}"
                 api_url: "https://api.redislabs.com/v1".to_string(),
             },
             files_api_key: None,
-            resilience: None,
             tags: vec![],
         };
         config.set_profile("cloud1".to_string(), cloud_profile);
@@ -916,7 +909,6 @@ api_url = "${REDIS_TEST_URL:-https://api.redislabs.com/v1}"
                 api_url: "https://api.redislabs.com/v1".to_string(),
             },
             files_api_key: None,
-            resilience: None,
             tags: vec![],
         };
         config.set_profile("cloud1".to_string(), cloud_profile.clone());
@@ -933,7 +925,6 @@ api_url = "${REDIS_TEST_URL:-https://api.redislabs.com/v1}"
                 ca_cert: None,
             },
             files_api_key: None,
-            resilience: None,
             tags: vec![],
         };
         config.set_profile("ent1".to_string(), enterprise_profile.clone());
@@ -974,7 +965,6 @@ api_url = "${REDIS_TEST_URL:-https://api.redislabs.com/v1}"
                 api_url: "https://api.redislabs.com/v1".to_string(),
             },
             files_api_key: None,
-            resilience: None,
             tags: vec![],
         };
         config.set_profile("cloud1".to_string(), cloud_profile);
@@ -1000,7 +990,6 @@ api_url = "${REDIS_TEST_URL:-https://api.redislabs.com/v1}"
                 database: 0,
             },
             files_api_key: None,
-            resilience: None,
             tags: vec![],
         };
 
@@ -1042,7 +1031,6 @@ api_url = "${REDIS_TEST_URL:-https://api.redislabs.com/v1}"
                 database: 0,
             },
             files_api_key: None,
-            resilience: None,
             tags: vec![],
         };
         config.set_profile("db1".to_string(), db_profile);
@@ -1091,7 +1079,6 @@ port = 12345
                 api_url: "https://api.redislabs.com/v1".to_string(),
             },
             files_api_key: None,
-            resilience: None,
             tags: vec![],
         }
     }
@@ -1107,7 +1094,6 @@ port = 12345
                 ca_cert: None,
             },
             files_api_key: None,
-            resilience: None,
             tags: vec![],
         }
     }
@@ -1201,7 +1187,6 @@ port = 12345
                     database: 0,
                 },
                 files_api_key: None,
-                resilience: None,
                 tags: vec![],
             },
         );

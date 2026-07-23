@@ -567,7 +567,6 @@ async fn handle_set(
                     api_url: api_url.to_string(),
                 },
                 files_api_key: None,
-                resilience: None,
                 tags: effective_tags.clone(),
             }
         }
@@ -629,7 +628,6 @@ async fn handle_set(
                     ca_cert: ca_cert.clone(),
                 },
                 files_api_key: None,
-                resilience: None,
                 tags: effective_tags.clone(),
             }
         }
@@ -687,7 +685,6 @@ async fn handle_set(
                     database: db.unwrap_or(0),
                 },
                 files_api_key: None,
-                resilience: None,
                 tags: effective_tags,
             }
         }
@@ -697,7 +694,6 @@ async fn handle_set(
     let profile = if let Some(existing) = conn_mgr.config.profiles.get(name) {
         redisctl_core::Profile {
             files_api_key: profile.files_api_key.or(existing.files_api_key.clone()),
-            resilience: profile.resilience.or(existing.resilience.clone()),
             ..profile
         }
     } else {
@@ -845,7 +841,6 @@ async fn handle_init(conn_mgr: &ConnectionManager) -> Result<(), RedisCtlError> 
                     api_url,
                 },
                 files_api_key: None,
-                resilience: None,
                 tags: vec![],
             }
         }
@@ -888,7 +883,6 @@ async fn handle_init(conn_mgr: &ConnectionManager) -> Result<(), RedisCtlError> 
                     ca_cert: None,
                 },
                 files_api_key: None,
-                resilience: None,
                 tags: vec![],
             }
         }
@@ -940,7 +934,6 @@ async fn handle_init(conn_mgr: &ConnectionManager) -> Result<(), RedisCtlError> 
                     database: 0,
                 },
                 files_api_key: None,
-                resilience: None,
                 tags: vec![],
             }
         }

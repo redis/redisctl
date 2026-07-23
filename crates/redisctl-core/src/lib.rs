@@ -80,7 +80,7 @@ pub use progress::{ProgressCallback, ProgressEvent, poll_task};
 // Re-export config types for convenience
 pub use config::{
     Config, ConfigError, CredentialStorage, CredentialStore, DeploymentType, Profile,
-    ProfileCredentials, ResilienceConfig,
+    ProfileCredentials,
 };
 
 // Re-export Layer 1 for convenience (but consumers can also import directly)

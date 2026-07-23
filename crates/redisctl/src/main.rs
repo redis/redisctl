@@ -104,8 +104,6 @@ const GLOBAL_VALUE_FLAGS: &[&str] = &[
     "-o",
     "--query",
     "-q",
-    "--retry-attempts",
-    "--rate-limit",
 ];
 
 /// Rewrite `args` to inject the platform prefix when omitted.
@@ -135,11 +133,7 @@ fn maybe_inject_prefix(args: Vec<String>) -> Vec<String> {
         }
 
         // Boolean flags (no value)
-        if arg == "--verbose"
-            || arg == "--no-resilience"
-            || arg == "--no-circuit-breaker"
-            || arg == "--no-retry"
-        {
+        if arg == "--verbose" {
             i += 1;
             continue;
         }
@@ -1586,10 +1580,8 @@ mod tests {
     #[test]
     fn inject_enterprise_with_multiple_flags() {
         assert_eq!(
-            maybe_inject_prefix(args(
-                "redisctl -p myent -o json --no-resilience cluster get"
-            )),
-            args("redisctl -p myent -o json --no-resilience enterprise cluster get")
+            maybe_inject_prefix(args("redisctl -p myent -o json --verbose cluster get")),
+            args("redisctl -p myent -o json --verbose enterprise cluster get")
         );
     }
 
