@@ -1,3 +1,15 @@
+//! # redisctl
+//!
+//! A unified command-line interface for managing Redis Cloud and Redis Enterprise
+//! deployments, plus direct Redis database access. Commands infer the platform from
+//! the active profile, or you can be explicit with the `cloud` / `enterprise` prefixes.
+//!
+//! redisctl is a binary, not a library. To interact with the Redis Cloud or Enterprise
+//! REST APIs programmatically, use the dedicated client crates instead:
+//! [`redis-cloud`](https://docs.rs/redis-cloud) and
+//! [`redis-enterprise`](https://docs.rs/redis-enterprise). See the
+//! [GitHub repository](https://github.com/redis/redisctl) for full documentation.
+
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser};
 use clap_complete::{generate, shells};
