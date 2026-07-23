@@ -73,9 +73,10 @@ impl CliDiagnostic {
 #[derive(Error, Debug)]
 pub enum RedisCtlError {
     #[error("Configuration error: {0}")]
-    Config(String),
-    #[error("Configuration error: {0}")]
     Configuration(String),
+
+    #[error("{0}")]
+    Other(String),
 
     #[error("Profile '{name}' not found")]
     ProfileNotFound { name: String },
@@ -235,6 +236,10 @@ impl RedisCtlError {
                 "Re-run with --force to skip the confirmation prompt".to_string(),
                 "Confirmation prompts require an interactive terminal".to_string(),
             ],
+            RedisCtlError::Configuration(_) => vec![
+                "Check the profile: redisctl profile show <name>".to_string(),
+                "Verify the config file syntax and required fields".to_string(),
+            ],
             _ => vec![],
         }
     }
@@ -329,7 +334,11 @@ impl From<std::io::Error> for RedisCtlError {
 
 impl From<anyhow::Error> for RedisCtlError {
     fn from(err: anyhow::Error) -> Self {
-        RedisCtlError::Config(err.to_string())
+        // {:#} renders the full anyhow context chain (message: cause: cause),
+        // and Other keeps the message as-is, instead of dropping the cause and
+        // mislabeling every anyhow-wrapped API, IO, or JSON error as a
+        // "Configuration error".
+        RedisCtlError::Other(format!("{:#}", err))
     }
 }
 
