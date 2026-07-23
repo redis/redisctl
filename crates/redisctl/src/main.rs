@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser};
 use clap_complete::{generate, shells};
 use redisctl_core::{Config, ConfigError, DeploymentType};
-use tracing::{debug, error, info, trace};
+use std::io::IsTerminal;
+use tracing::{debug, info, trace};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod cli;
@@ -430,7 +431,11 @@ fn init_tracing(verbose: u8) {
     tracing_subscriber::registry()
         .with(filter)
         .with(
+            // Log to stderr so structured output (-o json/yaml) on stdout is
+            // never corrupted, and only colorize when stderr is a terminal.
             tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stderr)
+                .with_ansi(std::io::stderr().is_terminal())
                 .with_target(true)
                 .with_thread_ids(false)
                 .with_thread_names(false)
@@ -535,7 +540,9 @@ async fn execute_command(cli: &Cli, conn_mgr: &ConnectionManager) -> Result<(), 
     let duration = start.elapsed();
     match &result {
         Ok(_) => info!("Command completed successfully in {:?}", duration),
-        Err(e) => error!("Command failed after {:?}: {}", duration, e),
+        // debug, not error: the stderr diagnostic (print_diagnostic) is the one
+        // user-facing failure message. Logging at error here duplicated it.
+        Err(e) => debug!("Command failed after {:?}: {}", duration, e),
     }
 
     result

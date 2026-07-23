@@ -114,6 +114,22 @@ fn destructive_with_force_skips_confirmation() {
         .stderr(predicate::str::contains("Confirmation required").not());
 }
 
+// A failing command must not write tracing output (ANSI escapes or the
+// duplicate "Command failed" line) to stdout, or it corrupts -o json for a
+// consumer piping the output. Regression for GAP-AUTOMATION-01 / UX-02.
+#[test]
+fn failing_command_keeps_stdout_clean_for_json() {
+    let temp_dir = TempDir::new().unwrap();
+    create_enterprise_profile(&temp_dir, "https://enterprise.invalid:9443").unwrap();
+
+    test_cmd(&temp_dir)
+        .args(["-o", "json", "enterprise", "database", "list"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("error:"));
+}
+
 #[tokio::test]
 async fn test_api_cloud_get_with_auth_headers() {
     let temp_dir = TempDir::new().unwrap();
