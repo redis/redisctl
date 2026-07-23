@@ -962,6 +962,680 @@ async fn test_get_fixed_plans_by_subscription_populated() {
 }
 
 // ============================================================================
+// Section 3C: Fixed subscription / plan reads — request shapes (#997)
+//
+// The fixed-plan catalog and subscription read tools had no coverage. Each test
+// pins the exact method + URL path the tool issues against the redis-cloud client
+// so a path regression in the handler surfaces as a mock miss ("Failed" in the
+// tool output) rather than a silent wrong call.
+// ============================================================================
+
+#[tokio::test]
+async fn test_list_fixed_subscriptions_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/fixed/subscriptions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "subscriptions": [
+                {"id": 101, "name": "essentials-a", "status": "active"}
+            ]
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::list_fixed_subscriptions(state);
+
+    let result = call_tool_json(&tool, json!({})).await;
+
+    let subs = result["subscriptions"]
+        .as_array()
+        .expect("subscriptions array must be present in list_fixed_subscriptions response");
+    assert_eq!(subs.len(), 1, "Expected 1 subscription, got: {result}");
+    assert_eq!(subs[0]["id"], 101, "Expected sub id=101, got: {result}");
+}
+
+#[tokio::test]
+async fn test_get_fixed_subscription_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/fixed/subscriptions/789"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": 789,
+            "name": "my-essentials",
+            "status": "active"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_fixed_subscription(state);
+
+    let result = call_tool_json(&tool, json!({"subscription_id": 789})).await;
+
+    assert_eq!(result["id"], 789, "Expected sub id=789, got: {result}");
+    assert_eq!(
+        result["name"], "my-essentials",
+        "Expected sub name, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_fixed_plan_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/fixed/plans/42"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": 42,
+            "name": "250MB",
+            "size": 250,
+            "sizeMeasurementUnit": "MB",
+            "provider": "AWS",
+            "region": "us-east-1"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_fixed_plan(state);
+
+    let result = call_tool_json(&tool, json!({"plan_id": 42})).await;
+
+    assert_eq!(result["id"], 42, "Expected plan id=42, got: {result}");
+    assert_eq!(result["name"], "250MB", "Expected plan name, got: {result}");
+}
+
+#[tokio::test]
+async fn test_get_fixed_redis_versions_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // Handler passes the subscription as a `subscriptionId` query param.
+    Mock::given(method("GET"))
+        .and(path("/fixed/redis-versions"))
+        .and(query_param("subscriptionId", "789"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "redisVersions": [
+                {"version": "7.2", "isDefault": true},
+                {"version": "7.4", "isDefault": false}
+            ]
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_fixed_redis_versions(state);
+
+    let result = call_tool_json(&tool, json!({"subscription_id": 789})).await;
+
+    let versions = result["redisVersions"]
+        .as_array()
+        .expect("redisVersions array must be present, got: {result}");
+    assert_eq!(versions.len(), 2, "Expected 2 versions, got: {result}");
+}
+
+// ============================================================================
+// Section 3D: Fixed database lifecycle — request shapes (#997)
+// ============================================================================
+
+#[tokio::test]
+async fn test_list_fixed_databases_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/fixed/subscriptions/123/databases"))
+        // The Essentials list response wraps databases under a single
+        // `subscription` object (Pro uses an array).
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "subscription": {
+                "subscriptionId": 123,
+                "numberOfDatabases": 1,
+                "databases": [
+                    {"databaseId": 1, "name": "demo-db"}
+                ]
+            }
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::list_fixed_databases(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "GET /fixed/subscriptions/123/databases should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_fixed_database_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/fixed/subscriptions/123/databases/1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "databaseId": 1,
+            "name": "demo-db",
+            "status": "active"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_fixed_database(state);
+
+    let result = call_tool_json(&tool, json!({"subscription_id": 123, "database_id": 1})).await;
+
+    assert_eq!(
+        result["databaseId"], 1,
+        "Expected databaseId=1, got: {result}"
+    );
+    assert_eq!(result["name"], "demo-db", "Expected db name, got: {result}");
+}
+
+#[tokio::test]
+async fn test_create_fixed_database_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // FixedDatabaseCreateRequest is camelCase; `name` is the only required field.
+    Mock::given(method("POST"))
+        .and(path("/fixed/subscriptions/123/databases"))
+        .and(body_partial_json(json!({"name": "demo-db"})))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-create-fixed-db",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::create_fixed_database(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "name": "demo-db"
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("task-create-fixed-db") || result.contains("taskId"),
+        "Expected task response for create_fixed_database, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_fixed_database_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/fixed/subscriptions/123/databases/1"))
+        .and(body_partial_json(json!({"name": "renamed-db"})))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-update-fixed-db",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::update_fixed_database(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "database_id": 1,
+            "name": "renamed-db"
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("task-update-fixed-db") || result.contains("taskId"),
+        "Expected task response for update_fixed_database, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_delete_fixed_database_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/fixed/subscriptions/123/databases/1"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-delete-fixed-db",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::delete_fixed_database(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123, "database_id": 1})).await;
+
+    assert!(
+        result.contains("task-delete-fixed-db") || result.contains("taskId"),
+        "Expected task response for DELETE fixed database, got: {result}"
+    );
+}
+
+// ============================================================================
+// Section 3E: Fixed database operations — request shapes (#997)
+// ============================================================================
+
+#[tokio::test]
+async fn test_get_fixed_database_backup_status_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/fixed/subscriptions/123/databases/1/backup"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "taskId": "task-backup-status",
+            "status": "processing-completed"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_fixed_database_backup_status(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123, "database_id": 1})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "GET .../backup should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_backup_fixed_database_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/fixed/subscriptions/123/databases/1/backup"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-backup-fixed-db",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::backup_fixed_database(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123, "database_id": 1})).await;
+
+    assert!(
+        result.contains("task-backup-fixed-db") || result.contains("taskId"),
+        "Expected task response for backup_fixed_database, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_fixed_database_import_status_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/fixed/subscriptions/123/databases/1/import"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "taskId": "task-import-status",
+            "status": "processing-completed"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_fixed_database_import_status(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123, "database_id": 1})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "GET .../import should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_import_fixed_database_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // FixedDatabaseImportRequest is camelCase: source_type -> "sourceType",
+    // import_from_uri -> "importFromUri".
+    Mock::given(method("POST"))
+        .and(path("/fixed/subscriptions/123/databases/1/import"))
+        .and(body_partial_json(json!({
+            "sourceType": "http",
+            "importFromUri": ["https://example.com/dump.rdb"]
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-import-fixed-db",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::import_fixed_database(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "database_id": 1,
+            "source_type": "http",
+            "import_from_uri": ["https://example.com/dump.rdb"]
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("task-import-fixed-db") || result.contains("taskId"),
+        "Expected task response for import_fixed_database, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_fixed_database_slow_log_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/fixed/subscriptions/123/databases/1/slow-log"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "entries": []
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_fixed_database_slow_log(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123, "database_id": 1})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "GET .../slow-log should have matched, got: {result}"
+    );
+}
+
+// ============================================================================
+// Section 3F: Fixed database tags — request shapes (#997)
+// ============================================================================
+
+#[tokio::test]
+async fn test_get_fixed_database_tags_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/fixed/subscriptions/123/databases/1/tags"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "tags": [
+                {"key": "env", "value": "prod"}
+            ]
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_fixed_database_tags(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123, "database_id": 1})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "GET .../tags should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_fixed_database_tag_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/fixed/subscriptions/123/databases/1/tags"))
+        .and(body_partial_json(json!({"key": "env", "value": "prod"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "key": "env",
+            "value": "prod"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::create_fixed_database_tag(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "database_id": 1,
+            "key": "env",
+            "value": "prod"
+        }),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "POST .../tags should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_fixed_database_tag_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // update_tag targets the tag key in the path; body carries the new value.
+    Mock::given(method("PUT"))
+        .and(path("/fixed/subscriptions/123/databases/1/tags/env"))
+        .and(body_partial_json(json!({"value": "staging"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "key": "env",
+            "value": "staging"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::update_fixed_database_tag(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "database_id": 1,
+            "tag_key": "env",
+            "value": "staging"
+        }),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "PUT .../tags/env should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_delete_fixed_database_tag_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/fixed/subscriptions/123/databases/1/tags/env"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::delete_fixed_database_tag(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "database_id": 1,
+            "tag_key": "env"
+        }),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "DELETE .../tags/env should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_fixed_database_tags_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // update_tags replaces the whole tag set with a PUT to .../tags.
+    Mock::given(method("PUT"))
+        .and(path("/fixed/subscriptions/123/databases/1/tags"))
+        .and(body_partial_json(json!({
+            "tags": [{"key": "env", "value": "prod"}]
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "tags": [{"key": "env", "value": "prod"}]
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::update_fixed_database_tags(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "database_id": 1,
+            "tags": [{"key": "env", "value": "prod"}]
+        }),
+    )
+    .await;
+
+    assert!(
+        !result.contains("Failed"),
+        "PUT .../tags (replace) should have matched, got: {result}"
+    );
+}
+
+// ============================================================================
+// Section 3G: Fixed database Redis-version upgrade — request shapes (#997)
+// ============================================================================
+
+#[tokio::test]
+async fn test_get_fixed_database_upgrade_versions_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path(
+            "/fixed/subscriptions/123/databases/1/available-target-versions",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "targetVersions": ["7.4"]
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_fixed_database_upgrade_versions(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123, "database_id": 1})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "GET .../available-target-versions should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_fixed_database_upgrade_status_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/fixed/subscriptions/123/databases/1/upgrade"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": "processing-completed"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = Arc::new(AppState::with_cloud_client(client));
+    let tool = cloud::get_fixed_database_upgrade_status(state);
+
+    let result = call_tool_text(&tool, json!({"subscription_id": 123, "database_id": 1})).await;
+
+    assert!(
+        !result.contains("Failed"),
+        "GET .../upgrade (status) should have matched, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_upgrade_fixed_database_redis_version_request_shape() {
+    let server = MockCloudServer::start().await;
+
+    // The handler builds the body as {"targetVersion": <version>} and POSTs it.
+    Mock::given(method("POST"))
+        .and(path("/fixed/subscriptions/123/databases/1/upgrade"))
+        .and(body_partial_json(json!({"targetVersion": "7.4"})))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "taskId": "task-upgrade-fixed-db",
+            "status": "processing-in-progress"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let client = server.client();
+    let state = full_policy_state(client);
+    let tool = cloud::upgrade_fixed_database_redis_version(state);
+
+    let result = call_tool_text(
+        &tool,
+        json!({
+            "subscription_id": 123,
+            "database_id": 1,
+            "target_version": "7.4"
+        }),
+    )
+    .await;
+
+    assert!(
+        result.contains("task-upgrade-fixed-db") || result.contains("taskId"),
+        "Expected task response for upgrade_fixed_database_redis_version, got: {result}"
+    );
+}
+
+// ============================================================================
 // Section 4: Account / ACL — strict request shapes
 // ============================================================================
 
