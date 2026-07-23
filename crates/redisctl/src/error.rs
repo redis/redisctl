@@ -245,7 +245,62 @@ impl RedisCtlError {
     }
 
     /// Print a cargo-style diagnostic to stderr using colored formatting.
-    pub fn print_diagnostic(&self) {
+    /// A stable, machine-readable error code for the -o json/yaml envelope.
+    /// Exhaustive on purpose: a new variant must declare its code.
+    pub fn code(&self) -> &'static str {
+        match self {
+            RedisCtlError::Configuration(_) => "configuration",
+            RedisCtlError::Other(_) => "error",
+            RedisCtlError::ProfileNotFound { .. } => "profile_not_found",
+            RedisCtlError::ProfileTypeMismatch { .. } => "profile_type_mismatch",
+            RedisCtlError::NoProfileConfigured => "no_profile_configured",
+            RedisCtlError::MissingCredentials { .. } => "missing_credentials",
+            RedisCtlError::AuthenticationFailed { .. } => "authentication_failed",
+            RedisCtlError::ApiError { .. } => "api_error",
+            RedisCtlError::InvalidInput { .. } => "invalid_input",
+            RedisCtlError::Cancelled { .. } => "cancelled",
+            RedisCtlError::UnsupportedDeploymentType { .. } => "unsupported_deployment_type",
+            RedisCtlError::FileError { .. } => "file_error",
+            RedisCtlError::ConnectionError { .. } => "connection_error",
+            RedisCtlError::Timeout { .. } => "timeout",
+            RedisCtlError::OutputError { .. } => "output_error",
+        }
+    }
+
+    /// The structured error object emitted under -o json/-o yaml.
+    fn envelope(&self) -> serde_json::Value {
+        serde_json::json!({
+            "error": {
+                "code": self.code(),
+                "message": self.to_string(),
+                "tips": self.suggestions(),
+            }
+        })
+    }
+
+    /// Print an error to stderr. Under -o json/-o yaml this is a structured
+    /// envelope a script can parse; otherwise a cargo-style human diagnostic.
+    /// Always stderr, so the -o json success payload on stdout stays clean.
+    pub fn print_diagnostic(&self, format: crate::cli::OutputFormat) {
+        use crate::cli::OutputFormat;
+        match format {
+            OutputFormat::Json => {
+                let envelope = self.envelope();
+                eprintln!(
+                    "{}",
+                    serde_json::to_string_pretty(&envelope)
+                        .unwrap_or_else(|_| envelope.to_string())
+                );
+            }
+            OutputFormat::Yaml => match serde_yaml::to_string(&self.envelope()) {
+                Ok(s) => eprint!("{}", s),
+                Err(_) => self.print_human_diagnostic(),
+            },
+            OutputFormat::Auto | OutputFormat::Table => self.print_human_diagnostic(),
+        }
+    }
+
+    fn print_human_diagnostic(&self) {
         let mut diag = CliDiagnostic::error(&format!("{}", self));
 
         for suggestion in self.suggestions() {

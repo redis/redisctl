@@ -407,7 +407,7 @@ async fn main() -> Result<()> {
 
     // Execute command
     if let Err(e) = execute_command(&cli, &conn_mgr).await {
-        e.print_diagnostic();
+        e.print_diagnostic(cli.output);
         std::process::exit(1);
     }
 
