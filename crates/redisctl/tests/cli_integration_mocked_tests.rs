@@ -130,6 +130,39 @@ fn failing_command_keeps_stdout_clean_for_json() {
         .stderr(predicate::str::contains("error:"));
 }
 
+// Under -o json, a failure emits a parseable error envelope on stderr with a
+// stable code, and stdout stays empty. Regression for GAP-AUTOMATION-03.
+#[test]
+fn json_output_emits_structured_error_envelope() {
+    let temp_dir = TempDir::new().unwrap();
+    // An enterprise profile used with a cloud command fails with a type
+    // mismatch before any network call.
+    create_enterprise_profile(&temp_dir, "https://enterprise.invalid:9443").unwrap();
+
+    let output = test_cmd(&temp_dir)
+        .args([
+            "--profile",
+            "test",
+            "-o",
+            "json",
+            "cloud",
+            "database",
+            "list",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .get_output()
+        .clone();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let v: serde_json::Value =
+        serde_json::from_str(stderr.trim()).expect("stderr under -o json must be valid JSON");
+    assert_eq!(v["error"]["code"], "profile_type_mismatch");
+    assert!(v["error"]["message"].is_string());
+    assert!(v["error"]["tips"].is_array());
+}
+
 #[tokio::test]
 async fn test_api_cloud_get_with_auth_headers() {
     let temp_dir = TempDir::new().unwrap();
