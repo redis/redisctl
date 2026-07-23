@@ -82,7 +82,11 @@ jobs:
           shared-key: "test-${{ matrix.package }}"
 
       - name: Run unit tests
-        run: cargo test --package ${{ matrix.package }} --lib --all-features
+        # --bins includes tests compiled into the binary targets (redisctl and
+        # redisctl-mcp main.rs), which hold the MCP safety-tier registration
+        # tests. Without it those only run in build-platforms, which ci-status
+        # does not check, so a green CI Status could hide a tier regression.
+        run: cargo test --package ${{ matrix.package }} --lib --bins --all-features
 
   # Integration tests
   test-integration:
