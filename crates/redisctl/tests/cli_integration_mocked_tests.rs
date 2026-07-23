@@ -63,6 +63,41 @@ default_enterprise = "test"
     fs::write(config_path, config_content)
 }
 
+// A destructive command with no TTY and without --force must fail with a
+// non-zero exit rather than silently exit 0 having done nothing. Otherwise a
+// non-interactive `set -e` script would proceed believing the resource was
+// deleted. confirm_action runs before the client is built, so no mock server
+// is needed. Regression for the confirmation-prompt behavior (GAP-AUTOMATION-04).
+#[test]
+fn non_interactive_destructive_without_force_exits_nonzero() {
+    let temp_dir = TempDir::new().unwrap();
+    create_enterprise_profile(&temp_dir, "https://enterprise.invalid:9443").unwrap();
+
+    test_cmd(&temp_dir)
+        .args(["enterprise", "user", "delete", "5"])
+        .write_stdin("")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Confirmation required"))
+        .stderr(predicate::str::contains("--force"));
+}
+
+// With --force the confirmation is skipped: the command proceeds (and here
+// fails later on the unreachable host), so it must not report a confirmation
+// error.
+#[test]
+fn destructive_with_force_skips_confirmation() {
+    let temp_dir = TempDir::new().unwrap();
+    create_enterprise_profile(&temp_dir, "https://enterprise.invalid:9443").unwrap();
+
+    test_cmd(&temp_dir)
+        .args(["enterprise", "user", "delete", "5", "--force"])
+        .write_stdin("")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Confirmation required").not());
+}
+
 #[tokio::test]
 async fn test_api_cloud_get_with_auth_headers() {
     let temp_dir = TempDir::new().unwrap();

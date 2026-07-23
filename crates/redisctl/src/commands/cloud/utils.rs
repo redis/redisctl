@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use colored::Colorize;
 use serde_json::Value;
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 use tabled::Tabled;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -188,15 +188,25 @@ pub fn provider_short_name(provider: &str) -> &str {
 
 pub use crate::output::{apply_jmespath, handle_output, print_formatted_output, resolve_auto};
 
-/// Prompts the user for confirmation
+/// Prompt to confirm a destructive action. Shared by all cloud and enterprise
+/// commands (enterprise re-exports this one).
+///
+/// Returns `Ok(true)` when confirmed and `Ok(false)` when the user
+/// interactively declines. When stdin is not a terminal there is no way to
+/// answer, so this returns `Err(RedisCtlError::Cancelled)` rather than a value:
+/// a non-interactive run without `--force` must never be mistaken for success
+/// and exit 0.
 pub fn confirm_action(message: &str) -> CliResult<bool> {
-    print!("Are you sure you want to {}? [y/N]: ", message);
-    io::stdout().flush()?;
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-
-    Ok(input.trim().eq_ignore_ascii_case("y") || input.trim().eq_ignore_ascii_case("yes"))
+    if !io::stdin().is_terminal() {
+        return Err(RedisCtlError::Cancelled {
+            prompt: message.to_string(),
+        });
+    }
+    Ok(dialoguer::Confirm::new()
+        .with_prompt(message)
+        .default(false)
+        .interact()
+        .context("Failed to read confirmation")?)
 }
 
 /// Read file input, supporting @filename notation
