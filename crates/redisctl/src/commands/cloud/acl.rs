@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::cli::{CloudAclCommands, OutputFormat};
 use crate::connection::ConnectionManager;
 use crate::error::Result as CliResult;

@@ -91,7 +91,6 @@ pub enum CrdbTaskCommands {
 }
 
 impl CrdbTaskCommands {
-    #[allow(dead_code)]
     pub async fn execute(
         &self,
         conn_mgr: &ConnectionManager,
@@ -346,7 +345,6 @@ impl CrdbTaskCommands {
     }
 }
 
-#[allow(dead_code)]
 pub async fn handle_crdb_task_command(
     conn_mgr: &ConnectionManager,
     profile_name: Option<&str>,

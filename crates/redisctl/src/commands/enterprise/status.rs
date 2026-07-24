@@ -3,8 +3,6 @@
 //! Provides a single command to view cluster, nodes, databases, and shards status,
 //! similar to `rladmin status extra all`.
 
-#![allow(dead_code)]
-
 use crate::cli::OutputFormat;
 use crate::connection::ConnectionManager;
 use crate::error::Result as CliResult;

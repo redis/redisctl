@@ -66,7 +66,17 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        package: [redisctl-core, redisctl, redisctl-mcp]
+        # Target flags are per-package: redisctl is bin-only (no lib target),
+        # so --lib would error there, while redisctl-core has no bin. --bins
+        # runs the tests in main.rs (the MCP safety-tier registration tests),
+        # which ci-status would otherwise not gate.
+        include:
+          - package: redisctl-core
+            targets: "--lib"
+          - package: redisctl
+            targets: "--bins"
+          - package: redisctl-mcp
+            targets: "--lib --bins"
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
@@ -82,11 +92,7 @@ jobs:
           shared-key: "test-${{ matrix.package }}"
 
       - name: Run unit tests
-        # --bins includes tests compiled into the binary targets (redisctl and
-        # redisctl-mcp main.rs), which hold the MCP safety-tier registration
-        # tests. Without it those only run in build-platforms, which ci-status
-        # does not check, so a green CI Status could hide a tier regression.
-        run: cargo test --package ${{ matrix.package }} --lib --bins --all-features
+        run: cargo test --package ${{ matrix.package }} ${{ matrix.targets }} --all-features
 
   # Integration tests
   test-integration:

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::cli::OutputFormat;
 use crate::commands::cloud::async_utils::{AsyncOperationArgs, handle_async_response};
 use crate::commands::cloud::utils::{confirm_action, handle_output, print_formatted_output};

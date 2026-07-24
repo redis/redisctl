@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 mod optimizer;
 #[cfg(feature = "upload")]
 mod upload;

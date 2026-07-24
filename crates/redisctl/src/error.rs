@@ -2,8 +2,6 @@
 //!
 //! Defines structured error types using thiserror for better error handling and user experience.
 
-#![allow(dead_code)] // Foundation code - will be used in future PRs
-
 use colored::Colorize;
 use thiserror::Error;
 
@@ -89,9 +87,14 @@ pub enum RedisCtlError {
         available_profiles: Vec<String>,
     },
 
+    // Intended error types that no code path constructs yet: the CLI currently
+    // reports these conditions with generic errors instead. Kept (with their
+    // messages and suggestions) to be wired up rather than cut; see #1049.
+    #[allow(dead_code)]
     #[error("No profile configured. Use 'redisctl profile set' to configure a profile.")]
     NoProfileConfigured,
 
+    #[allow(dead_code)]
     #[error("Missing credentials for profile '{name}': {missing_fields}")]
     MissingCredentials {
         name: String,
@@ -115,6 +118,7 @@ pub enum RedisCtlError {
     )]
     Cancelled { prompt: String },
 
+    #[allow(dead_code)] // intended but not yet produced by any code path; see #1049
     #[error("Command not supported for deployment type '{deployment_type}'")]
     UnsupportedDeploymentType { deployment_type: String },
     #[error("File error for '{path}': {message}")]

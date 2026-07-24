@@ -1,7 +1,5 @@
 //! Cloud database command implementations
 
-#![allow(dead_code)] // Used by binary target
-
 use super::utils::DetailRow;
 use super::utils::*;
 use crate::cli::{CloudDatabaseCommands, OutputFormat};
@@ -530,33 +528,6 @@ fn print_databases_table(data: &Value) -> CliResult<()> {
 
     output_with_pager(&table.to_string());
     Ok(())
-}
-
-/// Parse database ID into subscription and database IDs
-fn parse_database_id(id: &str) -> CliResult<(u32, u32)> {
-    let parts: Vec<&str> = id.split(':').collect();
-    if parts.len() != 2 {
-        return Err(RedisCtlError::InvalidInput {
-            message: format!(
-                "Invalid database ID format: {}. Expected format: subscription_id:database_id",
-                id
-            ),
-        });
-    }
-
-    let subscription_id = parts[0]
-        .parse::<u32>()
-        .map_err(|_| RedisCtlError::InvalidInput {
-            message: format!("Invalid subscription ID: {}", parts[0]),
-        })?;
-
-    let database_id = parts[1]
-        .parse::<u32>()
-        .map_err(|_| RedisCtlError::InvalidInput {
-            message: format!("Invalid database ID: {}", parts[1]),
-        })?;
-
-    Ok((subscription_id, database_id))
 }
 
 /// Format database memory

@@ -1,7 +1,5 @@
 //! Fixed subscription command implementations
 
-#![allow(dead_code)]
-
 use crate::cli::{CloudFixedSubscriptionCommands, OutputFormat};
 use crate::commands::cloud::async_utils::handle_async_response;
 use crate::commands::cloud::utils::{confirm_action, handle_output, print_formatted_output};

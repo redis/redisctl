@@ -1,7 +1,5 @@
 //! AWS PrivateLink command implementations
 
-#![allow(dead_code)]
-
 use super::ConnectivityOperationParams;
 use crate::cli::{OutputFormat, PrivateLinkCommands};
 use crate::commands::cloud::async_utils::handle_async_response;

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::cli::OutputFormat;
 use crate::commands::enterprise::utils;
 use crate::connection::ConnectionManager;

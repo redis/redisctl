@@ -9,7 +9,10 @@ use tracing::{debug, info, trace};
 const REDISCTL_USER_AGENT: &str = concat!("redisctl/", env!("CARGO_PKG_VERSION"));
 
 /// Resolved Cloud connection details (without creating an HTTP client)
-#[allow(dead_code)] // Used by binary target
+// The credential fields are populated but not yet read by the curl builder in
+// commands/curl.rs, so `api ... --curl` output omits its auth headers. Kept
+// pending that fix (see #1049); do not delete the fields without fixing curl.
+#[allow(dead_code)]
 pub struct CloudConnectionInfo {
     pub base_url: String,
     pub api_key: String,
@@ -18,7 +21,9 @@ pub struct CloudConnectionInfo {
 }
 
 /// Resolved Enterprise connection details (without creating an HTTP client)
-#[allow(dead_code)] // Used by binary target
+// See CloudConnectionInfo: credential fields populated but not read by the curl
+// builder, so `api ... --curl` output omits auth. Kept pending fix (see #1049).
+#[allow(dead_code)]
 pub struct EnterpriseConnectionInfo {
     pub base_url: String,
     pub username: String,
@@ -29,7 +34,6 @@ pub struct EnterpriseConnectionInfo {
 }
 
 /// Connection manager for creating authenticated clients
-#[allow(dead_code)] // Used by binary target
 #[derive(Clone)]
 pub struct ConnectionManager {
     pub config: Config,
@@ -38,7 +42,6 @@ pub struct ConnectionManager {
 
 impl ConnectionManager {
     /// Create a new connection manager with the given configuration
-    #[allow(dead_code)] // Used by binary target
     pub fn new(config: Config) -> Self {
         Self {
             config,
@@ -47,7 +50,6 @@ impl ConnectionManager {
     }
 
     /// Create a new connection manager with a custom config path
-    #[allow(dead_code)] // Used by binary target
     pub fn with_config_path(config: Config, config_path: Option<std::path::PathBuf>) -> Self {
         Self {
             config,
@@ -55,24 +57,10 @@ impl ConnectionManager {
         }
     }
 
-    /// Save the configuration to the appropriate location
-    #[allow(dead_code)] // Used by binary target
-    pub fn save_config(&self) -> CliResult<()> {
-        if let Some(ref path) = self.config_path {
-            self.config
-                .save_to_path(path)
-                .context("Failed to save configuration")?;
-        } else {
-            self.config.save().context("Failed to save configuration")?;
-        }
-        Ok(())
-    }
-
     /// Resolve Cloud connection info without creating an HTTP client.
     ///
     /// Follows the same credential resolution logic as `create_cloud_client`:
     /// environment variables override profile config, and --config-file disables env vars.
-    #[allow(dead_code)] // Used by binary target
     pub fn resolve_cloud_connection(
         &self,
         profile_name: Option<&str>,
@@ -91,7 +79,6 @@ impl ConnectionManager {
     /// When --config-file is explicitly specified, environment variables are ignored to provide
     /// true configuration isolation. This allows testing with isolated configs and follows the
     /// principle of "explicit wins" (CLI args > env vars > defaults).
-    #[allow(dead_code)] // Used by binary target
     pub async fn create_cloud_client(
         &self,
         profile_name: Option<&str>,
@@ -235,7 +222,6 @@ impl ConnectionManager {
     ///
     /// Follows the same credential resolution logic as `create_enterprise_client`:
     /// environment variables override profile config, and --config-file disables env vars.
-    #[allow(dead_code)] // Used by binary target
     pub fn resolve_enterprise_connection(
         &self,
         profile_name: Option<&str>,
@@ -257,7 +243,6 @@ impl ConnectionManager {
     /// When --config-file is explicitly specified, environment variables are ignored to provide
     /// true configuration isolation. This allows testing with isolated configs and follows the
     /// principle of "explicit wins" (CLI args > env vars > defaults).
-    #[allow(dead_code)] // Used by binary target
     pub async fn create_enterprise_client(
         &self,
         profile_name: Option<&str>,

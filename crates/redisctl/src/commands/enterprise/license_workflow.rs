@@ -47,7 +47,6 @@ pub enum LicenseWorkflowCommands {
 }
 
 impl LicenseWorkflowCommands {
-    #[allow(dead_code)]
     pub async fn execute(
         &self,
         config: &Config,

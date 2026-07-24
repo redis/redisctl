@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::cli::OutputFormat;
 use crate::commands::cloud::async_utils::{AsyncOperationArgs, handle_async_response};
 use crate::connection::ConnectionManager;
@@ -99,44 +97,6 @@ fn print_redis_rules_table(data: &Value) -> CliResult<()> {
     Ok(())
 }
 
-fn print_redis_rule_detail(data: &Value) -> CliResult<()> {
-    let mut rows = Vec::new();
-
-    let fields = [
-        ("ID", "id"),
-        ("Name", "name"),
-        ("ACL", "acl"),
-        ("Default", "isDefault"),
-        ("Status", "status"),
-    ];
-
-    for (label, key) in &fields {
-        if let Some(val) = data.get(*key) {
-            let display = match val {
-                Value::Null => continue,
-                Value::String(s) => s.clone(),
-                Value::Bool(b) => b.to_string(),
-                Value::Number(n) => n.to_string(),
-                _ => val.to_string(),
-            };
-            rows.push(DetailRow {
-                field: label.to_string(),
-                value: display,
-            });
-        }
-    }
-
-    if rows.is_empty() {
-        println!("No Redis rule information available");
-        return Ok(());
-    }
-
-    let mut table = Table::new(&rows);
-    table.with(Style::blank());
-    output_with_pager(&table.to_string());
-    Ok(())
-}
-
 fn print_acl_roles_table(data: &Value) -> CliResult<()> {
     let items = match extract_items(data, "roles") {
         Some(arr) if !arr.is_empty() => arr,
@@ -168,64 +128,6 @@ fn print_acl_roles_table(data: &Value) -> CliResult<()> {
             }
         })
         .collect();
-
-    let mut table = Table::new(&rows);
-    table.with(Style::blank());
-    output_with_pager(&table.to_string());
-    Ok(())
-}
-
-fn print_acl_role_detail(data: &Value) -> CliResult<()> {
-    let mut rows = Vec::new();
-
-    let fields = [("ID", "id"), ("Name", "name"), ("Status", "status")];
-
-    for (label, key) in &fields {
-        if let Some(val) = data.get(*key) {
-            let display = match val {
-                Value::Null => continue,
-                Value::String(s) => s.clone(),
-                Value::Bool(b) => b.to_string(),
-                Value::Number(n) => n.to_string(),
-                _ => val.to_string(),
-            };
-            rows.push(DetailRow {
-                field: label.to_string(),
-                value: display,
-            });
-        }
-    }
-
-    if let Some(rules) = data.get("redisRules").and_then(|v| v.as_array()) {
-        let names: Vec<String> = rules
-            .iter()
-            .filter_map(|r| r.get("ruleName").and_then(|n| n.as_str()).map(String::from))
-            .collect();
-        if !names.is_empty() {
-            rows.push(DetailRow {
-                field: "Redis Rules".to_string(),
-                value: names.join(", "),
-            });
-        }
-    }
-
-    if let Some(users) = data.get("users").and_then(|v| v.as_array()) {
-        let names: Vec<String> = users
-            .iter()
-            .filter_map(|u| u.get("name").and_then(|n| n.as_str()).map(String::from))
-            .collect();
-        if !names.is_empty() {
-            rows.push(DetailRow {
-                field: "Users".to_string(),
-                value: names.join(", "),
-            });
-        }
-    }
-
-    if rows.is_empty() {
-        println!("No ACL role information available");
-        return Ok(());
-    }
 
     let mut table = Table::new(&rows);
     table.with(Style::blank());

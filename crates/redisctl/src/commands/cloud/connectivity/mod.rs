@@ -1,7 +1,5 @@
 //! Cloud connectivity command implementations
 
-#![allow(dead_code)]
-
 pub mod private_link;
 pub mod psc;
 pub mod tgw;

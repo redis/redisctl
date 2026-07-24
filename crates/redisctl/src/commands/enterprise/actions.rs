@@ -59,7 +59,6 @@ pub enum ActionCommands {
 }
 
 impl ActionCommands {
-    #[allow(dead_code)]
     pub async fn execute(
         &self,
         conn_mgr: &ConnectionManager,
@@ -239,7 +238,6 @@ impl ActionCommands {
     }
 }
 
-#[allow(dead_code)]
 pub async fn handle_action_command(
     conn_mgr: &ConnectionManager,
     profile_name: Option<&str>,

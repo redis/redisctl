@@ -4,8 +4,6 @@
 //! support package uploads. Keys can be stored in the system keyring (secure)
 //! or in the config file (plaintext).
 
-#![allow(dead_code)] // Functions are called from main.rs router
-
 use anyhow::{Context, Result};
 use redisctl_core::Config;
 

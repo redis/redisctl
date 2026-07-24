@@ -126,7 +126,6 @@ pub enum JobSchedulerCommands {
 }
 
 impl JobSchedulerCommands {
-    #[allow(dead_code)]
     pub async fn execute(
         &self,
         conn_mgr: &ConnectionManager,
@@ -350,7 +349,6 @@ impl JobSchedulerCommands {
     }
 }
 
-#[allow(dead_code)]
 pub async fn handle_job_scheduler_command(
     conn_mgr: &ConnectionManager,
     profile_name: Option<&str>,

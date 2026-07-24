@@ -4,7 +4,6 @@ use clap::Subcommand;
 
 use crate::{cli::OutputFormat, connection::ConnectionManager, error::Result as CliResult};
 
-#[allow(dead_code)]
 pub async fn handle_endpoint_command(
     conn_mgr: &ConnectionManager,
     profile_name: Option<&str>,
@@ -30,7 +29,6 @@ pub enum EndpointCommands {
 }
 
 impl EndpointCommands {
-    #[allow(dead_code)]
     pub async fn execute(
         &self,
         conn_mgr: &ConnectionManager,
@@ -42,7 +40,6 @@ impl EndpointCommands {
     }
 }
 
-#[allow(dead_code)]
 async fn handle_endpoint_command_impl(
     conn_mgr: &ConnectionManager,
     profile_name: Option<&str>,

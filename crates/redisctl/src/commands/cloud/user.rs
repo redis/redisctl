@@ -1,7 +1,5 @@
 //! Cloud user command implementations
 
-#![allow(dead_code)] // Used by binary target
-
 use super::async_utils::{AsyncOperationArgs, handle_async_response};
 use super::utils::DetailRow;
 use super::utils::*;

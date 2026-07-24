@@ -1,7 +1,5 @@
 //! Cluster command router for Enterprise
 
-#![allow(dead_code)]
-
 use crate::cli::{EnterpriseClusterCommands, OutputFormat};
 use crate::connection::ConnectionManager;
 use crate::error::Result as CliResult;

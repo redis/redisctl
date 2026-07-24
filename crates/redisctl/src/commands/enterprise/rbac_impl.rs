@@ -1,12 +1,9 @@
 //! RBAC command implementations for Redis Enterprise
 
-#![allow(dead_code)]
-
 use crate::cli::OutputFormat;
 use crate::connection::ConnectionManager;
 use crate::error::{RedisCtlError, Result as CliResult};
 use anyhow::Context;
-use redis_enterprise::ldap_mappings::LdapMappingHandler;
 use redis_enterprise::redis_acls::{CreateRedisAclRequest, RedisAclHandler};
 use redis_enterprise::roles::RolesHandler;
 use redis_enterprise::users::{AuthRequest, PasswordSet, UserHandler};
@@ -827,129 +824,6 @@ pub async fn test_acl(
         });
 
     let data = handle_output(result, output_format, query)?;
-    print_formatted_output(data, output_format)?;
-    Ok(())
-}
-
-// ============================================================================
-// LDAP Integration Commands
-// ============================================================================
-
-pub async fn get_ldap_config(
-    conn_mgr: &ConnectionManager,
-    profile_name: Option<&str>,
-    output_format: OutputFormat,
-    query: Option<&str>,
-) -> CliResult<()> {
-    let client = conn_mgr.create_enterprise_client(profile_name).await?;
-
-    let config = client.get_raw("/v1/cluster/ldap").await?;
-    let data = handle_output(config, output_format, query)?;
-    print_formatted_output(data, output_format)?;
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn update_ldap_config(
-    conn_mgr: &ConnectionManager,
-    profile_name: Option<&str>,
-    enabled: Option<bool>,
-    server_url: Option<&str>,
-    bind_dn: Option<&str>,
-    bind_password: Option<&str>,
-    base_dn: Option<&str>,
-    user_filter: Option<&str>,
-    data: Option<&str>,
-    output_format: OutputFormat,
-    query: Option<&str>,
-) -> CliResult<()> {
-    let client = conn_mgr.create_enterprise_client(profile_name).await?;
-
-    // Start with JSON from --data if provided, otherwise empty object
-    let mut ldap_data = if let Some(data_str) = data {
-        read_json_data(data_str).context("Failed to parse LDAP data")?
-    } else {
-        serde_json::json!({})
-    };
-
-    let ldap_obj = ldap_data.as_object_mut().unwrap();
-
-    // CLI parameters override JSON values
-    if let Some(en) = enabled {
-        ldap_obj.insert("enabled".to_string(), serde_json::json!(en));
-    }
-    if let Some(url) = server_url {
-        ldap_obj.insert("server_url".to_string(), serde_json::json!(url));
-    }
-    if let Some(dn) = bind_dn {
-        ldap_obj.insert("bind_dn".to_string(), serde_json::json!(dn));
-    }
-    if let Some(pass) = bind_password {
-        ldap_obj.insert("bind_password".to_string(), serde_json::json!(pass));
-    }
-    if let Some(dn) = base_dn {
-        ldap_obj.insert("base_dn".to_string(), serde_json::json!(dn));
-    }
-    if let Some(filter) = user_filter {
-        ldap_obj.insert("user_filter".to_string(), serde_json::json!(filter));
-    }
-
-    let result = client.put_raw("/v1/cluster/ldap", ldap_data).await?;
-    let output_data = handle_output(result, output_format, query)?;
-    print_formatted_output(output_data, output_format)?;
-    Ok(())
-}
-
-pub async fn test_ldap_connection(
-    conn_mgr: &ConnectionManager,
-    profile_name: Option<&str>,
-    output_format: OutputFormat,
-    query: Option<&str>,
-) -> CliResult<()> {
-    let client = conn_mgr.create_enterprise_client(profile_name).await?;
-
-    let result = client
-        .post_raw("/v1/cluster/ldap/test", serde_json::json!({}))
-        .await
-        .unwrap_or_else(|e| {
-            serde_json::json!({
-                "status": "error",
-                "message": e.to_string()
-            })
-        });
-
-    let data = handle_output(result, output_format, query)?;
-    print_formatted_output(data, output_format)?;
-    Ok(())
-}
-
-pub async fn sync_ldap(
-    conn_mgr: &ConnectionManager,
-    profile_name: Option<&str>,
-    output_format: OutputFormat,
-    query: Option<&str>,
-) -> CliResult<()> {
-    let client = conn_mgr.create_enterprise_client(profile_name).await?;
-
-    let result = client
-        .post_raw("/v1/cluster/ldap/sync", serde_json::json!({}))
-        .await?;
-    let data = handle_output(result, output_format, query)?;
-    print_formatted_output(data, output_format)?;
-    Ok(())
-}
-
-pub async fn get_ldap_mappings(
-    conn_mgr: &ConnectionManager,
-    profile_name: Option<&str>,
-    output_format: OutputFormat,
-    query: Option<&str>,
-) -> CliResult<()> {
-    let client = conn_mgr.create_enterprise_client(profile_name).await?;
-    let handler = LdapMappingHandler::new(client);
-    let mappings = handler.list().await?;
-    let mappings_json = serde_json::to_value(mappings).context("Failed to serialize mappings")?;
-    let data = handle_output(mappings_json, output_format, query)?;
     print_formatted_output(data, output_format)?;
     Ok(())
 }
