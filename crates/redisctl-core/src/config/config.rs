@@ -33,6 +33,11 @@ pub struct Config {
     /// Map of profile name -> profile configuration
     #[serde(default)]
     pub profiles: HashMap<String, Profile>,
+    /// Per-profile OIDC login endpoints for `cloud auth login`, keyed by profile name.
+    /// A missing entry falls back to the built-in production defaults. Kept separate from the
+    /// profile's stored credentials since it describes *how to log in*, not the resulting keys.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub cloud_auth: HashMap<String, CloudAuthConfig>,
 }
 
 /// Individual profile configuration
@@ -50,6 +55,46 @@ pub struct Profile {
     /// Tags for organizing profiles
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+}
+
+/// OIDC endpoints used by `cloud auth login` for one environment. Held in `Config.cloud_auth`
+/// keyed by profile name, so it serializes under `[cloud_auth.<name>]`.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct CloudAuthConfig {
+    /// Okta authorization-server issuer, e.g. `https://<your-okta-issuer>/oauth2/default`.
+    pub okta_issuer: String,
+    /// Public Okta client id for the redisctl app.
+    pub okta_client_id: String,
+    /// SM API base used for the token→CAPI-key exchange, e.g. `https://<sm-api-host>/api/v1`.
+    pub sm_api_url: String,
+    /// Public CAPI base recorded in the resulting cloud profile (`api_url`).
+    #[serde(default = "default_prod_capi_url")]
+    pub capi_url: String,
+}
+
+fn default_prod_capi_url() -> String {
+    "https://api.redislabs.com/v1".to_string()
+}
+
+impl CloudAuthConfig {
+    /// Built-in production defaults. The Okta issuer/client id and SM host are filled in when
+    /// IT/IAM provisions the prod app; until then [`CloudAuthConfig::is_complete`] reports
+    /// what's missing.
+    pub fn prod_defaults() -> Self {
+        Self {
+            okta_issuer: String::new(),
+            okta_client_id: String::new(),
+            sm_api_url: String::new(),
+            capi_url: default_prod_capi_url(),
+        }
+    }
+
+    /// Whether the login endpoints are fully specified (issuer, client id, SM API base).
+    pub fn is_complete(&self) -> bool {
+        !self.okta_issuer.is_empty()
+            && !self.okta_client_id.is_empty()
+            && !self.sm_api_url.is_empty()
+    }
 }
 
 /// Supported deployment types
@@ -584,6 +629,59 @@ impl Config {
         self.profiles.insert(name, profile);
     }
 
+    /// Effective `cloud auth login` endpoints for a profile: its `cloud_auth` entry, or the
+    /// built-in production defaults when none is set.
+    pub fn resolve_cloud_auth(&self, profile_name: &str) -> CloudAuthConfig {
+        self.cloud_auth
+            .get(profile_name)
+            .cloned()
+            .unwrap_or_else(CloudAuthConfig::prod_defaults)
+    }
+
+    /// Persist a completed `cloud auth login` into `profile_name` and make it the default
+    /// cloud profile.
+    ///
+    /// The CAPI key/secret are stored via `store` (keyring when available, else plaintext) and
+    /// the profile records the resulting references. The Okta refresh token, if present, is
+    /// stored under `<profile>-okta-refresh` (keyring only — with a plaintext store there is
+    /// nowhere to keep it, so silent re-auth won't be available and a fresh login is needed
+    /// when the CAPI key is lost). `cloud_auth` (the login endpoints) is recorded so re-login
+    /// works without re-specifying it.
+    pub fn apply_cloud_login(
+        &mut self,
+        store: &CredentialStore,
+        profile_name: &str,
+        creds: &crate::auth::MintedCredentials,
+        cloud_auth: Option<CloudAuthConfig>,
+    ) -> Result<()> {
+        let api_key =
+            store.store_credential(&format!("{profile_name}-cloud-api-key"), &creds.api_key)?;
+        let api_secret = store.store_credential(
+            &format!("{profile_name}-cloud-api-secret"),
+            &creds.api_secret,
+        )?;
+        if let Some(refresh) = &creds.refresh_token {
+            // Reference is implicit (looked up by the well-known key on refresh); ignore it.
+            let _ = store.store_credential(&format!("{profile_name}-okta-refresh"), refresh)?;
+        }
+        let profile = Profile {
+            deployment_type: DeploymentType::Cloud,
+            credentials: ProfileCredentials::Cloud {
+                api_key,
+                api_secret,
+                api_url: creds.api_url.clone(),
+            },
+            files_api_key: None,
+            tags: Vec::new(),
+        };
+        self.profiles.insert(profile_name.to_string(), profile);
+        if let Some(auth) = cloud_auth {
+            self.cloud_auth.insert(profile_name.to_string(), auth);
+        }
+        self.default_cloud = Some(profile_name.to_string());
+        Ok(())
+    }
+
     /// Remove a profile by name
     pub fn remove_profile(&mut self, name: &str) -> Option<Profile> {
         // Clear type-specific defaults if this profile was set as default
@@ -596,6 +694,7 @@ impl Config {
         if self.default_database.as_deref() == Some(name) {
             self.default_database = None;
         }
+        self.cloud_auth.remove(name);
         self.profiles.remove(name)
     }
 
