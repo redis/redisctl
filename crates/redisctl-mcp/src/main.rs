@@ -20,7 +20,6 @@ use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 mod audit;
-mod error;
 mod policy;
 mod presets;
 mod prompts;
@@ -202,23 +201,6 @@ struct Args {
     /// Port to bind HTTP server
     #[arg(long, default_value = "8080")]
     port: u16,
-
-    // --- OAuth options (HTTP mode) ---
-    /// Enable OAuth authentication for HTTP transport
-    #[arg(long)]
-    oauth: bool,
-
-    /// OAuth issuer URL (e.g., https://accounts.google.com)
-    #[arg(long, env = "OAUTH_ISSUER")]
-    oauth_issuer: Option<String>,
-
-    /// OAuth audience (client ID or API identifier)
-    #[arg(long, env = "OAUTH_AUDIENCE")]
-    oauth_audience: Option<String>,
-
-    /// JWKS URI for token validation (auto-discovered from issuer if not set)
-    #[arg(long, env = "OAUTH_JWKS_URI")]
-    jwks_uri: Option<String>,
 
     // --- Rate limiting ---
     /// Maximum concurrent requests
@@ -541,14 +523,7 @@ async fn main() -> Result<()> {
     );
 
     // Determine credential source
-    let credential_source = if args.oauth {
-        CredentialSource::OAuth {
-            issuer: args.oauth_issuer.clone(),
-            audience: args.oauth_audience.clone(),
-        }
-    } else {
-        CredentialSource::Profiles(args.profile.clone())
-    };
+    let credential_source = CredentialSource::Profiles(args.profile.clone());
 
     // Build tool-to-toolset mapping for policy evaluation
     let tool_toolset = build_tool_toolset_mapping(&enabled);
@@ -960,13 +935,6 @@ async fn run_http_server(
             audit_config.level
         );
         transport = transport.layer(AuditLayer::new(audit_config, tool_toolset));
-    }
-
-    if args.oauth {
-        // OAuth-enabled HTTP transport
-        bail!(
-            "OAuth support is not yet implemented. Remove --oauth to start the server without authentication."
-        );
     }
 
     transport.serve(&addr).await?;

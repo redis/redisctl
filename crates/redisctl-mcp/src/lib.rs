@@ -14,9 +14,6 @@
 //! # Multiple profiles for multi-cluster support
 //! redisctl-mcp --profile cluster-west --profile cluster-east --profile cluster-central
 //!
-//! # HTTP transport with OAuth (for shared deployments)
-//! redisctl-mcp --transport http --port 8080 --oauth --oauth-issuer https://accounts.google.com
-//!
 //! # Enable only specific toolsets
 //! redisctl-mcp --tools cloud,app
 //! ```
@@ -55,7 +52,6 @@
 //! ```
 
 pub mod audit;
-pub mod error;
 pub mod policy;
 pub mod presets;
 pub mod prompts;
@@ -64,7 +60,6 @@ pub mod serde_helpers;
 pub mod state;
 pub mod tools;
 
-pub use error::McpError;
 pub use state::{AppState, CredentialSource};
 
 #[cfg(test)]
@@ -74,42 +69,20 @@ mod tests {
 
     #[test]
     fn test_credential_source_profiles() {
-        let source = CredentialSource::Profiles(vec!["test".to_string()]);
-        match source {
-            CredentialSource::Profiles(profiles) => assert_eq!(profiles, vec!["test".to_string()]),
-            _ => panic!("Expected Profiles variant"),
-        }
+        let CredentialSource::Profiles(profiles) =
+            CredentialSource::Profiles(vec!["test".to_string()]);
+        assert_eq!(profiles, vec!["test".to_string()]);
     }
 
     #[test]
     fn test_credential_source_multiple_profiles() {
-        let source = CredentialSource::Profiles(vec![
+        let CredentialSource::Profiles(profiles) = CredentialSource::Profiles(vec![
             "cluster-west".to_string(),
             "cluster-east".to_string(),
         ]);
-        match source {
-            CredentialSource::Profiles(profiles) => {
-                assert_eq!(profiles.len(), 2);
-                assert_eq!(profiles[0], "cluster-west");
-                assert_eq!(profiles[1], "cluster-east");
-            }
-            _ => panic!("Expected Profiles variant"),
-        }
-    }
-
-    #[test]
-    fn test_credential_source_oauth() {
-        let source = CredentialSource::OAuth {
-            issuer: Some("https://example.com".to_string()),
-            audience: Some("my-api".to_string()),
-        };
-        match source {
-            CredentialSource::OAuth { issuer, audience } => {
-                assert_eq!(issuer, Some("https://example.com".to_string()));
-                assert_eq!(audience, Some("my-api".to_string()));
-            }
-            _ => panic!("Expected OAuth variant"),
-        }
+        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles[0], "cluster-west");
+        assert_eq!(profiles[1], "cluster-east");
     }
 
     #[test]
