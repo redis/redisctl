@@ -1,5 +1,4 @@
 //! Implementation of enterprise logs commands
-#![allow(dead_code)]
 
 use crate::error::RedisCtlError;
 

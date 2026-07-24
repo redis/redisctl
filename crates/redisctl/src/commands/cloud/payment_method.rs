@@ -1,7 +1,5 @@
 //! Cloud payment method command implementations
 
-#![allow(dead_code)] // Used by binary target
-
 use anyhow::Context;
 use redis_cloud::AccountHandler;
 use serde_json::Value;

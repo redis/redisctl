@@ -1,7 +1,5 @@
 //! Cloud task command implementations
 
-#![allow(dead_code)]
-
 use crate::cli::{CloudTaskCommands, OutputFormat};
 use crate::connection::ConnectionManager;
 use crate::error::{RedisCtlError, Result as CliResult};

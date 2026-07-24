@@ -86,7 +86,6 @@ pub enum BootstrapCommands {
     },
 }
 
-#[allow(dead_code)]
 pub async fn handle_bootstrap_command(
     conn_mgr: &ConnectionManager,
     profile_name: Option<&str>,
@@ -157,7 +156,6 @@ pub async fn handle_bootstrap_command(
     }
 }
 
-#[allow(dead_code)]
 async fn handle_bootstrap_status(
     conn_mgr: &ConnectionManager,
     profile_name: Option<&str>,
@@ -180,7 +178,6 @@ async fn handle_bootstrap_status(
     utils::print_formatted_output(result, output_format)
 }
 
-#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 async fn handle_create_cluster(
     conn_mgr: &ConnectionManager,
@@ -242,7 +239,6 @@ async fn handle_create_cluster(
     utils::print_formatted_output(result, output_format)
 }
 
-#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 async fn handle_join_cluster(
     conn_mgr: &ConnectionManager,
@@ -300,7 +296,6 @@ async fn handle_join_cluster(
     utils::print_formatted_output(result, output_format)
 }
 
-#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 async fn handle_validate_bootstrap(
     conn_mgr: &ConnectionManager,

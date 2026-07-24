@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::cli::{CloudProviderAccountCommands, OutputFormat};
 use crate::commands::cloud::cloud_account_impl::{
     self, CloudAccountOperationParams, CreateParams, UpdateParams,

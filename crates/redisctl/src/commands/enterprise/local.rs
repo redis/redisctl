@@ -36,7 +36,6 @@ pub enum LocalCommands {
 }
 
 impl LocalCommands {
-    #[allow(dead_code)]
     pub async fn execute(
         &self,
         conn_mgr: &ConnectionManager,
@@ -115,7 +114,6 @@ impl LocalCommands {
     }
 }
 
-#[allow(dead_code)]
 pub async fn handle_local_command(
     conn_mgr: &ConnectionManager,
     profile_name: Option<&str>,

@@ -1,7 +1,5 @@
 //! Cloud subscription command implementations
 
-#![allow(dead_code)] // Used by binary target
-
 use anyhow::Context;
 use serde_json::Value;
 use tabled::{Table, Tabled, settings::Style};

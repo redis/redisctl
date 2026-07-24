@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::cli::{EnterpriseCrdbCommands, OutputFormat};
 use crate::connection::ConnectionManager;
 use crate::error::Result as CliResult;

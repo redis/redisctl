@@ -7,7 +7,6 @@ use serde_json::Value;
 /// Format a curl command for a Cloud API request.
 ///
 /// Auth headers are redacted by default.
-#[allow(dead_code)] // Used by binary target
 pub fn format_cloud_curl(
     info: &CloudConnectionInfo,
     method: &HttpMethod,
@@ -36,7 +35,6 @@ pub fn format_cloud_curl(
 /// Format a curl command for an Enterprise API request.
 ///
 /// Auth credentials are redacted by default.
-#[allow(dead_code)] // Used by binary target
 pub fn format_enterprise_curl(
     info: &EnterpriseConnectionInfo,
     method: &HttpMethod,

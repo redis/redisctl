@@ -101,7 +101,6 @@ pub enum CmSettingsCommands {
 }
 
 impl CmSettingsCommands {
-    #[allow(dead_code)]
     pub async fn execute(
         &self,
         conn_mgr: &ConnectionManager,
@@ -358,7 +357,6 @@ impl CmSettingsCommands {
     }
 }
 
-#[allow(dead_code)]
 pub async fn handle_cm_settings_command(
     conn_mgr: &ConnectionManager,
     profile_name: Option<&str>,

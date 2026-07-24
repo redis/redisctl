@@ -1,7 +1,5 @@
 //! Node command router for Enterprise
 
-#![allow(dead_code)]
-
 use crate::cli::{EnterpriseNodeCommands, OutputFormat};
 use crate::connection::ConnectionManager;
 use crate::error::Result as CliResult;

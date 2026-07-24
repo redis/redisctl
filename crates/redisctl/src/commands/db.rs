@@ -1,7 +1,5 @@
 //! Database command implementations
 
-#![allow(dead_code)] // Functions called from bin target
-
 use crate::cli::{DbCommands, OutputFormat};
 use crate::connection::ConnectionManager;
 use crate::error::RedisCtlError;

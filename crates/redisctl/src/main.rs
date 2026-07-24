@@ -1017,7 +1017,6 @@ async fn handle_cloud_workflow_command(
                 conn_mgr: conn_mgr.clone(),
                 profile_name: profile.map(String::from),
                 output_format: output,
-                wait_timeout: args.wait_timeout as u64,
             };
 
             let registry = WorkflowRegistry::new();
@@ -1110,7 +1109,9 @@ async fn handle_enterprise_workflow_command(
             skip_database,
             database_name,
             database_memory_gb,
-            async_ops,
+            // init-cluster does not consume the async flags; the value used to
+            // flow into WorkflowContext.wait_timeout, which was never read.
+            async_ops: _,
         } => {
             let mut args = WorkflowArgs::new();
             args.insert("name", name);
@@ -1124,11 +1125,6 @@ async fn handle_enterprise_workflow_command(
                 conn_mgr: conn_mgr.clone(),
                 profile_name: profile.map(String::from),
                 output_format: output,
-                wait_timeout: if async_ops.wait {
-                    async_ops.wait_timeout
-                } else {
-                    0
-                },
             };
 
             let registry = WorkflowRegistry::new();

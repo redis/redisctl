@@ -3,7 +3,6 @@ use clap::Subcommand;
 
 use crate::{cli::OutputFormat, connection::ConnectionManager, error::Result as CliResult};
 
-#[allow(dead_code)]
 pub async fn handle_jsonschema_command(
     conn_mgr: &ConnectionManager,
     profile_name: Option<&str>,
@@ -23,7 +22,6 @@ pub enum JsonSchemaCommands {
 }
 
 impl JsonSchemaCommands {
-    #[allow(dead_code)]
     pub async fn execute(
         &self,
         conn_mgr: &ConnectionManager,
@@ -35,7 +33,6 @@ impl JsonSchemaCommands {
     }
 }
 
-#[allow(dead_code)]
 async fn handle_jsonschema_command_impl(
     conn_mgr: &ConnectionManager,
     profile_name: Option<&str>,

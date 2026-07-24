@@ -4,7 +4,6 @@ use clap::Subcommand;
 use crate::error::RedisCtlError;
 use crate::{cli::OutputFormat, connection::ConnectionManager, error::Result as CliResult};
 
-#[allow(dead_code)]
 pub async fn handle_migration_command(
     conn_mgr: &ConnectionManager,
     profile_name: Option<&str>,
@@ -184,7 +183,6 @@ pub enum MigrationCommands {
 }
 
 impl MigrationCommands {
-    #[allow(dead_code)]
     pub async fn execute(
         &self,
         conn_mgr: &ConnectionManager,
@@ -196,7 +194,6 @@ impl MigrationCommands {
     }
 }
 
-#[allow(dead_code)]
 async fn handle_migration_command_impl(
     conn_mgr: &ConnectionManager,
     profile_name: Option<&str>,

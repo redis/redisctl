@@ -4,7 +4,6 @@ use clap::Subcommand;
 
 use crate::{cli::OutputFormat, connection::ConnectionManager, error::Result as CliResult};
 
-#[allow(dead_code)]
 pub async fn handle_usage_report_command(
     conn_mgr: &ConnectionManager,
     profile_name: Option<&str>,
@@ -35,7 +34,6 @@ pub enum UsageReportCommands {
 }
 
 impl UsageReportCommands {
-    #[allow(dead_code)]
     pub async fn execute(
         &self,
         conn_mgr: &ConnectionManager,
@@ -47,7 +45,6 @@ impl UsageReportCommands {
     }
 }
 
-#[allow(dead_code)]
 async fn handle_usage_report_command_impl(
     conn_mgr: &ConnectionManager,
     profile_name: Option<&str>,

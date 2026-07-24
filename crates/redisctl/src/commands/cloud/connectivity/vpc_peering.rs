@@ -1,7 +1,5 @@
 //! VPC Peering command implementations
 
-#![allow(dead_code)]
-
 use super::ConnectivityOperationParams;
 use crate::cli::{OutputFormat, VpcPeeringCommands};
 use crate::commands::cloud::async_utils::handle_async_response;

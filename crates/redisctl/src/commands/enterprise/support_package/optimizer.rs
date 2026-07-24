@@ -37,25 +37,6 @@ impl Default for OptimizationOptions {
     }
 }
 
-/// Result of optimization operation
-#[derive(Debug)]
-pub struct OptimizationResult {
-    pub original_size: usize,
-    pub optimized_size: usize,
-    pub files_processed: usize,
-    pub files_truncated: usize,
-    pub files_removed: usize,
-}
-
-impl OptimizationResult {
-    pub fn reduction_percentage(&self) -> f64 {
-        if self.original_size == 0 {
-            return 0.0;
-        }
-        ((self.original_size - self.optimized_size) as f64 / self.original_size as f64) * 100.0
-    }
-}
-
 /// Optimize a support package (tar.gz format)
 pub fn optimize_support_package(data: &[u8], options: &OptimizationOptions) -> Result<Vec<u8>> {
     if options.verbose {
