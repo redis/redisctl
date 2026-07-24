@@ -2970,6 +2970,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unicode-segmentation",
+ "url",
  "urlencoding",
  "which 7.0.3",
  "wiremock",
