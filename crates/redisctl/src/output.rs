@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use anyhow::{Context, Result};
 use jpx_core::Runtime;
 use regex::Regex;

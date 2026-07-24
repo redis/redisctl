@@ -1,10 +1,8 @@
 use crate::cli::OutputFormat;
-use crate::commands::enterprise::utils;
 use crate::connection::ConnectionManager;
 use crate::error::RedisCtlError;
 use anyhow::Context;
 use clap::Subcommand;
-use serde_json::Value;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Subcommand)]
@@ -50,7 +48,6 @@ pub enum DebugInfoCommands {
     },
 }
 
-#[allow(dead_code)]
 pub async fn handle_debuginfo_command(
     conn_mgr: &ConnectionManager,
     profile_name: Option<&str>,
@@ -108,77 +105,6 @@ pub async fn handle_debuginfo_command(
             .await
         }
     }
-}
-
-#[allow(dead_code)]
-async fn handle_debuginfo_all(
-    conn_mgr: &ConnectionManager,
-    profile_name: Option<&str>,
-    output_format: OutputFormat,
-    query: Option<&str>,
-) -> Result<(), RedisCtlError> {
-    let client = conn_mgr.create_enterprise_client(profile_name).await?;
-
-    let response = client
-        .get::<Value>("/v1/debuginfo/all")
-        .await
-        .map_err(RedisCtlError::from)?;
-
-    let result = if let Some(q) = query {
-        utils::apply_jmespath(&response, q)?
-    } else {
-        response
-    };
-
-    utils::print_formatted_output(result, output_format)
-}
-
-#[allow(dead_code)]
-async fn handle_debuginfo_node(
-    conn_mgr: &ConnectionManager,
-    profile_name: Option<&str>,
-    output_format: OutputFormat,
-    query: Option<&str>,
-) -> Result<(), RedisCtlError> {
-    let client = conn_mgr.create_enterprise_client(profile_name).await?;
-
-    let response = client
-        .get::<Value>("/v1/debuginfo/node")
-        .await
-        .map_err(RedisCtlError::from)?;
-
-    let result = if let Some(q) = query {
-        utils::apply_jmespath(&response, q)?
-    } else {
-        response
-    };
-
-    utils::print_formatted_output(result, output_format)
-}
-
-#[allow(dead_code)]
-async fn handle_debuginfo_database(
-    conn_mgr: &ConnectionManager,
-    profile_name: Option<&str>,
-    bdb_uid: u32,
-    output_format: OutputFormat,
-    query: Option<&str>,
-) -> Result<(), RedisCtlError> {
-    let client = conn_mgr.create_enterprise_client(profile_name).await?;
-
-    let endpoint = format!("/v1/debuginfo/node/bdb/{}", bdb_uid);
-    let response = client.get::<Value>(&endpoint).await.context(format!(
-        "Failed to collect debug info for database {}",
-        bdb_uid
-    ))?;
-
-    let result = if let Some(q) = query {
-        utils::apply_jmespath(&response, q)?
-    } else {
-        response
-    };
-
-    utils::print_formatted_output(result, output_format)
 }
 
 // Binary download handlers

@@ -1,7 +1,5 @@
 //! Enterprise database command handler
 
-#![allow(dead_code)]
-
 use crate::cli::{EnterpriseDatabaseCommands, OutputFormat};
 use crate::connection::ConnectionManager;
 use crate::error::Result as CliResult;

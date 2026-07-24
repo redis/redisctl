@@ -56,7 +56,6 @@ pub enum LicenseCommands {
 }
 
 impl LicenseCommands {
-    #[allow(dead_code)]
     pub async fn execute(
         &self,
         config: &Config,

@@ -1,10 +1,8 @@
 //! RBAC command router for Enterprise
 
-#![allow(dead_code)]
-
 use crate::cli::{
-    EnterpriseAclCommands, EnterpriseAuthCommands, EnterpriseLdapCommands, EnterpriseRoleCommands,
-    EnterpriseUserCommands, OutputFormat,
+    EnterpriseAclCommands, EnterpriseAuthCommands, EnterpriseRoleCommands, EnterpriseUserCommands,
+    OutputFormat,
 };
 use crate::connection::ConnectionManager;
 use crate::error::Result as CliResult;
@@ -236,53 +234,6 @@ pub async fn handle_acl_command(
         }
         EnterpriseAclCommands::Test { user, command } => {
             rbac_impl::test_acl(conn_mgr, profile_name, *user, command, output_format, query).await
-        }
-    }
-}
-
-pub async fn handle_ldap_command(
-    conn_mgr: &ConnectionManager,
-    profile_name: Option<&str>,
-    command: &EnterpriseLdapCommands,
-    output_format: OutputFormat,
-    query: Option<&str>,
-) -> CliResult<()> {
-    match command {
-        EnterpriseLdapCommands::GetConfig => {
-            rbac_impl::get_ldap_config(conn_mgr, profile_name, output_format, query).await
-        }
-        EnterpriseLdapCommands::UpdateConfig {
-            enabled,
-            server_url,
-            bind_dn,
-            bind_password,
-            base_dn,
-            user_filter,
-            data,
-        } => {
-            rbac_impl::update_ldap_config(
-                conn_mgr,
-                profile_name,
-                *enabled,
-                server_url.as_deref(),
-                bind_dn.as_deref(),
-                bind_password.as_deref(),
-                base_dn.as_deref(),
-                user_filter.as_deref(),
-                data.as_deref(),
-                output_format,
-                query,
-            )
-            .await
-        }
-        EnterpriseLdapCommands::TestConnection => {
-            rbac_impl::test_ldap_connection(conn_mgr, profile_name, output_format, query).await
-        }
-        EnterpriseLdapCommands::Sync => {
-            rbac_impl::sync_ldap(conn_mgr, profile_name, output_format, query).await
-        }
-        EnterpriseLdapCommands::GetMappings => {
-            rbac_impl::get_ldap_mappings(conn_mgr, profile_name, output_format, query).await
         }
     }
 }

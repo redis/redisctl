@@ -9,7 +9,6 @@ use redisctl_core::{Config, DeploymentType};
 use serde_json::Value;
 
 /// Parameters for API command execution
-#[allow(dead_code)] // Used by binary target
 pub struct ApiCommandParams {
     pub config: Config,
     pub config_path: Option<std::path::PathBuf>,
@@ -24,7 +23,6 @@ pub struct ApiCommandParams {
 }
 
 /// Handle raw API commands
-#[allow(dead_code)] // Used by binary target
 pub async fn handle_api_command(params: ApiCommandParams) -> CliResult<()> {
     let connection_manager = ConnectionManager::with_config_path(params.config, params.config_path);
 

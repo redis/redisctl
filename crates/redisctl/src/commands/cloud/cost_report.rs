@@ -2,8 +2,6 @@
 //!
 //! Handles generating and downloading cost reports in FOCUS format.
 
-#![allow(dead_code)] // Functions used from main.rs binary
-
 use crate::cli::{CloudCostReportCommands, OutputFormat};
 use crate::commands::cloud::async_utils::{AsyncOperationArgs, handle_async_response};
 use crate::connection::ConnectionManager;

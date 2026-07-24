@@ -3,8 +3,6 @@
 //! Workflows orchestrate complex operations that require multiple API calls,
 //! waiting for async operations, and conditional logic.
 
-#![allow(dead_code)]
-
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -36,8 +34,6 @@ pub struct WorkflowContext {
     pub conn_mgr: crate::connection::ConnectionManager,
     pub profile_name: Option<String>,
     pub output_format: crate::output::OutputFormat,
-    #[allow(dead_code)] // Will be used by future workflows
-    pub wait_timeout: u64,
 }
 
 /// Arguments passed to a workflow
@@ -89,15 +85,6 @@ impl WorkflowResult {
     pub fn success(message: impl Into<String>) -> Self {
         Self {
             success: true,
-            message: message.into(),
-            outputs: HashMap::new(),
-        }
-    }
-
-    #[allow(dead_code)] // Will be used by future workflows
-    pub fn failure(message: impl Into<String>) -> Self {
-        Self {
-            success: false,
             message: message.into(),
             outputs: HashMap::new(),
         }

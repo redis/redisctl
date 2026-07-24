@@ -168,7 +168,6 @@ pub enum ShardCommands {
 }
 
 impl ShardCommands {
-    #[allow(dead_code)]
     pub async fn execute(
         &self,
         conn_mgr: &ConnectionManager,
@@ -485,7 +484,6 @@ impl ShardCommands {
     }
 }
 
-#[allow(dead_code)]
 pub async fn handle_shard_command(
     conn_mgr: &ConnectionManager,
     profile_name: Option<&str>,

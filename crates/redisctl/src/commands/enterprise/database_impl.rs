@@ -1,7 +1,5 @@
 //! Enterprise database command implementations
 
-#![allow(dead_code)]
-
 use std::time::Duration;
 
 use indicatif::{ProgressBar, ProgressStyle};

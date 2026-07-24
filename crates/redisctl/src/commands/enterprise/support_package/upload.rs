@@ -133,24 +133,6 @@ fn resolve_config_key(key: &str) -> Result<String> {
     }
 }
 
-/// Store Files.com API key in system keyring
-///
-/// This securely stores the API key using the platform's native keyring:
-/// - macOS: Keychain
-/// - Windows: Credential Manager
-/// - Linux: Secret Service (GNOME Keyring, KWallet, etc.)
-#[cfg(all(feature = "upload", feature = "secure-storage"))]
-pub fn set_in_keyring(api_key: &str) -> Result<()> {
-    let entry = keyring::Entry::new("redisctl", "files-api-key")
-        .context("Failed to access system keyring")?;
-
-    entry
-        .set_password(api_key)
-        .context("Failed to store API key in keyring")?;
-
-    Ok(())
-}
-
 /// Retrieve Files.com API key from system keyring
 #[cfg(all(feature = "upload", feature = "secure-storage"))]
 pub fn get_from_keyring() -> Result<String> {
@@ -158,17 +140,4 @@ pub fn get_from_keyring() -> Result<String> {
         .context("Failed to access system keyring")?;
 
     entry.get_password().context("API key not found in keyring")
-}
-
-/// Remove Files.com API key from system keyring
-#[cfg(all(feature = "upload", feature = "secure-storage"))]
-pub fn delete_from_keyring() -> Result<()> {
-    let entry = keyring::Entry::new("redisctl", "files-api-key")
-        .context("Failed to access system keyring")?;
-
-    entry
-        .delete_credential()
-        .context("Failed to delete API key from keyring")?;
-
-    Ok(())
 }

@@ -408,30 +408,6 @@ fn build_subscription_payload(args: &SubscriptionSetupArgs, payment_method_id: u
     })
 }
 
-fn build_database_payload(args: &SubscriptionSetupArgs) -> Value {
-    let mut payload = json!({
-        "name": args.database_name,
-        "memoryLimitInGb": args.database_memory_gb,
-        "throughputMeasurement": {
-            "by": "operations-per-second",
-            "value": args.database_throughput
-        },
-        "dataPersistence": if args.data_persistence { "aof-every-1-second" } else { "none" },
-        "replication": args.high_availability,
-    });
-
-    // Add modules if specified
-    if let Some(modules_str) = &args.modules {
-        let modules: Vec<Value> = modules_str
-            .split(',')
-            .map(|m| json!({"name": m.trim()}))
-            .collect();
-        payload["modules"] = json!(modules);
-    }
-
-    payload
-}
-
 async fn wait_for_task_completion(
     client: &redis_cloud::CloudClient,
     task_id: &str,

@@ -1,7 +1,5 @@
 //! Enterprise CRDB (Active-Active) command implementations
 
-#![allow(dead_code)]
-
 use crate::error::RedisCtlError;
 
 use crate::cli::OutputFormat;

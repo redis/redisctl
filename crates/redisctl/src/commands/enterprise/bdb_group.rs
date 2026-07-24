@@ -103,7 +103,6 @@ pub enum BdbGroupCommands {
 }
 
 impl BdbGroupCommands {
-    #[allow(dead_code)]
     pub async fn execute(
         &self,
         conn_mgr: &ConnectionManager,
@@ -357,7 +356,6 @@ impl BdbGroupCommands {
     }
 }
 
-#[allow(dead_code)]
 pub async fn handle_bdb_group_command(
     conn_mgr: &ConnectionManager,
     profile_name: Option<&str>,

@@ -1,5 +1,4 @@
 //! Implementation of enterprise module commands
-#![allow(dead_code)]
 
 use crate::error::RedisCtlError;
 

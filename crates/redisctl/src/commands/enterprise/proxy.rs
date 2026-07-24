@@ -23,7 +23,6 @@ struct ProxyRow {
     max_connections: String,
 }
 
-#[allow(dead_code)]
 pub async fn handle_proxy_command(
     conn_mgr: &ConnectionManager,
     profile_name: Option<&str>,
@@ -98,7 +97,6 @@ pub enum ProxyCommands {
 }
 
 impl ProxyCommands {
-    #[allow(dead_code)]
     pub async fn execute(
         &self,
         conn_mgr: &ConnectionManager,
@@ -110,7 +108,6 @@ impl ProxyCommands {
     }
 }
 
-#[allow(dead_code)]
 async fn handle_proxy_command_impl(
     conn_mgr: &ConnectionManager,
     profile_name: Option<&str>,

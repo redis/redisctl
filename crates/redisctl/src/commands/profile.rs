@@ -1,7 +1,5 @@
 //! Profile management command implementations
 
-#![allow(dead_code)] // Functions called from bin target
-
 use crate::cli::{OutputFormat, ProfileCommands};
 use crate::connection::ConnectionManager;
 use crate::error::RedisCtlError;

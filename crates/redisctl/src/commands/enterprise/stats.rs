@@ -1,5 +1,4 @@
 //! Enterprise statistics and metrics commands
-#![allow(dead_code)]
 
 use crate::cli::{EnterpriseStatsCommands, OutputFormat};
 use crate::connection::ConnectionManager;

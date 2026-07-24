@@ -69,7 +69,6 @@ pub enum DiagnosticsCommands {
 }
 
 impl DiagnosticsCommands {
-    #[allow(dead_code)]
     pub async fn execute(
         &self,
         conn_mgr: &ConnectionManager,
@@ -234,7 +233,6 @@ impl DiagnosticsCommands {
     }
 }
 
-#[allow(dead_code)]
 pub async fn handle_diagnostics_command(
     conn_mgr: &ConnectionManager,
     profile_name: Option<&str>,
@@ -266,7 +264,6 @@ fn map_endpoint_error(err: RestError, command: &str, endpoint: &str) -> RedisCtl
 }
 
 // Helper functions
-#[allow(dead_code)]
 fn parse_comma_separated(input: &Option<String>) -> Option<Vec<String>> {
     input.as_ref().map(|s| {
         s.split(',')
@@ -276,7 +273,6 @@ fn parse_comma_separated(input: &Option<String>) -> Option<Vec<String>> {
     })
 }
 
-#[allow(dead_code)]
 fn parse_comma_separated_u32(input: &Option<String>) -> Option<Vec<u32>> {
     input.as_ref().and_then(|s| {
         let values: Result<Vec<u32>, _> = s

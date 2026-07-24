@@ -83,7 +83,6 @@ pub enum AlertsCommands {
 }
 
 impl AlertsCommands {
-    #[allow(dead_code)]
     pub async fn execute(
         &self,
         config: &Config,
