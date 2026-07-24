@@ -2981,6 +2981,7 @@ dependencies = [
 name = "redisctl-core"
 version = "0.11.1"
 dependencies = [
+ "chrono",
  "clap",
  "directories",
  "keyring",
@@ -2998,6 +2999,7 @@ dependencies = [
  "toml",
  "tracing",
  "url",
+ "urlencoding",
  "wiremock",
 ]
 
