@@ -93,7 +93,7 @@ pub enum EnterpriseCommands {
 
     /// Alert management operations
     #[command(subcommand, display_order = 22, visible_alias = "alert")]
-    Alerts(crate::commands::enterprise::alerts::AlertsCommands),
+    Alerts(EnterpriseAlertsCommands),
 
     /// Log operations
     #[command(subcommand, display_order = 23, visible_alias = "log")]
@@ -110,7 +110,7 @@ pub enum EnterpriseCommands {
     // -- Administration --
     /// License management
     #[command(subcommand, display_order = 30, visible_alias = "lic")]
-    License(crate::commands::enterprise::license::LicenseCommands),
+    License(EnterpriseLicenseCommands),
 
     /// Module management operations
     #[command(subcommand, display_order = 31)]
@@ -195,7 +195,7 @@ pub enum EnterpriseWorkflowCommands {
     List,
     /// License management workflows
     #[command(subcommand)]
-    License(crate::commands::enterprise::license_workflow::LicenseWorkflowCommands),
+    License(EnterpriseLicenseWorkflowCommands),
 
     /// Initialize a Redis Enterprise cluster
     #[command(name = "init-cluster")]
@@ -227,6 +227,174 @@ pub enum EnterpriseWorkflowCommands {
         /// Async operation options
         #[command(flatten)]
         async_ops: crate::commands::cloud::async_utils::AsyncOperationArgs,
+    },
+}
+
+/// Alert management commands
+#[derive(Debug, Subcommand)]
+pub enum EnterpriseAlertsCommands {
+    /// List all alerts
+    List {
+        /// Filter by alert type (cluster, node, bdb)
+        #[arg(long)]
+        filter_type: Option<String>,
+        /// Filter by severity (info, warning, error, critical)
+        #[arg(long)]
+        severity: Option<String>,
+    },
+    /// Get specific alert
+    Get {
+        /// Alert UID
+        uid: u64,
+    },
+    /// Get cluster alerts
+    Cluster {
+        /// Specific alert name
+        #[arg(long)]
+        alert: Option<String>,
+    },
+    /// Get node alerts
+    Node {
+        /// Node UID (optional, defaults to all nodes)
+        node_uid: Option<u64>,
+        /// Specific alert name
+        #[arg(long)]
+        alert: Option<String>,
+    },
+    /// Get database alerts
+    Database {
+        /// Database UID (optional, defaults to all databases)
+        bdb_uid: Option<u64>,
+        /// Specific alert name
+        #[arg(long)]
+        alert: Option<String>,
+    },
+    /// Get alert settings
+    #[command(name = "settings-get")]
+    SettingsGet,
+    /// Update alert settings
+    #[command(
+        name = "settings-update",
+        after_help = "EXAMPLES:
+    # Enable cluster alerts
+    redisctl enterprise alerts settings-update --cluster-alerts true
+
+    # Set alert thresholds
+    redisctl enterprise alerts settings-update --memory-threshold 80 --cpu-threshold 90
+
+    # Using JSON for full configuration
+    redisctl enterprise alerts settings-update --data @settings.json"
+    )]
+    SettingsUpdate {
+        /// Enable/disable cluster alerts
+        #[arg(long)]
+        cluster_alerts: Option<bool>,
+        /// Enable/disable node alerts
+        #[arg(long)]
+        node_alerts: Option<bool>,
+        /// Enable/disable database alerts
+        #[arg(long)]
+        bdb_alerts: Option<bool>,
+        /// Memory usage threshold percentage for alerts
+        #[arg(long)]
+        memory_threshold: Option<u32>,
+        /// CPU usage threshold percentage for alerts
+        #[arg(long)]
+        cpu_threshold: Option<u32>,
+        /// JSON data for alert settings (optional, use '-' for stdin)
+        #[arg(long, value_name = "FILE|JSON")]
+        data: Option<String>,
+    },
+}
+
+/// License management commands
+#[derive(Debug, Subcommand)]
+pub enum EnterpriseLicenseCommands {
+    /// Get current license information
+    Get,
+    /// Update license with JSON data
+    #[command(after_help = "EXAMPLES:
+    # Update license with key
+    redisctl enterprise license update --license-key ABC123...
+
+    # Using JSON file
+    redisctl enterprise license update --data @license.json")]
+    Update {
+        /// License key string
+        #[arg(long)]
+        license_key: Option<String>,
+        /// License data as JSON string or @file.json (optional)
+        #[arg(long, value_name = "FILE|JSON")]
+        data: Option<String>,
+    },
+    /// Upload license file
+    Upload {
+        /// Path to license file
+        #[arg(long)]
+        file: String,
+    },
+    /// Validate license
+    #[command(after_help = "EXAMPLES:
+    # Validate license key
+    redisctl enterprise license validate --license-key ABC123...
+
+    # Validate from JSON
+    redisctl enterprise license validate --data @license.json")]
+    Validate {
+        /// License key string to validate
+        #[arg(long)]
+        license_key: Option<String>,
+        /// License data as JSON string or @file.json (optional)
+        #[arg(long, value_name = "FILE|JSON")]
+        data: Option<String>,
+    },
+    /// Check license expiration
+    Expiry,
+    /// List licensed features
+    Features,
+    /// Show license usage and limits
+    Usage,
+}
+
+/// License workflow commands
+#[derive(Debug, Subcommand)]
+pub enum EnterpriseLicenseWorkflowCommands {
+    /// Audit licenses across all configured profiles
+    Audit {
+        /// Only show profiles with expiring licenses (within 30 days)
+        #[arg(long)]
+        expiring: bool,
+        /// Only show profiles with expired licenses
+        #[arg(long)]
+        expired: bool,
+    },
+    /// Update license across multiple profiles
+    #[command(name = "bulk-update")]
+    BulkUpdate {
+        /// Profiles to update (comma-separated, or 'all' for all enterprise profiles)
+        #[arg(long)]
+        profiles: String,
+        /// License data as JSON string or @file.json
+        #[arg(long)]
+        data: String,
+        /// Dry run - show what would be updated without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Generate license compliance report
+    Report {
+        /// Output format for report (csv for spreadsheet export)
+        #[arg(long, default_value = "table")]
+        format: String,
+    },
+    /// Monitor license expiration and send alerts
+    Monitor {
+        /// Days before expiration to trigger warning
+        #[arg(long, default_value = "30")]
+        warning_days: i64,
+        /// Exit with error code if any licenses are expiring
+        #[arg(long)]
+        fail_on_warning: bool,
     },
 }
 
