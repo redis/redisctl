@@ -67,6 +67,39 @@ impl CliDiagnostic {
     }
 }
 
+/// Process exit codes, so a script can branch on the kind of failure rather
+/// than on the text of the message.
+///
+/// `USAGE` is 2 to match clap, which already exits 2 when argument parsing
+/// fails: both mean the invocation itself was wrong. `GENERIC` stays 1 so
+/// anything not yet classified keeps the previous behavior.
+pub mod exit_code {
+    /// An error with no more specific classification.
+    pub const GENERIC: i32 = 1;
+    /// The command was invoked incorrectly.
+    pub const USAGE: i32 = 2;
+    /// Local configuration or profile problem.
+    pub const CONFIG: i32 = 3;
+    /// Credentials were rejected by the server.
+    pub const AUTH: i32 = 4;
+    /// The requested resource does not exist.
+    pub const NOT_FOUND: i32 = 5;
+    /// Input was well-formed but not valid.
+    pub const VALIDATION: i32 = 6;
+    /// The request conflicts with the current server state.
+    pub const CONFLICT: i32 = 7;
+    /// The server failed to service an otherwise valid request.
+    pub const UPSTREAM: i32 = 8;
+    /// The server is rate limiting; retry later.
+    pub const RATE_LIMITED: i32 = 9;
+    /// The server could not be reached.
+    pub const NETWORK: i32 = 10;
+    /// The operation did not complete in time.
+    pub const TIMEOUT: i32 = 11;
+    /// The operation was not confirmed, so nothing was done.
+    pub const CANCELLED: i32 = 12;
+}
+
 /// Main error type for the redisctl application
 #[derive(Error, Debug)]
 pub enum RedisCtlError {
@@ -271,11 +304,63 @@ impl RedisCtlError {
         }
     }
 
+    /// The process exit code for this error.
+    ///
+    /// Exhaustive on purpose: a new variant must declare its code. Several
+    /// variants share one code, because the taxonomy classifies what a script
+    /// should do about the failure, not which variant produced it.
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            // Local configuration: the profile is missing, incomplete, or the
+            // wrong type for the command.
+            RedisCtlError::Configuration(_)
+            | RedisCtlError::ProfileNotFound { .. }
+            | RedisCtlError::ProfileTypeMismatch { .. }
+            | RedisCtlError::NoProfileConfigured
+            | RedisCtlError::MissingCredentials { .. } => exit_code::CONFIG,
+
+            RedisCtlError::AuthenticationFailed { .. } => exit_code::AUTH,
+
+            // The only variant that carries a server status, so it is the only
+            // place not-found, conflict and rate-limited can come from. The
+            // status is recovered from the message, as `suggestions` already
+            // does for 404.
+            RedisCtlError::ApiError { message } => {
+                if message.contains("404") {
+                    exit_code::NOT_FOUND
+                } else if message.contains("409") {
+                    exit_code::CONFLICT
+                } else if message.contains("429") {
+                    exit_code::RATE_LIMITED
+                } else {
+                    exit_code::UPSTREAM
+                }
+            }
+
+            RedisCtlError::InvalidInput { .. } => exit_code::VALIDATION,
+            RedisCtlError::Cancelled { .. } => exit_code::CANCELLED,
+
+            // The command does not apply to this deployment, or names a file
+            // that could not be read: in both cases the invocation was wrong.
+            RedisCtlError::UnsupportedDeploymentType { .. } | RedisCtlError::FileError { .. } => {
+                exit_code::USAGE
+            }
+
+            RedisCtlError::ConnectionError { .. } => exit_code::NETWORK,
+            RedisCtlError::Timeout { .. } => exit_code::TIMEOUT,
+
+            // `Other` is the anyhow catch-all and `OutputError` covers
+            // serialization and IO; neither is classified yet.
+            RedisCtlError::Other(_) | RedisCtlError::OutputError { .. } => exit_code::GENERIC,
+        }
+    }
+
     /// The structured error object emitted under -o json/-o yaml.
     fn envelope(&self) -> serde_json::Value {
         serde_json::json!({
             "error": {
                 "code": self.code(),
+                "exit_code": self.exit_code(),
                 "message": self.to_string(),
                 "tips": self.suggestions(),
             }
@@ -424,6 +509,128 @@ impl From<redisctl_core::error::CoreError> for RedisCtlError {
             redisctl_core::error::CoreError::Enterprise(enterprise_err) => {
                 RedisCtlError::from(enterprise_err)
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn api(message: &str) -> RedisCtlError {
+        RedisCtlError::ApiError {
+            message: message.to_string(),
+        }
+    }
+
+    #[test]
+    fn variants_map_to_their_taxonomy_codes() {
+        assert_eq!(
+            RedisCtlError::Configuration("bad".into()).exit_code(),
+            exit_code::CONFIG
+        );
+        assert_eq!(
+            RedisCtlError::ProfileNotFound { name: "p".into() }.exit_code(),
+            exit_code::CONFIG
+        );
+        assert_eq!(
+            RedisCtlError::AuthenticationFailed {
+                message: "no".into(),
+                profile_name: "p".into(),
+            }
+            .exit_code(),
+            exit_code::AUTH
+        );
+        assert_eq!(
+            RedisCtlError::InvalidInput {
+                message: "no".into(),
+            }
+            .exit_code(),
+            exit_code::VALIDATION
+        );
+        assert_eq!(
+            RedisCtlError::Cancelled {
+                prompt: "delete?".into(),
+            }
+            .exit_code(),
+            exit_code::CANCELLED
+        );
+        assert_eq!(
+            RedisCtlError::FileError {
+                path: "/nope".into(),
+                message: "missing".into(),
+            }
+            .exit_code(),
+            exit_code::USAGE
+        );
+        assert_eq!(
+            RedisCtlError::ConnectionError {
+                message: "refused".into(),
+            }
+            .exit_code(),
+            exit_code::NETWORK
+        );
+        assert_eq!(
+            RedisCtlError::Timeout {
+                message: "slow".into(),
+            }
+            .exit_code(),
+            exit_code::TIMEOUT
+        );
+        assert_eq!(
+            RedisCtlError::Other("unclassified".into()).exit_code(),
+            exit_code::GENERIC
+        );
+    }
+
+    #[test]
+    fn api_errors_split_by_status() {
+        assert_eq!(
+            api("404 Not Found: no such database").exit_code(),
+            exit_code::NOT_FOUND
+        );
+        assert_eq!(
+            api("HTTP 409: database already exists").exit_code(),
+            exit_code::CONFLICT
+        );
+        assert_eq!(
+            api("HTTP 429: slow down").exit_code(),
+            exit_code::RATE_LIMITED
+        );
+        assert_eq!(
+            api("Server error (5xx): boom").exit_code(),
+            exit_code::UPSTREAM
+        );
+    }
+
+    // The envelope is the script-facing contract: it must carry the same exit
+    // code the process actually returns.
+    #[test]
+    fn envelope_carries_the_exit_code() {
+        let err = RedisCtlError::Timeout {
+            message: "slow".into(),
+        };
+        let envelope = err.envelope();
+        assert_eq!(envelope["error"]["exit_code"], exit_code::TIMEOUT);
+        assert_eq!(envelope["error"]["code"], "timeout");
+    }
+
+    // Nothing is allowed to collapse back to a bare 1 except the two variants
+    // that are explicitly unclassified.
+    #[test]
+    fn classified_variants_do_not_return_generic() {
+        for err in [
+            RedisCtlError::NoProfileConfigured,
+            RedisCtlError::MissingCredentials {
+                name: "p".into(),
+                missing_fields: "api_key".into(),
+            },
+            RedisCtlError::UnsupportedDeploymentType {
+                deployment_type: "cloud".into(),
+            },
+            api("HTTP 500: boom"),
+        ] {
+            assert_ne!(err.exit_code(), exit_code::GENERIC, "{err}");
         }
     }
 }
