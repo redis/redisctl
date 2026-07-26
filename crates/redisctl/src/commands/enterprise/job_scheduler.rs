@@ -296,13 +296,8 @@ impl JobSchedulerCommands {
             }
 
             JobSchedulerCommands::Delete { job_id, force } => {
-                if !force
-                    && !super::utils::confirm_action(&format!(
-                        "Delete scheduled job '{}'?",
-                        job_id
-                    ))?
-                {
-                    return Ok(());
+                if !force {
+                    super::utils::confirm_action(&format!("Delete scheduled job '{}'?", job_id))?;
                 }
 
                 client

@@ -390,10 +390,7 @@ async fn handle_delete(
     // Confirm deletion if not forced
     if !force {
         let message = format!("Are you sure you want to delete module '{}'?", uid);
-        if !crate::commands::enterprise::utils::confirm_action(&message)? {
-            println!("Module deletion cancelled");
-            return Ok(());
-        }
+        crate::commands::enterprise::utils::confirm_action(&message)?;
     }
 
     let client = conn_mgr.create_enterprise_client(profile_name).await?;

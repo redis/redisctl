@@ -308,11 +308,7 @@ pub async fn delete_redis_rule(
     force: bool,
 ) -> CliResult<()> {
     if !force {
-        let confirm = confirm_action(&format!("delete Redis rule {}", id))?;
-        if !confirm {
-            println!("Operation cancelled");
-            return Ok(());
-        }
+        confirm_action(&format!("delete Redis rule {}", id))?;
     }
 
     let client = params
@@ -449,11 +445,7 @@ pub async fn update_role(
 
 pub async fn delete_role(params: &AclOperationParams<'_>, id: i32, force: bool) -> CliResult<()> {
     if !force {
-        let confirm = confirm_action(&format!("delete ACL role {}", id))?;
-        if !confirm {
-            println!("Operation cancelled");
-            return Ok(());
-        }
+        confirm_action(&format!("delete ACL role {}", id))?;
     }
 
     let client = params
@@ -617,11 +609,7 @@ pub async fn delete_acl_user(
     force: bool,
 ) -> CliResult<()> {
     if !force {
-        let confirm = confirm_action(&format!("delete ACL user {}", id))?;
-        if !confirm {
-            println!("Operation cancelled");
-            return Ok(());
-        }
+        confirm_action(&format!("delete ACL user {}", id))?;
     }
 
     let client = params

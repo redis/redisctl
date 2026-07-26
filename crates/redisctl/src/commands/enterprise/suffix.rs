@@ -272,8 +272,8 @@ async fn handle_suffix_command_impl(
         }
 
         SuffixCommands::Delete { name, force } => {
-            if !force && !super::utils::confirm_action(&format!("Delete DNS suffix '{}'?", name))? {
-                return Ok(());
+            if !force {
+                super::utils::confirm_action(&format!("Delete DNS suffix '{}'?", name))?;
             }
 
             client

@@ -262,9 +262,8 @@ pub async fn delete_user(
     _output_format: OutputFormat,
     _query: Option<&str>,
 ) -> CliResult<()> {
-    if !force && !confirm_action(&format!("Delete user {}?", id))? {
-        println!("Operation cancelled");
-        return Ok(());
+    if !force {
+        confirm_action(&format!("Delete user {}?", id))?;
     }
 
     let client = conn_mgr.create_enterprise_client(profile_name).await?;
@@ -537,9 +536,8 @@ pub async fn delete_role(
     _output_format: OutputFormat,
     _query: Option<&str>,
 ) -> CliResult<()> {
-    if !force && !confirm_action(&format!("Delete role {}?", id))? {
-        println!("Operation cancelled");
-        return Ok(());
+    if !force {
+        confirm_action(&format!("Delete role {}?", id))?;
     }
 
     let client = conn_mgr.create_enterprise_client(profile_name).await?;
@@ -783,9 +781,8 @@ pub async fn delete_acl(
     _output_format: OutputFormat,
     _query: Option<&str>,
 ) -> CliResult<()> {
-    if !force && !confirm_action(&format!("Delete ACL {}?", id))? {
-        println!("Operation cancelled");
-        return Ok(());
+    if !force {
+        confirm_action(&format!("Delete ACL {}?", id))?;
     }
 
     let client = conn_mgr.create_enterprise_client(profile_name).await?;

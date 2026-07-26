@@ -399,8 +399,8 @@ async fn handle_migration_command_impl(
         }
 
         MigrationCommands::Cancel { uid, force } => {
-            if !force && !super::utils::confirm_action(&format!("Cancel migration {}?", uid))? {
-                return Ok(());
+            if !force {
+                super::utils::confirm_action(&format!("Cancel migration {}?", uid))?;
             }
 
             client

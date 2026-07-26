@@ -268,8 +268,8 @@ impl CrdbTaskCommands {
             }
 
             CrdbTaskCommands::Cancel { task_id, force } => {
-                if !force && !super::utils::confirm_action(&format!("Cancel task {}?", task_id))? {
-                    return Ok(());
+                if !force {
+                    super::utils::confirm_action(&format!("Cancel task {}?", task_id))?;
                 }
 
                 // Cancel the task

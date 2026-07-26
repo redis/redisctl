@@ -262,10 +262,7 @@ pub async fn handle_fixed_database_command(
 
             if !yes {
                 let prompt = format!("Delete fixed database {}:{}?", subscription_id, database_id);
-                if !confirm_action(&prompt)? {
-                    eprintln!("Operation cancelled");
-                    return Ok(());
-                }
+                confirm_action(&prompt)?;
             }
 
             let result = handler

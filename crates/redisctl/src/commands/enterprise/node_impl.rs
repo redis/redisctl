@@ -204,9 +204,8 @@ pub async fn remove_node(
     _output_format: OutputFormat,
     _query: Option<&str>,
 ) -> CliResult<()> {
-    if !force && !confirm_action(&format!("Remove node {} from cluster?", id))? {
-        println!("Operation cancelled");
-        return Ok(());
+    if !force {
+        confirm_action(&format!("Remove node {} from cluster?", id))?;
     }
 
     let client = conn_mgr.create_enterprise_client(profile_name).await?;
@@ -437,9 +436,8 @@ pub async fn restart_node(
     output_format: OutputFormat,
     query: Option<&str>,
 ) -> CliResult<()> {
-    if !force && !confirm_action(&format!("Restart node {} services?", id))? {
-        println!("Operation cancelled");
-        return Ok(());
+    if !force {
+        confirm_action(&format!("Restart node {} services?", id))?;
     }
 
     let client = conn_mgr.create_enterprise_client(profile_name).await?;

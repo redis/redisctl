@@ -170,9 +170,8 @@ pub async fn delete_crdb(
     output_format: OutputFormat,
     query: Option<&str>,
 ) -> CliResult<()> {
-    if !force && !confirm_action(&format!("Delete CRDB {}?", id))? {
-        println!("Operation cancelled");
-        return Ok(());
+    if !force {
+        confirm_action(&format!("Delete CRDB {}?", id))?;
     }
 
     let client = conn_mgr.create_enterprise_client(profile_name).await?;
@@ -284,9 +283,8 @@ pub async fn remove_cluster_from_crdb(
     output_format: OutputFormat,
     query: Option<&str>,
 ) -> CliResult<()> {
-    if !force && !confirm_action(&format!("Remove cluster {} from CRDB {}?", cluster_id, id))? {
-        println!("Operation cancelled");
-        return Ok(());
+    if !force {
+        confirm_action(&format!("Remove cluster {} from CRDB {}?", cluster_id, id))?;
     }
 
     let client = conn_mgr.create_enterprise_client(profile_name).await?;
@@ -410,14 +408,11 @@ pub async fn flush_crdb_instance(
     output_format: OutputFormat,
     query: Option<&str>,
 ) -> CliResult<()> {
-    if !force
-        && !confirm_action(&format!(
+    if !force {
+        confirm_action(&format!(
             "Flush data for instance {} in CRDB {}? This will delete all data!",
             instance_id, crdb_id
-        ))?
-    {
-        println!("Operation cancelled");
-        return Ok(());
+        ))?;
     }
 
     let client = conn_mgr.create_enterprise_client(profile_name).await?;

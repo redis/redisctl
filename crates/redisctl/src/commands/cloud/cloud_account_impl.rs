@@ -340,11 +340,7 @@ pub async fn handle_delete(
     force: bool,
 ) -> CliResult<()> {
     if !force {
-        let confirmed = confirm_action(&format!("delete cloud account {}", account_id))?;
-        if !confirmed {
-            println!("Operation cancelled");
-            return Ok(());
-        }
+        confirm_action(&format!("delete cloud account {}", account_id))?;
     }
 
     let response = params

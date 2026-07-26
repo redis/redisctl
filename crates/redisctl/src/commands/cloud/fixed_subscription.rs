@@ -269,10 +269,7 @@ pub async fn handle_fixed_subscription_command(
         CloudFixedSubscriptionCommands::Delete { id, yes, async_ops } => {
             if !yes {
                 let prompt = format!("Delete fixed subscription {}?", id);
-                if !confirm_action(&prompt)? {
-                    eprintln!("Operation cancelled");
-                    return Ok(());
-                }
+                confirm_action(&prompt)?;
             }
 
             let result = handler
