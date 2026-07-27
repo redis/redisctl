@@ -20,6 +20,6 @@ pub mod credential;
 pub mod error;
 
 // Re-export main types for convenience
-pub use config::{Config, DeploymentType, Profile, ProfileCredentials};
+pub use config::{CloudAuthConfig, Config, DeploymentType, Profile, ProfileCredentials};
 pub use credential::{CredentialStorage, CredentialStore};
 pub use error::{ConfigError, Result};
