@@ -1,12 +1,12 @@
 //! OIDC Device Authorization Grant (RFC 8628) client for the Redis Cloud Okta tenant.
 //!
-//! Three requests against the issuer:
+//! Two requests against the issuer:
 //! - `POST {issuer}/v1/device/authorize` — start; returns the user code + verification URI.
 //! - `POST {issuer}/v1/token` (device-code grant) — polled until approved/expired/denied.
-//! - `POST {issuer}/v1/token` (refresh-token grant) — exchange a refresh token for a new set.
 //!
 //! The caller owns the polling loop (so the CLI can print progress and honor `--timeout`);
-//! [`DeviceFlowClient::poll_once`] performs a single attempt.
+//! [`DeviceFlowClient::poll_once`] performs a single attempt. Refreshing a token is
+//! flow-agnostic and lives in [`super::oidc::refresh`].
 
 use serde::Deserialize;
 use url::Url;
@@ -16,7 +16,6 @@ use super::{
 };
 
 const DEVICE_CODE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
-const REFRESH_TOKEN_GRANT: &str = "refresh_token";
 /// RFC 8628 default poll interval when the server omits one.
 const DEFAULT_INTERVAL: u64 = 5;
 
@@ -35,7 +34,10 @@ pub struct DeviceFlowClient {
 pub struct DeviceAuthorization {
     pub device_code: String,
     pub user_code: String,
+    /// The page the user opens and then *types* the `user_code` into.
     pub verification_uri: String,
+    /// The same page with the `user_code` pre-embedded (optional per RFC 8628), so the user
+    /// can just open it and confirm — no manual code entry. Prefer this when present.
     pub verification_uri_complete: Option<String>,
     pub expires_in: u64,
     pub interval: u64,
@@ -52,6 +54,9 @@ pub enum PollOutcome {
     Ready(TokenSet),
 }
 
+/// Raw `/device/authorize` wire response. Kept separate from the public [`DeviceAuthorization`]
+/// so the wire shape (`interval` optional per RFC 8628) stays isolated from the resolved public
+/// type (`interval` defaulted); `start()` maps one to the other.
 #[derive(Deserialize)]
 struct DeviceAuthzResponse {
     device_code: String,
@@ -66,21 +71,17 @@ impl DeviceFlowClient {
     /// Build a client for the given issuer (e.g.
     /// `https://<your-okta-issuer>/oauth2/default`) and public client id.
     pub fn new(issuer: Url, client_id: impl Into<String>) -> Self {
-        Self::with_http_client(issuer, client_id, default_http_client())
-    }
-
-    /// Build with a caller-provided reqwest client (used by tests and callers that want to
-    /// share a client / set a custom user agent).
-    pub fn with_http_client(
-        issuer: Url,
-        client_id: impl Into<String>,
-        http: reqwest::Client,
-    ) -> Self {
         Self {
             issuer,
             client_id: client_id.into(),
-            http,
+            http: default_http_client(),
         }
+    }
+
+    /// Use a caller-provided reqwest client (tests / shared client / custom user agent).
+    pub fn with_http_client(mut self, http: reqwest::Client) -> Self {
+        self.http = http;
+        self
     }
 
     /// Start device authorization: `POST /v1/device/authorize`.
@@ -149,27 +150,6 @@ impl DeviceFlowClient {
             };
         }
         Ok(PollOutcome::Ready(token_set(tr)?))
-    }
-
-    /// Exchange a refresh token for a fresh token set (Okta rotates the refresh token).
-    pub async fn refresh(&self, refresh_token: &str) -> Result<TokenSet, AuthError> {
-        let tr = post_token(
-            &self.http,
-            &endpoint(&self.issuer, "v1/token"),
-            &[
-                ("client_id", self.client_id.as_str()),
-                ("grant_type", REFRESH_TOKEN_GRANT),
-                ("refresh_token", refresh_token),
-            ],
-        )
-        .await?;
-        if let Some(err) = tr.error.as_deref() {
-            return Err(AuthError::Protocol(format!(
-                "refresh failed ({err}): {}",
-                tr.description()
-            )));
-        }
-        token_set(tr)
     }
 }
 
@@ -334,41 +314,6 @@ mod tests {
             .await;
         assert!(matches!(
             client(&server).poll_once("DC").await,
-            Err(AuthError::Protocol(_))
-        ));
-    }
-
-    #[tokio::test]
-    async fn refresh_returns_rotated_token() {
-        let server = MockServer::start().await;
-        mount_token(
-            &server,
-            200,
-            serde_json::json!({
-                "access_token": "AT2",
-                "refresh_token": "RT2",
-                "expires_in": 3600
-            }),
-        )
-        .await;
-
-        let t = client(&server).refresh("RT1").await.unwrap();
-        assert_eq!(t.access_token, "AT2");
-        // Okta rotates the refresh token — the caller must persist the new one.
-        assert_eq!(t.refresh_token.as_deref(), Some("RT2"));
-    }
-
-    #[tokio::test]
-    async fn refresh_error_is_protocol() {
-        let server = MockServer::start().await;
-        mount_token(
-            &server,
-            400,
-            serde_json::json!({"error": "invalid_grant", "error_description": "expired"}),
-        )
-        .await;
-        assert!(matches!(
-            client(&server).refresh("RT1").await,
             Err(AuthError::Protocol(_))
         ));
     }

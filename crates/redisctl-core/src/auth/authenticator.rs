@@ -87,12 +87,9 @@ impl CloudAuthenticator {
     }
 
     /// Device-authorization-grant client for headless / agent logins.
-    pub fn device_flow(&self) -> DeviceFlowClient {
-        DeviceFlowClient::with_http_client(
-            self.issuer.clone(),
-            self.client_id.clone(),
-            self.http.clone(),
-        )
+    pub fn device(&self) -> DeviceFlowClient {
+        DeviceFlowClient::new(self.issuer.clone(), self.client_id.clone())
+            .with_http_client(self.http.clone())
     }
 
     /// Auth-code + PKCE loopback client for interactive human logins.
@@ -101,9 +98,10 @@ impl CloudAuthenticator {
             .with_http_client(self.http.clone())
     }
 
-    /// Refresh an Okta refresh token for a fresh token set (Okta rotates it).
+    /// Refresh an Okta refresh token for a fresh token set (Okta rotates it). The grant is
+    /// flow-agnostic, so it goes straight through `oidc` rather than a specific flow client.
     pub async fn refresh(&self, refresh_token: &str) -> Result<TokenSet, AuthError> {
-        self.device_flow().refresh(refresh_token).await
+        super::oidc::refresh(&self.http, &self.issuer, &self.client_id, refresh_token).await
     }
 
     /// Given tokens from a flow, run the SM exchange and mint a CAPI key named `key_name`.
@@ -115,13 +113,16 @@ impl CloudAuthenticator {
         let mut sm = SmApiClient::with_http_client(self.sm_api_url.clone(), self.http.clone());
         // Google/GitHub logins must not send Sm-Id-Token (SSO-only); see sm_api docs.
         sm.login(&tokens.access_token, None).await?;
-        let user = sm.current_user().await?;
+        let user = sm.fetch_current_user().await?;
         sm.ensure_capi_enabled().await?;
         // Pick the account matching the logged-in user's current_account_id. /accounts list
         // order isn't guaranteed, so taking the first entry could mint a key for the wrong
         // account in a multi-account org. Fall back to the first only when it's absent/unknown.
-        let account = select_account(sm.accounts().await?, user.current_account_id.as_deref())
-            .ok_or_else(|| AuthError::Protocol("no accounts associated with this login".into()))?;
+        let account = select_account(
+            sm.fetch_accounts().await?,
+            user.current_account_id.as_deref(),
+        )
+        .ok_or_else(|| AuthError::Protocol("no accounts associated with this login".into()))?;
         let api_key = account.api_access_key.ok_or_else(|| {
             AuthError::Protocol("account has no CAPI access key after enabling CAPI".into())
         })?;
@@ -129,7 +130,7 @@ impl CloudAuthenticator {
         // Best-effort: count our keys so the CLI can warn about sprawl (D5). Never fail login
         // over this — a listing error just means no warning.
         let redisctl_key_count = sm
-            .list_capi_keys()
+            .fetch_capi_keys()
             .await
             .map(|keys| keys.iter().filter(|n| n.starts_with("redisctl-")).count())
             .unwrap_or(0);

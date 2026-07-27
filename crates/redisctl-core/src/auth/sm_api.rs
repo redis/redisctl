@@ -170,14 +170,14 @@ impl SmApiClient {
     }
 
     /// `GET /users/me`.
-    pub async fn current_user(&self) -> Result<SmUser, AuthError> {
+    pub async fn fetch_current_user(&self) -> Result<SmUser, AuthError> {
         let body = self.authed_get("users/me").await?.text().await?;
         serde_json::from_str(&body)
             .map_err(|e| AuthError::Protocol(format!("could not parse /users/me: {e}")))
     }
 
     /// `GET /accounts`.
-    pub async fn accounts(&self) -> Result<Vec<SmAccount>, AuthError> {
+    pub async fn fetch_accounts(&self) -> Result<Vec<SmAccount>, AuthError> {
         let body = self.authed_get("accounts").await?.text().await?;
         let env: AccountsEnvelope = serde_json::from_str(&body)
             .map_err(|e| AuthError::Protocol(format!("could not parse /accounts: {e}")))?;
@@ -241,7 +241,7 @@ impl SmApiClient {
 
     /// `GET /accounts/cloud-api/cloudApiKeys` — list existing CAPI key names. Best-effort: used
     /// only to warn about `redisctl-*` key sprawl at login, so tolerant of response shape.
-    pub async fn list_capi_keys(&self) -> Result<Vec<String>, AuthError> {
+    pub async fn fetch_capi_keys(&self) -> Result<Vec<String>, AuthError> {
         let body = self
             .authed_get("accounts/cloud-api/cloudApiKeys")
             .await?
@@ -366,7 +366,7 @@ mod tests {
             .await;
 
         let c = logged_in(&server).await;
-        let user = c.current_user().await.unwrap();
+        let user = c.fetch_current_user().await.unwrap();
         assert_eq!(user.id, "114429");
         assert_eq!(user.user_account().unwrap(), 114429);
         assert_eq!(user.current_account_id.as_deref(), Some("112117"));
@@ -387,7 +387,7 @@ mod tests {
             .await;
 
         let c = logged_in(&server).await;
-        let accounts = c.accounts().await.unwrap();
+        let accounts = c.fetch_accounts().await.unwrap();
         assert_eq!(accounts.len(), 1);
         assert_eq!(accounts[0].id, 112117);
         assert_eq!(accounts[0].api_access_key.as_deref(), Some("ACCT-KEY"));

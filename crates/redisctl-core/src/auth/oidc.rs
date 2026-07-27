@@ -126,6 +126,36 @@ pub(crate) fn token_set(tr: TokenResponse) -> Result<TokenSet, AuthError> {
     })
 }
 
+/// Exchange a refresh token for a fresh [`TokenSet`] via the refresh-token grant.
+///
+/// Okta rotates the refresh token, so the caller must persist the new one. The grant is
+/// flow-agnostic (a token from either login flow refreshes identically), so it lives here
+/// rather than on a specific flow client.
+pub(crate) async fn refresh(
+    http: &reqwest::Client,
+    issuer: &Url,
+    client_id: &str,
+    refresh_token: &str,
+) -> Result<TokenSet, AuthError> {
+    let tr = post_token(
+        http,
+        &endpoint(issuer, "v1/token"),
+        &[
+            ("client_id", client_id),
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token),
+        ],
+    )
+    .await?;
+    if let Some(err) = tr.error.as_deref() {
+        return Err(AuthError::Protocol(format!(
+            "refresh failed ({err}): {}",
+            tr.description()
+        )));
+    }
+    token_set(tr)
+}
+
 /// A reqwest client with the redisctl user agent.
 pub(crate) fn default_http_client() -> reqwest::Client {
     reqwest::Client::builder()
@@ -142,5 +172,59 @@ pub(crate) fn truncate(s: &str) -> String {
     } else {
         let head: String = s.chars().take(MAX).collect();
         format!("{head}…")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    async fn mount_token(server: &MockServer, status: u16, body: serde_json::Value) {
+        Mock::given(method("POST"))
+            .and(path("/v1/token"))
+            .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn refresh_returns_rotated_token() {
+        let server = MockServer::start().await;
+        mount_token(
+            &server,
+            200,
+            serde_json::json!({
+                "access_token": "AT2",
+                "refresh_token": "RT2",
+                "expires_in": 3600
+            }),
+        )
+        .await;
+
+        let issuer = Url::parse(&server.uri()).unwrap();
+        let t = refresh(&default_http_client(), &issuer, "test-client", "RT1")
+            .await
+            .unwrap();
+        assert_eq!(t.access_token, "AT2");
+        // Okta rotates the refresh token — the caller must persist the new one.
+        assert_eq!(t.refresh_token.as_deref(), Some("RT2"));
+    }
+
+    #[tokio::test]
+    async fn refresh_error_is_protocol() {
+        let server = MockServer::start().await;
+        mount_token(
+            &server,
+            400,
+            serde_json::json!({"error": "invalid_grant", "error_description": "expired"}),
+        )
+        .await;
+        let issuer = Url::parse(&server.uri()).unwrap();
+        assert!(matches!(
+            refresh(&default_http_client(), &issuer, "test-client", "RT1").await,
+            Err(AuthError::Protocol(_))
+        ));
     }
 }

@@ -3,10 +3,15 @@
 //! one-shot `127.0.0.1` listener to catch the redirect; **no callback page is hosted
 //! anywhere** and the authorization code never leaves the machine.
 //!
-//! Flow: bind a loopback port → build PKCE (S256) + `state` → hand the authorize URL to the
-//! caller's `open_browser` → wait for the redirect on the listener → validate `state` →
-//! exchange the code (+ `code_verifier`) for tokens. Converges on the same [`TokenSet`] and
-//! token-endpoint plumbing as the device flow.
+//! Sequence:
+//! 1. Bind a loopback port on 127.0.0.1 (the redirect target; no page is hosted anywhere).
+//! 2. Build a PKCE S256 verifier/challenge + a random `state`.
+//! 3. Hand the `/v1/authorize` URL to the caller's `open_browser`; the user signs in.
+//! 4. Catch the browser's redirect to `127.0.0.1/callback?code&state` on the listener.
+//! 5. Validate `state` (CSRF guard) and extract the code.
+//! 6. Exchange the code (+ `code_verifier`) at `/v1/token` for a `TokenSet`.
+//!
+//! Converges on the same [`TokenSet`] and token-endpoint plumbing as the device flow.
 
 use std::net::Ipv4Addr;
 use std::time::Duration;
