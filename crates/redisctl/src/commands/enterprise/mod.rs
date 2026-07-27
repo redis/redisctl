@@ -2,6 +2,7 @@
 
 pub mod actions;
 pub mod alerts;
+pub mod alerts_impl;
 pub mod bdb_group;
 pub mod bootstrap;
 pub mod cluster;
@@ -19,7 +20,9 @@ pub mod job_scheduler;
 pub mod jsonschema;
 pub mod ldap;
 pub mod license;
+pub mod license_impl;
 pub mod license_workflow;
+pub mod license_workflow_impl;
 pub mod local;
 pub mod logs;
 pub mod logs_impl;

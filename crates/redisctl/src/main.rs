@@ -662,10 +662,12 @@ async fn execute_enterprise_command(
             )
             .await
         }
-        Alerts(alerts_cmd) => alerts_cmd
-            .execute(&conn_mgr.config, profile, output, query)
+        Alerts(alerts_cmd) => {
+            commands::enterprise::alerts::handle_alerts_command(
+                conn_mgr, profile, alerts_cmd, output, query,
+            )
             .await
-            .map_err(RedisCtlError::from),
+        }
         BdbGroup(bdb_group_cmd) => {
             commands::enterprise::bdb_group::handle_bdb_group_command(
                 conn_mgr,
@@ -844,10 +846,16 @@ async fn execute_enterprise_command(
             )
             .await
         }
-        License(license_cmd) => license_cmd
-            .execute(&conn_mgr.config, profile, output, query)
+        License(license_cmd) => {
+            commands::enterprise::license::handle_license_command(
+                conn_mgr,
+                profile,
+                license_cmd,
+                output,
+                query,
+            )
             .await
-            .map_err(RedisCtlError::from),
+        }
         Migration(migration_cmd) => {
             commands::enterprise::migration::handle_migration_command(
                 conn_mgr,
@@ -1098,10 +1106,15 @@ async fn handle_enterprise_workflow_command(
             }
             Ok(())
         }
-        License(license_workflow_cmd) => license_workflow_cmd
-            .execute(&conn_mgr.config, output, None)
+        License(license_workflow_cmd) => {
+            commands::enterprise::license_workflow::handle_license_workflow_command(
+                conn_mgr,
+                license_workflow_cmd,
+                output,
+                None,
+            )
             .await
-            .map_err(RedisCtlError::from),
+        }
         InitCluster {
             name,
             username,
