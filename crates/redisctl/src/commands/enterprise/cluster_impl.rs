@@ -487,10 +487,7 @@ pub async fn reset_cluster(
     if !force {
         eprintln!("WARNING: This will completely reset the cluster!");
         eprintln!("All data, configurations, and databases will be lost.");
-        if !confirm_action("Are you absolutely sure you want to reset the cluster?")? {
-            println!("Operation cancelled");
-            return Ok(());
-        }
+        confirm_action("Are you absolutely sure you want to reset the cluster?")?;
     }
 
     let client = conn_mgr.create_enterprise_client(profile_name).await?;

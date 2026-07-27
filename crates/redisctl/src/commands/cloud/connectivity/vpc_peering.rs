@@ -441,14 +441,10 @@ async fn handle_delete(
     force: bool,
 ) -> CliResult<()> {
     if !force {
-        let confirmed = confirm_action(&format!(
+        confirm_action(&format!(
             "delete VPC peering {} for subscription {}",
             peering_id, params.subscription_id
         ))?;
-        if !confirmed {
-            println!("Operation cancelled");
-            return Ok(());
-        }
     }
 
     let result = params
@@ -569,14 +565,10 @@ async fn handle_delete_active_active(
     force: bool,
 ) -> CliResult<()> {
     if !force {
-        let confirmed = confirm_action(&format!(
+        confirm_action(&format!(
             "delete Active-Active VPC peering {} for subscription {}",
             peering_id, params.subscription_id
         ))?;
-        if !confirmed {
-            println!("Operation cancelled");
-            return Ok(());
-        }
     }
 
     let result = params

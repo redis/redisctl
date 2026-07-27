@@ -402,10 +402,7 @@ async fn delete_attachment(
             "Delete TGW attachment {} for subscription {}?",
             attachment_id, params.subscription_id
         );
-        if !confirm_action(&prompt)? {
-            eprintln!("Operation cancelled");
-            return Ok(());
-        }
+        confirm_action(&prompt)?;
     }
 
     let handler = TransitGatewayHandler::new(params.client.clone());
@@ -582,10 +579,7 @@ async fn delete_attachment_aa(
             "Delete Active-Active TGW attachment {} in region {} for subscription {}?",
             attachment_id, region_id, params.subscription_id
         );
-        if !confirm_action(&prompt)? {
-            eprintln!("Operation cancelled");
-            return Ok(());
-        }
+        confirm_action(&prompt)?;
     }
 
     let handler = TransitGatewayHandler::new(params.client.clone());

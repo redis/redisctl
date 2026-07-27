@@ -406,14 +406,11 @@ async fn handle_delete(
     force: bool,
 ) -> CliResult<()> {
     // Confirmation prompt unless --force is used
-    if !force
-        && !crate::commands::cloud::utils::confirm_action(&format!(
+    if !force {
+        crate::commands::cloud::utils::confirm_action(&format!(
             "Are you sure you want to delete PrivateLink for subscription {}?",
             params.subscription_id
-        ))?
-    {
-        println!("Delete operation cancelled");
-        return Ok(());
+        ))?;
     }
 
     let result = handler

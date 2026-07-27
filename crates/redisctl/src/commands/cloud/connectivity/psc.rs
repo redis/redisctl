@@ -337,10 +337,7 @@ async fn delete_service(params: &ConnectivityOperationParams<'_>, yes: bool) -> 
             "Delete PSC service for subscription {}?",
             params.subscription_id
         );
-        if !confirm_action(&prompt)? {
-            eprintln!("Operation cancelled");
-            return Ok(());
-        }
+        confirm_action(&prompt)?;
     }
 
     let handler = PscHandler::new(params.client.clone());
@@ -485,10 +482,7 @@ async fn delete_endpoint(
             "Delete PSC endpoint {} for subscription {}?",
             endpoint_id, params.subscription_id
         );
-        if !confirm_action(&prompt)? {
-            eprintln!("Operation cancelled");
-            return Ok(());
-        }
+        confirm_action(&prompt)?;
     }
 
     let handler = PscHandler::new(params.client.clone());
@@ -602,10 +596,7 @@ async fn delete_service_aa(
             "Delete Active-Active PSC service for subscription {}?",
             params.subscription_id
         );
-        if !confirm_action(&prompt)? {
-            eprintln!("Operation cancelled");
-            return Ok(());
-        }
+        confirm_action(&prompt)?;
     }
 
     let handler = PscHandler::new(params.client.clone());
@@ -692,10 +683,7 @@ async fn delete_endpoint_aa(
             "Delete Active-Active PSC endpoint {} in region {} for subscription {}?",
             endpoint_id, region_id, params.subscription_id
         );
-        if !confirm_action(&prompt)? {
-            eprintln!("Operation cancelled");
-            return Ok(());
-        }
+        confirm_action(&prompt)?;
     }
 
     let handler = PscHandler::new(params.client.clone());

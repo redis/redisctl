@@ -235,14 +235,11 @@ pub async fn delete_subscription(
     }
 
     // Confirmation prompt unless --force is used
-    if !force
-        && !super::utils::confirm_action(&format!(
+    if !force {
+        super::utils::confirm_action(&format!(
             "Are you sure you want to delete subscription {}? This will delete all databases in the subscription!",
             id
-        ))?
-    {
-        println!("Subscription deletion cancelled");
-        return Ok(());
+        ))?;
     }
 
     // Use Layer 2 workflow when --wait is specified
@@ -902,13 +899,10 @@ pub async fn delete_aa_regions(
         } else {
             regions.join(", ")
         };
-        if !super::utils::confirm_action(&format!(
+        super::utils::confirm_action(&format!(
             "Are you sure you want to delete regions ({}) from Active-Active subscription {}?",
             region_list, id
-        ))? {
-            println!("Region deletion cancelled");
-            return Ok(());
-        }
+        ))?;
     }
 
     let client = conn_mgr.create_cloud_client(profile_name).await?;

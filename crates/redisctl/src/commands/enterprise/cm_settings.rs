@@ -134,8 +134,8 @@ impl CmSettingsCommands {
                 data,
                 force,
             } => {
-                if !*force && !super::utils::confirm_action("Update cluster manager settings?")? {
-                    return Ok(());
+                if !*force {
+                    super::utils::confirm_action("Update cluster manager settings?")?;
                 }
 
                 // Start with JSON from --data if provided, otherwise empty object
@@ -171,9 +171,8 @@ impl CmSettingsCommands {
             }
 
             CmSettingsCommands::SetValue { name, value, force } => {
-                if !force && !super::utils::confirm_action(&format!("Update setting '{}'?", name))?
-                {
-                    return Ok(());
+                if !force {
+                    super::utils::confirm_action(&format!("Update setting '{}'?", name))?;
                 }
 
                 // Get current settings
@@ -220,12 +219,10 @@ impl CmSettingsCommands {
             }
 
             CmSettingsCommands::Reset { force } => {
-                if !force
-                    && !super::utils::confirm_action(
+                if !force {
+                    super::utils::confirm_action(
                         "Reset all cluster manager settings to defaults?",
-                    )?
-                {
-                    return Ok(());
+                    )?;
                 }
 
                 // Reset by sending empty object
@@ -263,10 +260,8 @@ impl CmSettingsCommands {
             }
 
             CmSettingsCommands::Import { file, force } => {
-                if !force
-                    && !super::utils::confirm_action("Import cluster manager settings from file?")?
-                {
-                    return Ok(());
+                if !force {
+                    super::utils::confirm_action("Import cluster manager settings from file?")?;
                 }
 
                 let json_data = super::utils::read_json_data(file)?;

@@ -94,7 +94,9 @@ fn non_interactive_destructive_without_force_exits_nonzero() {
         .write_stdin("")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Confirmation required"))
+        .stderr(predicate::str::contains(
+            "Cancelled at the confirmation prompt",
+        ))
         .stderr(predicate::str::contains("--force"));
 }
 
@@ -111,7 +113,7 @@ fn destructive_with_force_skips_confirmation() {
         .write_stdin("")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Confirmation required").not());
+        .stderr(predicate::str::contains("Cancelled at the confirmation prompt").not());
 }
 
 // A failing command must not write tracing output (ANSI escapes or the

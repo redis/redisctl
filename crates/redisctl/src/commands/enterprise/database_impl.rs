@@ -594,9 +594,8 @@ pub async fn delete_database(
         return Ok(());
     }
 
-    if !force && !confirm_action(&format!("Delete database {}?", id))? {
-        println!("Operation cancelled");
-        return Ok(());
+    if !force {
+        confirm_action(&format!("Delete database {}?", id))?;
     }
 
     let client = conn_mgr.create_enterprise_client(profile_name).await?;
@@ -1086,14 +1085,11 @@ pub async fn flush_database(
     output_format: OutputFormat,
     query: Option<&str>,
 ) -> CliResult<()> {
-    if !force
-        && !confirm_action(&format!(
+    if !force {
+        confirm_action(&format!(
             "Flush all data from database {}? This will delete all data!",
             id
-        ))?
-    {
-        println!("Operation cancelled");
-        return Ok(());
+        ))?;
     }
 
     let client = conn_mgr.create_enterprise_client(profile_name).await?;

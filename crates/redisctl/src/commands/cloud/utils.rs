@@ -191,22 +191,28 @@ pub use crate::output::{apply_jmespath, handle_output, print_formatted_output, r
 /// Prompt to confirm a destructive action. Shared by all cloud and enterprise
 /// commands (enterprise re-exports this one).
 ///
-/// Returns `Ok(true)` when confirmed and `Ok(false)` when the user
-/// interactively declines. When stdin is not a terminal there is no way to
-/// answer, so this returns `Err(RedisCtlError::Cancelled)` rather than a value:
-/// a non-interactive run without `--force` must never be mistaken for success
-/// and exit 0.
-pub fn confirm_action(message: &str) -> CliResult<bool> {
+/// Returns `Ok(())` only when the user confirms. Both ways of not confirming
+/// return `Err(RedisCtlError::Cancelled)`: stdin not being a terminal, so the
+/// prompt cannot be answered at all, and the user interactively declining.
+/// Neither is success, so neither may exit 0 -- a caller that treated a
+/// decline as a no-op would report "nothing went wrong" for an action it
+/// never performed.
+pub fn confirm_action(message: &str) -> CliResult<()> {
+    let cancelled = || RedisCtlError::Cancelled {
+        prompt: message.to_string(),
+    };
+
     if !io::stdin().is_terminal() {
-        return Err(RedisCtlError::Cancelled {
-            prompt: message.to_string(),
-        });
+        return Err(cancelled());
     }
-    Ok(dialoguer::Confirm::new()
+
+    let confirmed = dialoguer::Confirm::new()
         .with_prompt(message)
         .default(false)
         .interact()
-        .context("Failed to read confirmation")?)
+        .context("Failed to read confirmation")?;
+
+    if confirmed { Ok(()) } else { Err(cancelled()) }
 }
 
 /// Read file input, supporting @filename notation
@@ -226,6 +232,22 @@ pub fn read_file_input(input: &str) -> CliResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Not confirming is an error, never a value. `cargo test` runs without a
+    // terminal on stdin, so this exercises the unanswerable-prompt branch; the
+    // interactive decline branch reaches the same `Err` by construction, since
+    // the signature leaves no `Ok` for it to return.
+    #[test]
+    fn confirm_action_without_a_terminal_is_an_error() {
+        let err = confirm_action("Delete database 5?").unwrap_err();
+
+        assert!(
+            matches!(&err, RedisCtlError::Cancelled { prompt } if prompt == "Delete database 5?"),
+            "expected Cancelled carrying the prompt, got {:?}",
+            err
+        );
+        assert_eq!(err.code(), "cancelled");
+    }
 
     #[test]
     fn test_truncate_string_ascii() {

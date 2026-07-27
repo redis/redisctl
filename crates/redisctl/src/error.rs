@@ -113,9 +113,7 @@ pub enum RedisCtlError {
     #[error("Invalid input: {message}")]
     InvalidInput { message: String },
 
-    #[error(
-        "Confirmation required: {prompt} Re-run with --force to proceed in a non-interactive session."
-    )]
+    #[error("Cancelled at the confirmation prompt: {prompt}")]
     Cancelled { prompt: String },
 
     #[allow(dead_code)] // intended but not yet produced by any code path; see #1049
@@ -239,6 +237,7 @@ impl RedisCtlError {
             RedisCtlError::Cancelled { .. } => vec![
                 "Re-run with --force to skip the confirmation prompt".to_string(),
                 "Confirmation prompts require an interactive terminal".to_string(),
+                "A declined or unanswerable prompt is a failure, not a no-op".to_string(),
             ],
             RedisCtlError::Configuration(_) => vec![
                 "Check the profile: redisctl profile show <name>".to_string(),
