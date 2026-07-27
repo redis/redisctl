@@ -167,11 +167,11 @@ impl ConnectionManager {
             let resolved_profile_name = self.config.resolve_cloud_profile(profile_name)?;
             info!("Using Redis Cloud profile: {}", resolved_profile_name);
 
-            let profile = self
-                .config
-                .profiles
-                .get(&resolved_profile_name)
-                .with_context(|| format!("Profile '{}' not found", resolved_profile_name))?;
+            let profile = self.config.profiles.get(&resolved_profile_name).ok_or(
+                crate::error::RedisCtlError::ProfileNotFound {
+                    name: resolved_profile_name.clone(),
+                },
+            )?;
 
             // Verify it's a cloud profile
             if profile.deployment_type != DeploymentType::Cloud {
@@ -382,11 +382,11 @@ impl ConnectionManager {
             let resolved_profile_name = self.config.resolve_enterprise_profile(profile_name)?;
             info!("Using Redis Enterprise profile: {}", resolved_profile_name);
 
-            let profile = self
-                .config
-                .profiles
-                .get(&resolved_profile_name)
-                .with_context(|| format!("Profile '{}' not found", resolved_profile_name))?;
+            let profile = self.config.profiles.get(&resolved_profile_name).ok_or(
+                crate::error::RedisCtlError::ProfileNotFound {
+                    name: resolved_profile_name.clone(),
+                },
+            )?;
 
             // Verify it's an enterprise profile
             if profile.deployment_type != DeploymentType::Enterprise {
