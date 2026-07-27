@@ -163,6 +163,25 @@ fn json_output_emits_structured_error_envelope() {
     assert_eq!(v["error"]["code"], "profile_type_mismatch");
     assert!(v["error"]["message"].is_string());
     assert!(v["error"]["tips"].is_array());
+    // The envelope's exit_code is the code the process actually returned.
+    assert_eq!(v["error"]["exit_code"], 3);
+    assert_eq!(output.status.code(), Some(3));
+}
+
+// A config problem exits 3 rather than the blanket 1, so a script can tell
+// "your config is wrong" from any other failure. Regression for
+// GAP-AUTOMATION-02.
+#[test]
+fn config_failure_exits_with_the_config_code() {
+    let temp_dir = TempDir::new().unwrap();
+    // Only a cloud profile exists, so an enterprise command has nothing to
+    // resolve: a configuration failure, before any network call.
+    create_cloud_profile(&temp_dir, "https://cloud.invalid").unwrap();
+
+    test_cmd(&temp_dir)
+        .args(["enterprise", "database", "list"])
+        .assert()
+        .code(3);
 }
 
 #[tokio::test]

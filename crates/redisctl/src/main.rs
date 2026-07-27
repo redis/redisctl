@@ -324,7 +324,8 @@ fn maybe_inject_prefix(args: Vec<String>) -> Vec<String> {
                                 error::CliDiagnostic::error(&format!("{}", e)).print();
                             }
                         }
-                        std::process::exit(1);
+                        // Every arm above is a profile or config-file problem.
+                        std::process::exit(error::exit_code::CONFIG);
                     }
                 }
             }
@@ -349,7 +350,9 @@ fn maybe_inject_prefix(args: Vec<String>) -> Vec<String> {
                     ],
                 )
                 .print();
-                std::process::exit(1);
+                // The command is ambiguous as invoked: the platform has to be
+                // named or inferable.
+                std::process::exit(error::exit_code::USAGE);
             }
         }
     } else {
@@ -414,7 +417,7 @@ async fn main() -> Result<()> {
     // Execute command
     if let Err(e) = execute_command(&cli, &conn_mgr).await {
         e.print_diagnostic(cli.output);
-        std::process::exit(1);
+        std::process::exit(e.exit_code());
     }
 
     Ok(())
