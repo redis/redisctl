@@ -184,6 +184,52 @@ fn config_failure_exits_with_the_config_code() {
         .code(3);
 }
 
+// Naming a profile that does not exist is a config failure, so it exits 3 and
+// reports the missing profile by name with its tips, rather than landing in the
+// anyhow catch-all and exiting the blanket 1. Follow-up to #1058, part of the
+// item 2 work in #1045 (un-collapsing anyhow-wrapped error paths).
+#[test]
+fn nonexistent_profile_reports_profile_not_found() {
+    let temp_dir = TempDir::new().unwrap();
+    create_cloud_profile(&temp_dir, "https://cloud.invalid/v1").unwrap();
+
+    let output = test_cmd(&temp_dir)
+        .args([
+            "--profile",
+            "nope",
+            "-o",
+            "json",
+            "cloud",
+            "database",
+            "list",
+        ])
+        .assert()
+        .code(3)
+        .get_output()
+        .clone();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let v: serde_json::Value =
+        serde_json::from_str(stderr.trim()).expect("stderr under -o json must be valid JSON");
+    assert_eq!(v["error"]["code"], "profile_not_found");
+    assert_eq!(v["error"]["exit_code"], 3);
+}
+
+// The enterprise resolution path has its own profile lookup, so it needs its
+// own regression: the same nonexistent profile must classify the same way.
+#[test]
+fn nonexistent_enterprise_profile_reports_profile_not_found() {
+    let temp_dir = TempDir::new().unwrap();
+    create_enterprise_profile(&temp_dir, "https://enterprise.invalid:9443").unwrap();
+
+    test_cmd(&temp_dir)
+        .args(["--profile", "nope", "enterprise", "database", "list"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("Profile 'nope' not found"))
+        .stderr(predicate::str::contains("redisctl profile list"));
+}
+
 #[tokio::test]
 async fn test_api_cloud_get_with_auth_headers() {
     let temp_dir = TempDir::new().unwrap();
