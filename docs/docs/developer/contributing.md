@@ -54,6 +54,7 @@ Follow the existing code style. Key patterns:
 - Use `anyhow` for CLI errors, `thiserror` for library errors
 - All commands must support `-o json` output
 - Add tests for new functionality
+- Destructive commands must use long-only `--force` to skip confirmation; do not assign `-f`
 
 ### 3. Test Locally
 
@@ -111,6 +112,12 @@ crates/
 3. Add to command routing in `crates/redisctl/src/main.rs`
 4. Add tests in `crates/redisctl/tests/`
 5. Update documentation
+
+When adding a destructive command, add its command path to the `DESTRUCTIVE_COMMANDS` inventory in
+`crates/redisctl/src/main.rs`. The command-tree tests require every listed command to expose the
+canonical long-only `--force` bypass and reject a canonical `--yes` flag. Do not add new
+compatibility aliases; the hidden `--yes` and `-y` aliases exist only for commands that exposed them
+before this convention was adopted.
 
 ## Testing
 

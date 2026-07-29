@@ -1386,9 +1386,152 @@ async fn execute_cloud_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Command;
+
+    const DESTRUCTIVE_COMMANDS: &[&str] = &[
+        "redisctl cloud acl delete-acl-user",
+        "redisctl cloud acl delete-redis-rule",
+        "redisctl cloud acl delete-role",
+        "redisctl cloud connectivity privatelink delete",
+        "redisctl cloud connectivity psc aa-endpoint-delete",
+        "redisctl cloud connectivity psc aa-service-delete",
+        "redisctl cloud connectivity psc endpoint-delete",
+        "redisctl cloud connectivity psc service-delete",
+        "redisctl cloud connectivity tgw aa-attachment-delete",
+        "redisctl cloud connectivity tgw attachment-delete",
+        "redisctl cloud connectivity vpc-peering delete",
+        "redisctl cloud connectivity vpc-peering delete-aa",
+        "redisctl cloud database delete",
+        "redisctl cloud database flush",
+        "redisctl cloud database flush-crdb",
+        "redisctl cloud fixed-database delete",
+        "redisctl cloud fixed-subscription delete",
+        "redisctl cloud provider-account delete",
+        "redisctl cloud subscription delete",
+        "redisctl cloud subscription delete-aa-regions",
+        "redisctl cloud user delete",
+        "redisctl enterprise acl delete",
+        "redisctl enterprise bdb-group delete",
+        "redisctl enterprise cluster reset",
+        "redisctl enterprise cm-settings import",
+        "redisctl enterprise cm-settings reset",
+        "redisctl enterprise cm-settings set",
+        "redisctl enterprise cm-settings set-value",
+        "redisctl enterprise crdb delete",
+        "redisctl enterprise crdb flush-instance",
+        "redisctl enterprise crdb-task cancel",
+        "redisctl enterprise database delete",
+        "redisctl enterprise database flush",
+        "redisctl enterprise database upgrade",
+        "redisctl enterprise job-scheduler delete",
+        "redisctl enterprise migration cancel",
+        "redisctl enterprise module delete",
+        "redisctl enterprise node remove",
+        "redisctl enterprise node restart",
+        "redisctl enterprise role delete",
+        "redisctl enterprise shard bulk-failover",
+        "redisctl enterprise shard bulk-migrate",
+        "redisctl enterprise shard failover",
+        "redisctl enterprise shard migrate",
+        "redisctl enterprise suffix delete",
+        "redisctl enterprise user delete",
+    ];
+
+    const LEGACY_YES_ALIAS_COMMANDS: &[&str] = &[
+        "redisctl cloud connectivity psc aa-endpoint-delete",
+        "redisctl cloud connectivity psc aa-service-delete",
+        "redisctl cloud connectivity psc endpoint-delete",
+        "redisctl cloud connectivity psc service-delete",
+        "redisctl cloud connectivity tgw aa-attachment-delete",
+        "redisctl cloud connectivity tgw attachment-delete",
+        "redisctl cloud fixed-database delete",
+        "redisctl cloud fixed-subscription delete",
+    ];
 
     fn args(s: &str) -> Vec<String> {
         s.split_whitespace().map(String::from).collect()
+    }
+
+    fn inspect_confirmation_args(
+        command: &Command,
+        parents: &[String],
+        force_paths: &mut Vec<String>,
+        legacy_alias_paths: &mut Vec<String>,
+    ) {
+        let mut path = parents.to_vec();
+        path.push(command.get_name().to_string());
+        let display_path = path.join(" ");
+
+        for argument in command.get_arguments() {
+            assert_ne!(
+                argument.get_long(),
+                Some("yes"),
+                "{display_path} exposes non-canonical --yes"
+            );
+
+            if argument.get_long() == Some("force") {
+                assert_eq!(
+                    argument.get_short(),
+                    None,
+                    "{display_path} exposes ambiguous -f confirmation bypass"
+                );
+                force_paths.push(display_path.clone());
+
+                let has_legacy_long = argument
+                    .get_all_aliases()
+                    .is_some_and(|aliases| aliases.contains(&"yes"));
+                let has_legacy_short = argument
+                    .get_all_short_aliases()
+                    .is_some_and(|aliases| aliases.contains(&'y'));
+                assert_eq!(
+                    has_legacy_long, has_legacy_short,
+                    "{display_path} must retain --yes and -y together"
+                );
+
+                if has_legacy_long {
+                    assert!(
+                        argument
+                            .get_visible_aliases()
+                            .is_none_or(|aliases| aliases.is_empty()),
+                        "{display_path} must hide the deprecated --yes alias; visible aliases: {:?}",
+                        argument.get_visible_aliases()
+                    );
+                    assert!(
+                        argument
+                            .get_visible_short_aliases()
+                            .is_none_or(|aliases| aliases.is_empty()),
+                        "{display_path} must hide the deprecated -y alias"
+                    );
+                    legacy_alias_paths.push(display_path.clone());
+                }
+            }
+        }
+
+        for subcommand in command.get_subcommands() {
+            inspect_confirmation_args(subcommand, &path, force_paths, legacy_alias_paths);
+        }
+    }
+
+    #[test]
+    fn command_tree_is_valid() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn destructive_commands_use_long_only_force() {
+        let mut force_paths = Vec::new();
+        let mut legacy_alias_paths = Vec::new();
+        inspect_confirmation_args(
+            &Cli::command(),
+            &[],
+            &mut force_paths,
+            &mut legacy_alias_paths,
+        );
+        force_paths.sort();
+        legacy_alias_paths.sort();
+
+        assert_eq!(force_paths, DESTRUCTIVE_COMMANDS);
+        assert_eq!(legacy_alias_paths, LEGACY_YES_ALIAS_COMMANDS);
     }
 
     // --- Passthrough tests ---

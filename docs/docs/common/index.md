@@ -36,6 +36,20 @@ graph TB
 | **Human Commands** | Day-to-day operations with friendly output |
 | **Workflows** | Complex multi-step provisioning tasks |
 
+## Destructive Commands
+
+Commands that delete, flush, reset, or otherwise make irreversible changes ask for confirmation
+when run interactively. Use the long-only `--force` flag to bypass that prompt in automation:
+
+```bash
+redisctl cloud database delete 123456:789 --force
+```
+
+`--force` only skips the confirmation prompt; it does not change API validation, permissions, or
+error handling. The older `--yes` and `-y` spellings remain as hidden compatibility aliases on the
+commands that previously exposed them. They are deprecated, will be accepted throughout the 0.x
+release series, and are scheduled for removal in 1.0.
+
 ## Features at a Glance
 
 <div class="grid cards" markdown>

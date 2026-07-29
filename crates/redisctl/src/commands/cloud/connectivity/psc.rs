@@ -58,7 +58,7 @@ pub async fn handle_psc_command(
         }
         PscCommands::ServiceDelete {
             subscription_id,
-            yes,
+            force,
             async_ops,
         } => {
             let params = ConnectivityOperationParams {
@@ -70,7 +70,7 @@ pub async fn handle_psc_command(
                 output_format,
                 query,
             };
-            delete_service(&params, *yes).await
+            delete_service(&params, *force).await
         }
 
         // Standard PSC Endpoint operations
@@ -150,7 +150,7 @@ pub async fn handle_psc_command(
             subscription_id,
             psc_service_id,
             endpoint_id,
-            yes,
+            force,
             async_ops,
         } => {
             let params = ConnectivityOperationParams {
@@ -162,7 +162,7 @@ pub async fn handle_psc_command(
                 output_format,
                 query,
             };
-            delete_endpoint(&params, *psc_service_id, *endpoint_id, *yes).await
+            delete_endpoint(&params, *psc_service_id, *endpoint_id, *force).await
         }
         PscCommands::EndpointCreationScript {
             subscription_id,
@@ -205,7 +205,7 @@ pub async fn handle_psc_command(
         PscCommands::AaServiceDelete {
             subscription_id,
             region_id,
-            yes,
+            force,
             async_ops,
         } => {
             let params = ConnectivityOperationParams {
@@ -217,7 +217,7 @@ pub async fn handle_psc_command(
                 output_format,
                 query,
             };
-            delete_service_aa(&params, *region_id, *yes).await
+            delete_service_aa(&params, *region_id, *force).await
         }
 
         // Active-Active PSC Endpoint operations
@@ -271,7 +271,7 @@ pub async fn handle_psc_command(
             region_id,
             psc_service_id,
             endpoint_id,
-            yes,
+            force,
             async_ops,
         } => {
             let params = ConnectivityOperationParams {
@@ -283,7 +283,7 @@ pub async fn handle_psc_command(
                 output_format,
                 query,
             };
-            delete_endpoint_aa(&params, *region_id, *psc_service_id, *endpoint_id, *yes).await
+            delete_endpoint_aa(&params, *region_id, *psc_service_id, *endpoint_id, *force).await
         }
     }
 }
@@ -331,8 +331,8 @@ async fn create_service(params: &ConnectivityOperationParams<'_>) -> CliResult<(
     .await
 }
 
-async fn delete_service(params: &ConnectivityOperationParams<'_>, yes: bool) -> CliResult<()> {
-    if !yes {
+async fn delete_service(params: &ConnectivityOperationParams<'_>, force: bool) -> CliResult<()> {
+    if !force {
         let prompt = format!(
             "Delete PSC service for subscription {}?",
             params.subscription_id
@@ -475,9 +475,9 @@ async fn delete_endpoint(
     params: &ConnectivityOperationParams<'_>,
     psc_service_id: i32,
     endpoint_id: i32,
-    yes: bool,
+    force: bool,
 ) -> CliResult<()> {
-    if !yes {
+    if !force {
         let prompt = format!(
             "Delete PSC endpoint {} for subscription {}?",
             endpoint_id, params.subscription_id
@@ -589,9 +589,9 @@ async fn create_service_aa(
 async fn delete_service_aa(
     params: &ConnectivityOperationParams<'_>,
     region_id: i32,
-    yes: bool,
+    force: bool,
 ) -> CliResult<()> {
-    if !yes {
+    if !force {
         let prompt = format!(
             "Delete Active-Active PSC service for subscription {}?",
             params.subscription_id
@@ -676,9 +676,9 @@ async fn delete_endpoint_aa(
     region_id: i32,
     psc_service_id: i32,
     endpoint_id: i32,
-    yes: bool,
+    force: bool,
 ) -> CliResult<()> {
-    if !yes {
+    if !force {
         let prompt = format!(
             "Delete Active-Active PSC endpoint {} in region {} for subscription {}?",
             endpoint_id, region_id, params.subscription_id

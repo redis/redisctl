@@ -174,7 +174,7 @@ redisctl cloud connectivity psc endpoint-update 123456 \
 ### Delete PSC Endpoint
 
 ```bash
-redisctl cloud connectivity psc endpoint-delete 123456 --endpoint-id 789 --yes --wait
+redisctl cloud connectivity psc endpoint-delete 123456 --endpoint-id 789 --force --wait
 ```
 
 ## Transit Gateway (AWS)
@@ -221,7 +221,7 @@ redisctl cloud connectivity tgw attachment-update 123456 \
 ### Delete Attachment
 
 ```bash
-redisctl cloud connectivity tgw attachment-delete 123456 att-abc123 --yes --wait
+redisctl cloud connectivity tgw attachment-delete 123456 att-abc123 --force --wait
 ```
 
 ### List Invitations
