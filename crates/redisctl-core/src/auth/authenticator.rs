@@ -86,22 +86,21 @@ impl CloudAuthenticator {
         self
     }
 
-    /// Device-authorization-grant client for headless / agent logins.
+    /// Device-authorization-grant client for headless / agent logins. The flow runs on the
+    /// `oauth2` crate's own HTTP stack, so it does not share this authenticator's SM client.
     pub fn device(&self) -> DeviceFlowClient {
         DeviceFlowClient::new(self.issuer.clone(), self.client_id.clone())
-            .with_http_client(self.http.clone())
     }
 
     /// Auth-code + PKCE loopback client for interactive human logins.
     pub fn loopback(&self) -> LoopbackFlowClient {
         LoopbackFlowClient::new(self.issuer.clone(), self.client_id.clone())
-            .with_http_client(self.http.clone())
     }
 
     /// Refresh an Okta refresh token for a fresh token set (Okta rotates it). The grant is
     /// flow-agnostic, so it goes straight through `oidc` rather than a specific flow client.
     pub async fn refresh(&self, refresh_token: &str) -> Result<TokenSet, AuthError> {
-        super::oidc::refresh(&self.http, &self.issuer, &self.client_id, refresh_token).await
+        super::oidc::refresh(&self.issuer, &self.client_id, refresh_token).await
     }
 
     /// Given tokens from a flow, run the SM exchange and mint a CAPI key named `key_name`.
@@ -280,7 +279,6 @@ mod tests {
         );
         let tokens = TokenSet {
             access_token: "AT".into(),
-            id_token: "IT".into(),
             refresh_token: Some("RT".into()),
             expires_in: 3600,
         };
@@ -314,7 +312,6 @@ mod tests {
         );
         let tokens = TokenSet {
             access_token: "AT".into(),
-            id_token: String::new(),
             refresh_token: None,
             expires_in: 3600,
         };

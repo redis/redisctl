@@ -1,70 +1,85 @@
 //! OIDC Device Authorization Grant (RFC 8628) client for the Redis Cloud Okta tenant.
 //!
-//! Two requests against the issuer:
-//! - `POST {issuer}/v1/device/authorize` — start; returns the user code + verification URI.
-//! - `POST {issuer}/v1/token` (device-code grant) — polled until approved/expired/denied.
+//! Two requests against the issuer, handled by the [`oauth2`] crate:
+//! - `POST {issuer}/v1/device/authorize` — [`start`](DeviceFlowClient::start); returns the user
+//!   code + verification URI plus the (secret) device code needed to resume.
+//! - `POST {issuer}/v1/token` (device-code grant) — [`poll`](DeviceFlowClient::poll); the crate
+//!   owns the polling loop (honoring the server's `interval`/`slow_down`) until the request is
+//!   approved, denied, or times out.
 //!
-//! The caller owns the polling loop (so the CLI can print progress and honor `--timeout`);
-//! [`DeviceFlowClient::poll_once`] performs a single attempt. Refreshing a token is
-//! flow-agnostic and lives in [`super::oidc::refresh`].
+//! `login --device` is deliberately split: the CLI calls [`start`](DeviceFlowClient::start),
+//! prints/persists the returned [`DeviceAuthorization`] (which is `serde`-serializable), and
+//! returns. A later `status --wait` — possibly a *different* process — rebuilds the client from
+//! the issuer + client id, deserializes the [`DeviceAuthorization`], and calls
+//! [`poll`](DeviceFlowClient::poll). Refreshing a token is flow-agnostic and lives in
+//! [`super::oidc::refresh`].
 
-use serde::Deserialize;
+use std::time::Duration;
+
+use oauth2::{Scope, StandardDeviceAuthorizationResponse};
+use serde::{Deserialize, Serialize};
 use url::Url;
 
-use super::{
-    AuthError, TokenSet, default_http_client, endpoint, form_body, post_token, token_set, truncate,
+use super::oidc::{
+    map_basic_token_error, map_device_token_error, oauth_http_client, okta_client, to_token_set,
 };
-
-const DEVICE_CODE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
-/// RFC 8628 default poll interval when the server omits one.
-const DEFAULT_INTERVAL: u64 = 5;
+use super::{AuthError, TokenSet};
 
 /// Device-authorization-grant client bound to one Okta issuer + public client id.
+///
+/// Cheap to construct and holds no network state, so `status --wait` can rebuild it from the
+/// persisted issuer + client id to resume a login started by an earlier `login --device`.
 #[derive(Clone)]
 pub struct DeviceFlowClient {
     issuer: Url,
     client_id: String,
-    http: reqwest::Client,
 }
 
-/// The device-authorization response — what `auth login` surfaces to the developer.
+/// The device-authorization response — what `auth login --device` surfaces to the developer and
+/// persists so a later poll (in any process) can resume.
 ///
-/// `device_code` is retained to poll the token endpoint; it is a secret and is never printed.
-#[derive(Clone)]
+/// Wraps the RFC 8628 response from the [`oauth2`] crate. It is `serde`-serializable so the CLI
+/// can persist it between the non-blocking `login --device` and a later `status --wait`. The
+/// `device_code` it carries is a secret; `Debug` redacts it (as do the other code fields) via
+/// the underlying `oauth2` secret types.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DeviceAuthorization {
-    pub device_code: String,
-    pub user_code: String,
+    inner: StandardDeviceAuthorizationResponse,
+}
+
+impl DeviceAuthorization {
+    /// The end-user verification code (shown to the user to type at the verification URI).
+    pub fn user_code(&self) -> &str {
+        self.inner.user_code().secret().as_str()
+    }
+
     /// The page the user opens and then *types* the `user_code` into.
-    pub verification_uri: String,
-    /// The same page with the `user_code` pre-embedded (optional per RFC 8628), so the user
-    /// can just open it and confirm — no manual code entry. Prefer this when present.
-    pub verification_uri_complete: Option<String>,
-    pub expires_in: u64,
-    pub interval: u64,
-}
+    pub fn verification_uri(&self) -> &str {
+        self.inner.verification_uri().as_str()
+    }
 
-/// Outcome of a single token-endpoint poll. The caller decides when to poll again.
-#[derive(Debug)]
-pub enum PollOutcome {
-    /// Still waiting on the user; sleep `interval` and poll again.
-    Pending,
-    /// Server asked us to back off; increase the interval, then keep polling.
-    SlowDown,
-    /// Approved — tokens issued.
-    Ready(TokenSet),
-}
+    /// The same page with the `user_code` pre-embedded (optional per RFC 8628), so the user can
+    /// just open it and confirm — no manual code entry. Prefer this when present.
+    pub fn verification_uri_complete(&self) -> Option<&str> {
+        self.inner
+            .verification_uri_complete()
+            .map(|v| v.secret().as_str())
+    }
 
-/// Raw `/device/authorize` wire response. Kept separate from the public [`DeviceAuthorization`]
-/// so the wire shape (`interval` optional per RFC 8628) stays isolated from the resolved public
-/// type (`interval` defaulted); `start()` maps one to the other.
-#[derive(Deserialize)]
-struct DeviceAuthzResponse {
-    device_code: String,
-    user_code: String,
-    verification_uri: String,
-    verification_uri_complete: Option<String>,
-    expires_in: u64,
-    interval: Option<u64>,
+    /// Lifetime of the device/user code, in seconds.
+    pub fn expires_in(&self) -> u64 {
+        self.inner.expires_in().as_secs()
+    }
+
+    /// Minimum poll interval requested by the server, in seconds.
+    pub fn interval(&self) -> u64 {
+        self.inner.interval().as_secs()
+    }
+
+    /// Borrow the underlying RFC 8628 response (escape hatch for callers that need the raw type).
+    pub fn as_standard(&self) -> &StandardDeviceAuthorizationResponse {
+        &self.inner
+    }
 }
 
 impl DeviceFlowClient {
@@ -74,82 +89,47 @@ impl DeviceFlowClient {
         Self {
             issuer,
             client_id: client_id.into(),
-            http: default_http_client(),
         }
-    }
-
-    /// Use a caller-provided reqwest client (tests / shared client / custom user agent).
-    pub fn with_http_client(mut self, http: reqwest::Client) -> Self {
-        self.http = http;
-        self
     }
 
     /// Start device authorization: `POST /v1/device/authorize`.
+    ///
+    /// Returns the codes to display *and* the device code needed to resume polling — persist the
+    /// returned [`DeviceAuthorization`] and hand it to [`poll`](Self::poll) later.
     pub async fn start(&self, scopes: &[&str]) -> Result<DeviceAuthorization, AuthError> {
-        let scope = scopes.join(" ");
-        let resp = self
-            .http
-            .post(endpoint(&self.issuer, "v1/device/authorize"))
-            .header(
-                reqwest::header::CONTENT_TYPE,
-                "application/x-www-form-urlencoded",
-            )
-            .body(form_body(&[
-                ("client_id", self.client_id.as_str()),
-                ("scope", scope.as_str()),
-            ]))
-            .send()
-            .await?;
-        let status = resp.status();
-        let body = resp.text().await?;
-        if !status.is_success() {
-            return Err(AuthError::Protocol(format!(
-                "device authorize returned {status}: {}",
-                truncate(&body)
-            )));
+        let client = okta_client(&self.issuer, &self.client_id)?;
+        let http = oauth_http_client()?;
+        let mut request = client.exchange_device_code();
+        for scope in scopes {
+            request = request.add_scope(Scope::new((*scope).to_string()));
         }
-        let d: DeviceAuthzResponse = serde_json::from_str(&body).map_err(|e| {
-            AuthError::Protocol(format!("could not parse device-authorize response: {e}"))
-        })?;
-        Ok(DeviceAuthorization {
-            device_code: d.device_code,
-            user_code: d.user_code,
-            verification_uri: d.verification_uri,
-            verification_uri_complete: d.verification_uri_complete,
-            expires_in: d.expires_in,
-            interval: d.interval.unwrap_or(DEFAULT_INTERVAL),
-        })
+        let inner: StandardDeviceAuthorizationResponse = request
+            .request_async(&http)
+            .await
+            .map_err(map_basic_token_error)?;
+        Ok(DeviceAuthorization { inner })
     }
 
-    /// One poll of the token endpoint with the device-code grant. The caller owns the loop.
+    /// Poll the token endpoint until the user approves, the code is denied/expires, or `timeout`
+    /// elapses. The [`oauth2`] crate runs the loop internally (respecting the server's poll
+    /// interval and `slow_down`), so this is a single blocking call.
     ///
-    /// The OAuth device flow returns HTTP 400 with an `error` body for the pending/slow-down/
-    /// error cases, so we read and parse the body regardless of status.
-    pub async fn poll_once(&self, device_code: &str) -> Result<PollOutcome, AuthError> {
-        let tr = post_token(
-            &self.http,
-            &endpoint(&self.issuer, "v1/token"),
-            &[
-                ("client_id", self.client_id.as_str()),
-                ("grant_type", DEVICE_CODE_GRANT),
-                ("device_code", device_code),
-            ],
-        )
-        .await?;
-
-        if let Some(err) = tr.error.as_deref() {
-            return match err {
-                "authorization_pending" => Ok(PollOutcome::Pending),
-                "slow_down" => Ok(PollOutcome::SlowDown),
-                "expired_token" => Err(AuthError::Expired),
-                "access_denied" => Err(AuthError::Denied),
-                other => Err(AuthError::Protocol(format!(
-                    "token endpoint error {other}: {}",
-                    tr.description()
-                ))),
-            };
-        }
-        Ok(PollOutcome::Ready(token_set(tr)?))
+    /// `timeout` bounds the whole wait; `None` falls back to the device code's own lifetime. A
+    /// timeout surfaces as [`AuthError::Expired`]. Callable from a freshly built client after
+    /// deserializing `authz`.
+    pub async fn poll(
+        &self,
+        authz: &DeviceAuthorization,
+        timeout: Option<Duration>,
+    ) -> Result<TokenSet, AuthError> {
+        let client = okta_client(&self.issuer, &self.client_id)?;
+        let http = oauth_http_client()?;
+        let resp = client
+            .exchange_device_access_token(&authz.inner)
+            .request_async(&http, tokio::time::sleep, timeout)
+            .await
+            .map_err(map_device_token_error)?;
+        Ok(to_token_set(&resp))
     }
 }
 
@@ -163,6 +143,14 @@ mod tests {
         DeviceFlowClient::new(Url::parse(&server.uri()).unwrap(), "test-client")
     }
 
+    async fn mount_device_authorize(server: &MockServer, body: serde_json::Value) {
+        Mock::given(method("POST"))
+            .and(path("/v1/device/authorize"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(server)
+            .await;
+    }
+
     async fn mount_token(server: &MockServer, status: u16, body: serde_json::Value) {
         Mock::given(method("POST"))
             .and(path("/v1/token"))
@@ -174,107 +162,102 @@ mod tests {
     #[tokio::test]
     async fn start_parses_device_authorization() {
         let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/v1/device/authorize"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        mount_device_authorize(
+            &server,
+            serde_json::json!({
                 "device_code": "DC",
                 "user_code": "WDJB-MJHT",
                 "verification_uri": "https://x/activate",
                 "verification_uri_complete": "https://x/activate?user_code=WDJB-MJHT",
                 "expires_in": 600,
                 "interval": 5
-            })))
-            .mount(&server)
-            .await;
+            }),
+        )
+        .await;
 
         let d = client(&server)
             .start(&["openid", "offline_access"])
             .await
             .unwrap();
-        assert_eq!(d.device_code, "DC");
-        assert_eq!(d.user_code, "WDJB-MJHT");
-        assert_eq!(d.interval, 5);
+        assert_eq!(d.user_code(), "WDJB-MJHT");
+        assert_eq!(d.verification_uri(), "https://x/activate");
         assert_eq!(
-            d.verification_uri_complete.as_deref(),
+            d.verification_uri_complete(),
             Some("https://x/activate?user_code=WDJB-MJHT")
         );
+        assert_eq!(d.expires_in(), 600);
+        assert_eq!(d.interval(), 5);
+        // Debug must not leak the secret device code / user code.
+        assert!(!format!("{d:?}").contains("WDJB-MJHT"));
     }
 
     #[tokio::test]
     async fn start_defaults_interval_when_absent() {
         let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/v1/device/authorize"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        mount_device_authorize(
+            &server,
+            serde_json::json!({
                 "device_code": "DC",
                 "user_code": "U",
                 "verification_uri": "https://x",
                 "expires_in": 600
-            })))
-            .mount(&server)
-            .await;
-
-        let d = client(&server).start(&["openid"]).await.unwrap();
-        assert_eq!(d.interval, DEFAULT_INTERVAL);
-    }
-
-    #[tokio::test]
-    async fn poll_pending() {
-        let server = MockServer::start().await;
-        mount_token(
-            &server,
-            400,
-            serde_json::json!({"error": "authorization_pending"}),
+            }),
         )
         .await;
-        assert!(matches!(
-            client(&server).poll_once("DC").await.unwrap(),
-            PollOutcome::Pending
-        ));
-    }
 
-    #[tokio::test]
-    async fn poll_slow_down() {
-        let server = MockServer::start().await;
-        mount_token(&server, 400, serde_json::json!({"error": "slow_down"})).await;
-        assert!(matches!(
-            client(&server).poll_once("DC").await.unwrap(),
-            PollOutcome::SlowDown
-        ));
+        // RFC 8628 default poll interval when the server omits one.
+        let d = client(&server).start(&["openid"]).await.unwrap();
+        assert_eq!(d.interval(), 5);
     }
 
     #[tokio::test]
     async fn poll_ready_returns_tokens() {
         let server = MockServer::start().await;
+        mount_device_authorize(
+            &server,
+            serde_json::json!({
+                "device_code": "DC", "user_code": "U",
+                "verification_uri": "https://x", "expires_in": 600, "interval": 5
+            }),
+        )
+        .await;
         mount_token(
             &server,
             200,
             serde_json::json!({
                 "access_token": "AT",
-                "id_token": "IT",
+                "token_type": "Bearer",
                 "refresh_token": "RT",
                 "expires_in": 3600
             }),
         )
         .await;
 
-        match client(&server).poll_once("DC").await.unwrap() {
-            PollOutcome::Ready(t) => {
-                assert_eq!(t.access_token, "AT");
-                assert_eq!(t.id_token, "IT");
-                assert_eq!(t.refresh_token.as_deref(), Some("RT"));
-                assert_eq!(t.expires_in, 3600);
-            }
-            other => panic!("expected Ready, got {other:?}"),
-        }
+        let c = client(&server);
+        let authz = c.start(&["openid"]).await.unwrap();
+        let t = c.poll(&authz, Some(Duration::from_secs(5))).await.unwrap();
+        assert_eq!(t.access_token, "AT");
+        assert_eq!(t.refresh_token.as_deref(), Some("RT"));
+        assert_eq!(t.expires_in, 3600);
     }
 
     #[tokio::test]
     async fn poll_expired_maps_to_error() {
         let server = MockServer::start().await;
+        mount_device_authorize(
+            &server,
+            serde_json::json!({
+                "device_code": "DC", "user_code": "U",
+                "verification_uri": "https://x", "expires_in": 600, "interval": 5
+            }),
+        )
+        .await;
         mount_token(&server, 400, serde_json::json!({"error": "expired_token"})).await;
+
+        let c = client(&server);
+        let authz = c.start(&["openid"]).await.unwrap();
         assert!(matches!(
-            client(&server).poll_once("DC").await,
+            c.poll(&authz, Some(Duration::from_secs(5))).await,
             Err(AuthError::Expired)
         ));
     }
@@ -282,39 +265,55 @@ mod tests {
     #[tokio::test]
     async fn poll_denied_maps_to_error() {
         let server = MockServer::start().await;
+        mount_device_authorize(
+            &server,
+            serde_json::json!({
+                "device_code": "DC", "user_code": "U",
+                "verification_uri": "https://x", "expires_in": 600, "interval": 5
+            }),
+        )
+        .await;
         mount_token(&server, 400, serde_json::json!({"error": "access_denied"})).await;
+
+        let c = client(&server);
+        let authz = c.start(&["openid"]).await.unwrap();
         assert!(matches!(
-            client(&server).poll_once("DC").await,
+            c.poll(&authz, Some(Duration::from_secs(5))).await,
             Err(AuthError::Denied)
         ));
     }
 
+    /// The device authorization must survive a serialize/deserialize round-trip and still be
+    /// usable to poll — this is the `login --device` (persist) then `status --wait` (resume,
+    /// possibly in another process) contract.
     #[tokio::test]
-    async fn poll_unknown_error_is_protocol() {
+    async fn device_authorization_round_trips_and_resumes() {
         let server = MockServer::start().await;
-        mount_token(
+        mount_device_authorize(
             &server,
-            400,
-            serde_json::json!({"error": "weird", "error_description": "nope"}),
+            serde_json::json!({
+                "device_code": "DC", "user_code": "U",
+                "verification_uri": "https://x", "expires_in": 600, "interval": 5
+            }),
         )
         .await;
-        assert!(matches!(
-            client(&server).poll_once("DC").await,
-            Err(AuthError::Protocol(_))
-        ));
-    }
+        mount_token(
+            &server,
+            200,
+            serde_json::json!({"access_token": "AT", "token_type": "Bearer", "expires_in": 3600}),
+        )
+        .await;
 
-    #[tokio::test]
-    async fn poll_malformed_body_is_protocol() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/v1/token"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
-            .mount(&server)
-            .await;
-        assert!(matches!(
-            client(&server).poll_once("DC").await,
-            Err(AuthError::Protocol(_))
-        ));
+        let started = client(&server).start(&["openid"]).await.unwrap();
+        let json = serde_json::to_string(&started).unwrap();
+        let resumed: DeviceAuthorization = serde_json::from_str(&json).unwrap();
+
+        // A freshly built client (as a separate process would build) can complete the poll.
+        let fresh = DeviceFlowClient::new(Url::parse(&server.uri()).unwrap(), "test-client");
+        let t = fresh
+            .poll(&resumed, Some(Duration::from_secs(5)))
+            .await
+            .unwrap();
+        assert_eq!(t.access_token, "AT");
     }
 }
