@@ -9,6 +9,15 @@
 use super::error::{ConfigError, Result};
 use std::env;
 
+/// Whether process environment variables may override stored profile values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnvironmentOverrides {
+    /// Resolve supported environment variables before stored profile values.
+    Enabled,
+    /// Resolve only stored profile values and keyring references.
+    Disabled,
+}
+
 /// Prefix that indicates a value should be retrieved from the keyring
 const KEYRING_PREFIX: &str = "keyring:";
 
@@ -113,16 +122,39 @@ impl CredentialStore {
     /// 2. If value starts with "keyring:", retrieve from keyring
     /// 3. Otherwise, return the value as-is (plaintext)
     pub fn get_credential(&self, value: &str, env_var: Option<&str>) -> Result<String> {
-        self.get_credential_with_env_vars(value, env_var.into_iter().collect())
+        match env_var {
+            Some(env_var) => self.get_credential_with_environment(
+                value,
+                &[env_var],
+                EnvironmentOverrides::Enabled,
+            ),
+            None => self.get_credential_with_environment(value, &[], EnvironmentOverrides::Enabled),
+        }
     }
 
     /// Retrieve a credential value with support for multiple environment variable aliases.
     ///
     /// Environment variables are checked in order, and the first set value wins.
     pub fn get_credential_with_env_vars(&self, value: &str, env_vars: Vec<&str>) -> Result<String> {
-        for var in env_vars {
-            if let Ok(env_value) = env::var(var) {
-                return Ok(env_value);
+        self.get_credential_with_environment(value, &env_vars, EnvironmentOverrides::Enabled)
+    }
+
+    /// Retrieve a credential with an explicit environment override policy.
+    ///
+    /// This is used by callers that load an explicit configuration file and
+    /// require its credential values to be isolated from the process
+    /// environment.
+    pub fn get_credential_with_environment(
+        &self,
+        value: &str,
+        env_vars: &[&str],
+        environment_overrides: EnvironmentOverrides,
+    ) -> Result<String> {
+        if environment_overrides == EnvironmentOverrides::Enabled {
+            for var in env_vars {
+                if let Ok(env_value) = env::var(var) {
+                    return Ok(env_value);
+                }
             }
         }
 
