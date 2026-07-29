@@ -6,6 +6,7 @@ All Redis Cloud CLI commands.
 
 | Command Group | Description |
 |---------------|-------------|
+| [auth](auth.md) | Sign in to Redis Cloud and manage the session |
 | [subscription](subscriptions.md) | Manage Pro subscriptions |
 | [database](databases.md) | Manage Pro databases |
 | [fixed-subscription](fixed-subscriptions.md) | Manage Essentials subscriptions |

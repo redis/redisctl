@@ -120,6 +120,7 @@ nav:
       - cloud/index.md
       - Commands:
           - cloud/commands/index.md
+          - Authentication: cloud/commands/auth.md
           - Subscriptions: cloud/commands/subscriptions.md
           - Databases: cloud/commands/databases.md
           - Essentials Subscriptions: cloud/commands/fixed-subscriptions.md
