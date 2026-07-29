@@ -23,6 +23,7 @@ mod commands;
 mod connection;
 mod error;
 mod output;
+mod structured_error;
 mod workflows;
 
 use cli::{Cli, Commands};
@@ -413,11 +414,28 @@ async fn main() -> Result<()> {
 
     // Execute command
     if let Err(e) = execute_command(&cli, &conn_mgr).await {
+        // The agent-native surface carries a stable code + exit code: emit the JSON error
+        // envelope to stdout in machine mode (agents parse stdout), the styled diagnostic to
+        // stderr otherwise, and exit with the mapped code. All other errors keep the default
+        // envelope-to-stderr + exit-1 behaviour.
+        if let RedisCtlError::Structured(se) = &e {
+            emit_structured_error(se, cli.output);
+            std::process::exit(se.exit_code as i32);
+        }
         e.print_diagnostic(cli.output);
         std::process::exit(1);
     }
 
     Ok(())
+}
+
+fn emit_structured_error(se: &structured_error::StructuredError, output: cli::OutputFormat) {
+    match output {
+        cli::OutputFormat::Json | cli::OutputFormat::Yaml => {
+            let _ = crate::output::print_output(se.envelope(), output, None);
+        }
+        _ => error::CliDiagnostic::error(&se.message).print(),
+    }
 }
 
 fn init_tracing(verbose: u8) {
@@ -1240,6 +1258,16 @@ async fn execute_cloud_command(
     use cli::CloudCommands::*;
 
     match cloud_cmd {
+        Auth(auth_cmd) => {
+            commands::cloud::auth::handle_auth_command(
+                conn_mgr,
+                cli.profile.as_deref(),
+                auth_cmd,
+                cli.output,
+            )
+            .await
+        }
+
         Account(account_cmd) => {
             commands::cloud::handle_account_command(
                 conn_mgr,

@@ -12,6 +12,7 @@ pub mod account;
 pub mod acl;
 pub mod acl_impl;
 pub mod async_utils;
+pub mod auth;
 pub mod cloud_account;
 pub mod cloud_account_impl;
 pub mod connectivity;
