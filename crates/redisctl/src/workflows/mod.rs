@@ -113,6 +113,7 @@ impl WorkflowRegistry {
         registry.register(Box::new(
             cloud::subscription_setup::SubscriptionSetupWorkflow,
         ));
+        registry.register(Box::new(cloud::quick_database::QuickDatabaseWorkflow));
 
         registry
     }

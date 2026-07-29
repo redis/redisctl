@@ -1702,6 +1702,12 @@ pub enum CloudWorkflowCommands {
     /// Complete subscription setup with optional database
     #[command(name = "subscription-setup")]
     SubscriptionSetup(crate::workflows::cloud::subscription_setup::SubscriptionSetupArgs),
+    /// Create or reuse a free database and write its connection string to a file
+    #[command(name = "quick-database")]
+    QuickDatabase(crate::workflows::cloud::quick_database::QuickDatabaseArgs),
+    /// Write an existing database's connection string to a file (no provisioning)
+    #[command(name = "database-credentials")]
+    DatabaseCredentials(crate::workflows::cloud::quick_database::DatabaseCredentialsArgs),
 }
 
 /// Cloud Cost Report Commands (Beta)
