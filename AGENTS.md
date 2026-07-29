@@ -178,6 +178,8 @@ Scope by crate when relevant: `feat(mcp):`, `fix(core):`, `docs(cli):`.
 - No `unwrap()` in production code -- use proper error handling
 - Prefer `anyhow` for CLI errors, `tower_mcp::Error` for MCP tool errors
 - Tool descriptions are the primary documentation for MCP tools -- keep them accurate and concise
+- Use long-only `--force` for destructive confirmation bypasses; add new destructive command paths
+  to the command-tree test inventory in `crates/redisctl/src/main.rs`
 
 ### PRs
 

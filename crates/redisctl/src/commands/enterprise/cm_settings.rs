@@ -37,7 +37,7 @@ pub enum CmSettingsCommands {
         data: Option<String>,
 
         /// Force update without confirmation
-        #[arg(short, long)]
+        #[arg(long)]
         force: bool,
     },
 
@@ -52,14 +52,14 @@ pub enum CmSettingsCommands {
         value: String,
 
         /// Force update without confirmation
-        #[arg(short, long)]
+        #[arg(long)]
         force: bool,
     },
 
     /// Reset settings to defaults
     Reset {
         /// Force reset without confirmation
-        #[arg(short, long)]
+        #[arg(long)]
         force: bool,
     },
 

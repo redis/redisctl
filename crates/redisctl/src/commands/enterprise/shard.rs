@@ -60,7 +60,7 @@ pub enum ShardCommands {
         uid: u32,
 
         /// Force failover without confirmation
-        #[arg(short, long)]
+        #[arg(long)]
         force: bool,
     },
 
@@ -74,7 +74,7 @@ pub enum ShardCommands {
         target_node: u32,
 
         /// Force migration without confirmation
-        #[arg(short, long)]
+        #[arg(long)]
         force: bool,
     },
 
@@ -96,7 +96,7 @@ pub enum ShardCommands {
         #[arg(short, long, value_name = "FILE|JSON")]
         data: Option<String>,
         /// Force without confirmation
-        #[arg(short, long)]
+        #[arg(long)]
         force: bool,
     },
 
@@ -121,7 +121,7 @@ pub enum ShardCommands {
         #[arg(short, long, value_name = "FILE|JSON")]
         data: Option<String>,
         /// Force without confirmation
-        #[arg(short, long)]
+        #[arg(long)]
         force: bool,
     },
 

@@ -257,10 +257,14 @@ pub async fn handle_fixed_database_command(
             .await
         }
 
-        CloudFixedDatabaseCommands::Delete { id, yes, async_ops } => {
+        CloudFixedDatabaseCommands::Delete {
+            id,
+            force,
+            async_ops,
+        } => {
             let (subscription_id, database_id) = parse_fixed_database_id(id)?;
 
-            if !yes {
+            if !force {
                 let prompt = format!("Delete fixed database {}:{}?", subscription_id, database_id);
                 confirm_action(&prompt)?;
             }
