@@ -75,6 +75,8 @@ mod tests {
     fn cloud_get_no_body() {
         let info = CloudConnectionInfo {
             base_url: "https://api.redislabs.com/v1".to_string(),
+            api_key: "test-key".to_string(),
+            api_secret: "test-secret".to_string(),
             user_agent: "redisctl/test".to_string(),
         };
         let result = format_cloud_curl(&info, &HttpMethod::Get, "/subscriptions", None);
@@ -92,6 +94,8 @@ mod tests {
     fn cloud_post_with_body() {
         let info = CloudConnectionInfo {
             base_url: "https://api.redislabs.com/v1".to_string(),
+            api_key: "test-key".to_string(),
+            api_secret: "test-secret".to_string(),
             user_agent: "redisctl/test".to_string(),
         };
         let body = serde_json::json!({"name": "test"});
@@ -105,6 +109,8 @@ mod tests {
     fn enterprise_get_insecure() {
         let info = EnterpriseConnectionInfo {
             base_url: "https://cluster:9443".to_string(),
+            username: "admin".to_string(),
+            password: Some("pass".to_string()),
             insecure: true,
             ca_cert: None,
             user_agent: "redisctl/test".to_string(),
@@ -122,6 +128,8 @@ mod tests {
     fn enterprise_with_ca_cert() {
         let info = EnterpriseConnectionInfo {
             base_url: "https://cluster:9443".to_string(),
+            username: "admin".to_string(),
+            password: Some("pass".to_string()),
             insecure: false,
             ca_cert: Some("/path/to/ca.crt".to_string()),
             user_agent: "redisctl/test".to_string(),
@@ -135,6 +143,8 @@ mod tests {
     fn enterprise_post_with_body() {
         let info = EnterpriseConnectionInfo {
             base_url: "https://cluster:9443".to_string(),
+            username: "admin".to_string(),
+            password: None,
             insecure: true,
             ca_cert: None,
             user_agent: "redisctl/test".to_string(),

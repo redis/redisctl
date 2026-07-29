@@ -513,6 +513,37 @@ impl From<redisctl_core::ConfigError> for RedisCtlError {
     }
 }
 
+impl From<redisctl_core::ClientResolutionError> for RedisCtlError {
+    fn from(err: redisctl_core::ClientResolutionError) -> Self {
+        match err {
+            redisctl_core::ClientResolutionError::Config(config_error) => config_error.into(),
+            redisctl_core::ClientResolutionError::ProfileTypeMismatch {
+                name,
+                actual_type,
+                expected_type,
+                available_profiles,
+            } => RedisCtlError::ProfileTypeMismatch {
+                name,
+                actual_type: actual_type.to_string(),
+                expected_type: expected_type.to_string(),
+                available_profiles,
+            },
+            redisctl_core::ClientResolutionError::MissingCredentials {
+                profile_name,
+                missing_fields,
+                ..
+            } => RedisCtlError::MissingCredentials {
+                name: profile_name,
+                missing_fields,
+            },
+            redisctl_core::ClientResolutionError::CloudClient(cloud_error) => cloud_error.into(),
+            redisctl_core::ClientResolutionError::EnterpriseClient(enterprise_error) => {
+                enterprise_error.into()
+            }
+        }
+    }
+}
+
 impl From<redisctl_core::error::CoreError> for RedisCtlError {
     fn from(err: redisctl_core::error::CoreError) -> Self {
         match err {

@@ -53,7 +53,8 @@ PRs must pass:
 - `secure-storage` enables keyring-based credential storage
 
 **redisctl-mcp** (MCP server):
-- `default = ["http", "cloud", "enterprise", "database"]`
+- `default = ["http", "cloud", "enterprise", "database", "secure-storage"]`
+- `secure-storage` enables keyring-backed profile credentials
 - Each toolset (`cloud`, `enterprise`, `database`) can be compiled independently
 
 ### Key Patterns

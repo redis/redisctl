@@ -11,11 +11,16 @@ use anyhow::Result;
 use redis_cloud::CloudClient;
 #[cfg(feature = "enterprise")]
 use redis_enterprise::EnterpriseClient;
+#[cfg(any(feature = "cloud", feature = "enterprise"))]
+use redisctl_core::ClientResolver;
 use redisctl_core::Config;
 #[cfg(any(feature = "cloud", feature = "enterprise", feature = "database"))]
 use tokio::sync::RwLock;
 
 use crate::policy::{Policy, SafetyTier};
+
+#[cfg(any(feature = "cloud", feature = "enterprise"))]
+const REDISCTL_MCP_USER_AGENT: &str = concat!("redisctl-mcp/", env!("CARGO_PKG_VERSION"));
 
 /// How credentials are resolved
 #[derive(Debug, Clone)]
@@ -187,28 +192,10 @@ impl AppState {
                     .map(|s| s.to_string())
                     .or_else(|| profiles.first().cloned());
 
-                // Resolve the profile name
-                let resolved_profile_name = config
-                    .resolve_cloud_profile(profile_to_use.as_deref())
-                    .context("Failed to resolve cloud profile")?;
-
-                // Get the profile
-                let profile = config
-                    .profiles
-                    .get(&resolved_profile_name)
-                    .with_context(|| format!("Profile '{}' not found", resolved_profile_name))?;
-
-                // Get credentials
-                let (api_key, api_secret, _base_url) = profile
-                    .resolve_cloud_credentials()
-                    .context("Failed to resolve cloud credentials")?
-                    .context("No cloud credentials in profile")?;
-
-                CloudClient::builder()
-                    .api_key(api_key)
-                    .api_secret(api_secret)
-                    .build()
-                    .context("Failed to build Cloud client")
+                ClientResolver::new(config)
+                    .user_agent(REDISCTL_MCP_USER_AGENT)
+                    .build_cloud_client(profile_to_use.as_deref())
+                    .context("Failed to resolve Redis Cloud client")
             }
         }
     }
@@ -228,37 +215,10 @@ impl AppState {
                     .map(|s| s.to_string())
                     .or_else(|| profiles.first().cloned());
 
-                // Resolve the profile name
-                let resolved_profile_name = config
-                    .resolve_enterprise_profile(profile_to_use.as_deref())
-                    .context("Failed to resolve enterprise profile")?;
-
-                // Get the profile
-                let profile_config = config
-                    .profiles
-                    .get(&resolved_profile_name)
-                    .with_context(|| format!("Profile '{}' not found", resolved_profile_name))?;
-
-                // Get credentials
-                let (url, username, password, insecure, ca_cert) = profile_config
-                    .resolve_enterprise_credentials()
-                    .context("Failed to resolve enterprise credentials")?
-                    .context("No enterprise credentials in profile")?;
-
-                let mut builder = EnterpriseClient::builder()
-                    .base_url(&url)
-                    .username(&username)
-                    .insecure(insecure);
-
-                if let Some(pwd) = password {
-                    builder = builder.password(&pwd);
-                }
-
-                if let Some(cert_path) = ca_cert {
-                    builder = builder.ca_cert(&cert_path);
-                }
-
-                builder.build().context("Failed to build Enterprise client")
+                ClientResolver::new(config)
+                    .user_agent(REDISCTL_MCP_USER_AGENT)
+                    .build_enterprise_client(profile_to_use.as_deref())
+                    .context("Failed to resolve Redis Enterprise client")
             }
         }
     }
