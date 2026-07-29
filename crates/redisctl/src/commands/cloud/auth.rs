@@ -245,7 +245,7 @@ async fn complete_and_persist(
                 RedisCtlError::Structured(Box::new(StructuredError::keyring_unavailable(format!(
                     "failed to store credentials in the OS keyring ({e}). Re-run \
                      `redisctl cloud auth login --allow-plaintext` to store them in the config \
-                     file (0600) instead."
+                     file instead."
                 ))))
             }
         })?;
