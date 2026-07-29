@@ -2299,6 +2299,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "oauth2"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "getrandom 0.2.16",
+ "http",
+ "rand 0.8.6",
+ "reqwest 0.12.23",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "sha2",
+ "thiserror 1.0.69",
+ "url",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2960,19 +2980,16 @@ dependencies = [
 name = "redisctl-core"
 version = "0.11.1"
 dependencies = [
- "base64 0.22.1",
  "clap",
  "directories",
- "getrandom 0.3.3",
  "keyring",
+ "oauth2",
  "redis-cloud",
  "redis-enterprise",
  "reqwest 0.13.1",
  "serde",
  "serde_json",
- "serde_urlencoded",
  "serial_test",
- "sha2",
  "shellexpand",
  "tempfile",
  "thiserror 2.0.17",

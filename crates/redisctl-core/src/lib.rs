@@ -77,7 +77,7 @@ pub mod enterprise;
 // Re-export commonly used items
 pub use auth::{
     AuthError, CapiKey, CloudAuthenticator, DeviceAuthorization, DeviceFlowClient,
-    LoopbackFlowClient, MintedCredentials, PollOutcome, SmAccount, SmApiClient, SmUser, TokenSet,
+    LoopbackFlowClient, MintedCredentials, SmAccount, SmApiClient, SmUser, TokenSet,
 };
 pub use error::{CoreError, Result};
 pub use progress::{ProgressCallback, ProgressEvent, poll_task};
