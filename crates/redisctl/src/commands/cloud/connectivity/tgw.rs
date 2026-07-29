@@ -107,7 +107,7 @@ pub async fn handle_tgw_command(
         TgwCommands::AttachmentDelete {
             subscription_id,
             attachment_id,
-            yes,
+            force,
             async_ops,
         } => {
             let params = ConnectivityOperationParams {
@@ -119,7 +119,7 @@ pub async fn handle_tgw_command(
                 output_format,
                 query,
             };
-            delete_attachment(&params, attachment_id, *yes).await
+            delete_attachment(&params, attachment_id, *force).await
         }
         TgwCommands::InvitationsList { subscription_id } => {
             list_invitations(&client, *subscription_id, output_format, query).await
@@ -211,7 +211,7 @@ pub async fn handle_tgw_command(
             subscription_id,
             region_id,
             attachment_id,
-            yes,
+            force,
             async_ops,
         } => {
             let params = ConnectivityOperationParams {
@@ -223,7 +223,7 @@ pub async fn handle_tgw_command(
                 output_format,
                 query,
             };
-            delete_attachment_aa(&params, *region_id, attachment_id, *yes).await
+            delete_attachment_aa(&params, *region_id, attachment_id, *force).await
         }
         TgwCommands::AaInvitationsList {
             subscription_id,
@@ -395,9 +395,9 @@ async fn update_attachment_cidrs(
 async fn delete_attachment(
     params: &ConnectivityOperationParams<'_>,
     attachment_id: &str,
-    yes: bool,
+    force: bool,
 ) -> CliResult<()> {
-    if !yes {
+    if !force {
         let prompt = format!(
             "Delete TGW attachment {} for subscription {}?",
             attachment_id, params.subscription_id
@@ -572,9 +572,9 @@ async fn delete_attachment_aa(
     params: &ConnectivityOperationParams<'_>,
     region_id: i32,
     attachment_id: &str,
-    yes: bool,
+    force: bool,
 ) -> CliResult<()> {
-    if !yes {
+    if !force {
         let prompt = format!(
             "Delete Active-Active TGW attachment {} in region {} for subscription {}?",
             attachment_id, region_id, params.subscription_id

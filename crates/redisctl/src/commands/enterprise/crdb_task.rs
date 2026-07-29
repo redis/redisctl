@@ -67,7 +67,7 @@ pub enum CrdbTaskCommands {
         task_id: String,
 
         /// Force cancellation without confirmation
-        #[arg(short, long)]
+        #[arg(long)]
         force: bool,
     },
 
