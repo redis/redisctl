@@ -16,6 +16,12 @@ Technical reference documentation.
 |-------|-------------|
 | [Security Guide](security.md) | Credential storage and best practices |
 
+## Agents
+
+| Topic | Description |
+|-------|-------------|
+| [Agent Error Codes](agent-error-codes.md) | Machine-branchable error / exit-code contract |
+
 ## Comparisons
 
 | Topic | Description |

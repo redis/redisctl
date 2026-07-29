@@ -149,6 +149,7 @@ nav:
       - cookbook/index.md
       - Redis Cloud:
           - cookbook/cloud/first-database.md
+          - cookbook/cloud/quick-database.md
           - cookbook/cloud/vpc-peering.md
           - cookbook/cloud/acls.md
           - cookbook/cloud/backup-restore.md
@@ -164,6 +165,7 @@ nav:
       - Configuration File: reference/config-file.md
       - Shell Completions: reference/shell-completions.md
       - Security: reference/security.md
+      - Agent Error Codes: reference/agent-error-codes.md
       - rladmin Comparison: reference/rladmin.md
   - MCP:
       - mcp/index.md
