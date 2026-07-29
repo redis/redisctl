@@ -64,6 +64,7 @@ test-support = []
 
 [dev-dependencies]
 tokio = { workspace = true }
+tempfile = { workspace = true }
 redis-cloud = { workspace = true, features = ["test-support"] }
 redis-enterprise = { workspace = true, features = ["test-support"] }
 wiremock = { workspace = true }
