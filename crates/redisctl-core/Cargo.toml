@@ -30,6 +30,10 @@ oauth2 = { workspace = true }
 reqwest = { workspace = true }
 url = { workspace = true }
 
+# Free-tier provisioning + dotenv delivery (cloud::quick_database / cloud::env_delivery)
+chrono = { workspace = true }
+urlencoding = { workspace = true }
+
 # Logging
 tracing = { workspace = true }
 
