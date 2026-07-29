@@ -221,8 +221,6 @@ impl AppState {
                     .context("Failed to resolve cloud credentials")?
                     .context("No cloud credentials in profile")?;
 
-                // Honor the profile's api_url (e.g. a non-prod/QA endpoint); without this the
-                // client falls back to the prod default and rejects non-prod credentials (401).
                 CloudClient::builder()
                     .api_key(api_key)
                     .api_secret(api_secret)

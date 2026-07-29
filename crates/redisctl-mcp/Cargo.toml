@@ -60,9 +60,6 @@ http = []
 cloud = ["dep:redis-cloud"]
 enterprise = ["dep:redis-enterprise"]
 database = ["dep:redis", "dep:urlencoding"]
-# Resolve `keyring:` credential references (e.g. keys minted by `cloud auth login`,
-# which uses the OS keyring by default). Pure-Rust backend (linux-keyutils on Linux),
-# musl-friendly — same posture as the redisctl CLI.
 secure-storage = ["redisctl-core/secure-storage"]
 test-support = []
 
