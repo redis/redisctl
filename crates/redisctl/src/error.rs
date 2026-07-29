@@ -127,7 +127,6 @@ pub enum RedisCtlError {
     #[error("No profile configured. Use 'redisctl profile set' to configure a profile.")]
     NoProfileConfigured,
 
-    #[allow(dead_code)]
     #[error("Missing credentials for profile '{name}': {missing_fields}")]
     MissingCredentials {
         name: String,
@@ -487,7 +486,43 @@ impl From<anyhow::Error> for RedisCtlError {
 
 impl From<redisctl_core::ConfigError> for RedisCtlError {
     fn from(err: redisctl_core::ConfigError) -> Self {
-        RedisCtlError::Configuration(err.to_string())
+        match err {
+            redisctl_core::ConfigError::ProfileNotFound { name } => {
+                RedisCtlError::ProfileNotFound { name }
+            }
+            other => RedisCtlError::Configuration(other.to_string()),
+        }
+    }
+}
+
+impl From<redisctl_core::ClientResolutionError> for RedisCtlError {
+    fn from(err: redisctl_core::ClientResolutionError) -> Self {
+        match err {
+            redisctl_core::ClientResolutionError::Config(config_error) => config_error.into(),
+            redisctl_core::ClientResolutionError::ProfileTypeMismatch {
+                name,
+                actual_type,
+                expected_type,
+                available_profiles,
+            } => RedisCtlError::ProfileTypeMismatch {
+                name,
+                actual_type: actual_type.to_string(),
+                expected_type: expected_type.to_string(),
+                available_profiles,
+            },
+            redisctl_core::ClientResolutionError::MissingCredentials {
+                profile_name,
+                missing_fields,
+                ..
+            } => RedisCtlError::MissingCredentials {
+                name: profile_name,
+                missing_fields,
+            },
+            redisctl_core::ClientResolutionError::CloudClient(cloud_error) => cloud_error.into(),
+            redisctl_core::ClientResolutionError::EnterpriseClient(enterprise_error) => {
+                enterprise_error.into()
+            }
+        }
     }
 }
 

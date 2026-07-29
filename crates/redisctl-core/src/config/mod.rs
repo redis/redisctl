@@ -21,5 +21,5 @@ pub mod error;
 
 // Re-export main types for convenience
 pub use config::{Config, DeploymentType, Profile, ProfileCredentials};
-pub use credential::{CredentialStorage, CredentialStore};
+pub use credential::{CredentialStorage, CredentialStore, EnvironmentOverrides};
 pub use error::{ConfigError, Result};

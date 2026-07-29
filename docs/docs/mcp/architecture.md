@@ -35,6 +35,7 @@ The binary is compiled with feature flags that gate platform-specific dependenci
 | `enterprise` | yes | `redis-enterprise` crate + enterprise toolset |
 | `database` | yes | `redis` crate + database toolset |
 | `http` | yes | HTTP/SSE transport with optional OAuth |
+| `secure-storage` | yes | Keyring-backed profile credentials through `redisctl-core` |
 
 Profile/app tools and the two system tools are always compiled in (they only depend on `redisctl-core`).
 
