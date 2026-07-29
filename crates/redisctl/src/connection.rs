@@ -1,6 +1,6 @@
 //! Connection management for Redis Cloud and Enterprise clients
 
-use crate::error::Result as CliResult;
+use crate::error::{RedisCtlError, Result as CliResult};
 use anyhow::Context;
 use redisctl_core::{Config, DeploymentType};
 use tracing::{debug, info, trace};
@@ -9,25 +9,14 @@ use tracing::{debug, info, trace};
 const REDISCTL_USER_AGENT: &str = concat!("redisctl/", env!("CARGO_PKG_VERSION"));
 
 /// Resolved Cloud connection details (without creating an HTTP client)
-// The credential fields are populated but not yet read by the curl builder in
-// commands/curl.rs, so `api ... --curl` output omits its auth headers. Kept
-// pending that fix (see #1049); do not delete the fields without fixing curl.
-#[allow(dead_code)]
 pub struct CloudConnectionInfo {
     pub base_url: String,
-    pub api_key: String,
-    pub api_secret: String,
     pub user_agent: String,
 }
 
 /// Resolved Enterprise connection details (without creating an HTTP client)
-// See CloudConnectionInfo: credential fields populated but not read by the curl
-// builder, so `api ... --curl` output omits auth. Kept pending fix (see #1049).
-#[allow(dead_code)]
 pub struct EnterpriseConnectionInfo {
     pub base_url: String,
-    pub username: String,
-    pub password: Option<String>,
     pub insecure: bool,
     pub ca_cert: Option<String>,
     pub user_agent: String,
@@ -65,11 +54,9 @@ impl ConnectionManager {
         &self,
         profile_name: Option<&str>,
     ) -> CliResult<CloudConnectionInfo> {
-        let (api_key, api_secret, base_url) = self.resolve_cloud_credentials(profile_name)?;
+        let (_, _, base_url) = self.resolve_cloud_credentials(profile_name)?;
         Ok(CloudConnectionInfo {
             base_url,
-            api_key,
-            api_secret,
             user_agent: REDISCTL_USER_AGENT.to_string(),
         })
     }
@@ -196,8 +183,11 @@ impl ConnectionManager {
             // Use the new resolve method which handles keyring lookup
             let (api_key, api_secret, api_url) = profile
                 .resolve_cloud_credentials()
-                .context("Failed to resolve Cloud credentials")?
-                .context("Profile is not configured for Redis Cloud")?;
+                .map_err(RedisCtlError::from)?
+                .ok_or_else(|| RedisCtlError::MissingCredentials {
+                    name: resolved_profile_name.clone(),
+                    missing_fields: "api_key and api_secret".to_string(),
+                })?;
 
             // Check for partial overrides before consuming the Options
             let has_overrides =
@@ -226,12 +216,9 @@ impl ConnectionManager {
         &self,
         profile_name: Option<&str>,
     ) -> CliResult<EnterpriseConnectionInfo> {
-        let (url, username, password, insecure, ca_cert) =
-            self.resolve_enterprise_credentials(profile_name)?;
+        let (url, _, _, insecure, ca_cert) = self.resolve_enterprise_credentials(profile_name)?;
         Ok(EnterpriseConnectionInfo {
             base_url: url,
-            username,
-            password,
             insecure,
             ca_cert,
             user_agent: REDISCTL_USER_AGENT.to_string(),
@@ -411,8 +398,11 @@ impl ConnectionManager {
             // Use the new resolve method which handles keyring lookup
             let (url, username, password, insecure, profile_ca_cert) = profile
                 .resolve_enterprise_credentials()
-                .context("Failed to resolve Enterprise credentials")?
-                .context("Profile is not configured for Redis Enterprise")?;
+                .map_err(RedisCtlError::from)?
+                .ok_or_else(|| RedisCtlError::MissingCredentials {
+                    name: resolved_profile_name.clone(),
+                    missing_fields: "url and username".to_string(),
+                })?;
 
             // Check for partial overrides before consuming the Options
             let has_overrides = env_url.is_some()

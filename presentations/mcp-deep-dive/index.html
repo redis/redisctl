@@ -141,8 +141,8 @@
         <ul>
           <li>Shared deployments</li>
           <li>Multi-agent access</li>
-          <li>OAuth support (JWT)</li>
-          <li><code>--host</code>, <code>--port</code>, rate limiting</li>
+          <li>Gateway-protected shared access</li>
+          <li><code>--host</code>, <code>--port</code>, concurrency limits</li>
         </ul>
       </div>
     </div>
@@ -168,7 +168,7 @@
     <div class="medium" style="text-align: left; max-width: 700px; margin: 0 auto;">
       <p><strong>Docker</strong></p>
       <pre><code>docker run -i --rm --network host \
-  ghcr.io/redis-developer/redisctl \
+  ghcr.io/redis/redisctl \
   redisctl-mcp --tools database</code></pre>
 
       <p><strong>Cargo</strong></p>
@@ -613,10 +613,10 @@ url = "redis://localhost:6379"
   <section>
     <h2>What's Next</h2>
     <div class="medium" style="text-align: left; max-width: 700px; margin: 0 auto;">
-      <p><span class="highlight-red">OAuth for HTTP mode</span> &mdash; shared deployments with auth</p>
+      <p><span class="highlight-red">HTTP deployment hardening</span> &mdash; formalize the authentication trust boundary</p>
       <p><span class="highlight-green">More skills</span> &mdash; data modeling, performance testing, tutorials</p>
       <p><span class="highlight-blue">redis/agent-skills integration</span> &mdash; unified skill ecosystem</p>
-      <p><span class="highlight-yellow">Audit logging</span> &mdash; track what agents do in production</p>
+      <p><span class="highlight-yellow">Coverage expansion</span> &mdash; exercise more live Cloud and Enterprise paths</p>
     </div>
   </section>
 </section>
@@ -627,7 +627,7 @@ url = "redis://localhost:6379"
 <section>
   <h1>Questions?</h1>
   <p class="medium" style="margin-top: 2em;">
-    <code>github.com/redis-developer/redisctl</code>
+    <code>github.com/redis/redisctl</code>
   </p>
 </section>
 

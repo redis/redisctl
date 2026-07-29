@@ -1,0 +1,137 @@
+name: Update Homebrew
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: cargo-dist plan JSON
+        required: true
+        type: string
+    secrets:
+      COMMITTER_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  update-homebrew:
+    if: >-
+      ${{
+        startsWith(fromJson(inputs.plan).announcement_tag, 'redisctl-v') ||
+        startsWith(fromJson(inputs.plan).announcement_tag, 'redisctl-mcp-v')
+      }}
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Determine formula and version
+        id: meta
+        env:
+          TAG: ${{ fromJson(inputs.plan).announcement_tag }}
+        run: |
+          if [[ "$TAG" == redisctl-mcp-v* ]]; then
+            {
+              echo "crate=redisctl-mcp"
+              echo "formula=redisctl-mcp"
+              echo "formula_class=RedisctlMcp"
+              echo "version=${TAG#redisctl-mcp-v}"
+              echo "binary=redisctl-mcp"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "crate=redisctl"
+              echo "formula=redisctl"
+              echo "formula_class=Redisctl"
+              echo "version=${TAG#redisctl-v}"
+              echo "binary=redisctl"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download SHA256 sums
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ fromJson(inputs.plan).announcement_tag }}
+          CRATE: ${{ steps.meta.outputs.crate }}
+        run: |
+          gh release download "$TAG" \
+            --repo "${{ github.repository }}" \
+            --pattern "${CRATE}-aarch64-apple-darwin.tar.xz.sha256" \
+            --pattern "${CRATE}-x86_64-apple-darwin.tar.xz.sha256" \
+            --pattern "${CRATE}-x86_64-unknown-linux-gnu.tar.xz.sha256"
+
+          {
+            echo "sha_arm_mac=$(awk '{print $1}' "${CRATE}-aarch64-apple-darwin.tar.xz.sha256")"
+            echo "sha_intel_mac=$(awk '{print $1}' "${CRATE}-x86_64-apple-darwin.tar.xz.sha256")"
+            echo "sha_linux=$(awk '{print $1}' "${CRATE}-x86_64-unknown-linux-gnu.tar.xz.sha256")"
+          } >> "$GITHUB_ENV"
+
+      - name: Clone Homebrew tap
+        env:
+          COMMITTER_TOKEN: ${{ secrets.COMMITTER_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${COMMITTER_TOKEN}@github.com/redis/homebrew-tap.git" tap
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Generate formula
+        env:
+          TAG: ${{ fromJson(inputs.plan).announcement_tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          CRATE: ${{ steps.meta.outputs.crate }}
+          FORMULA: ${{ steps.meta.outputs.formula }}
+          FORMULA_CLASS: ${{ steps.meta.outputs.formula_class }}
+          BINARY: ${{ steps.meta.outputs.binary }}
+        run: |
+          BASE_URL="https://github.com/${{ github.repository }}/releases/download/${TAG}"
+
+          cat > "tap/Formula/${FORMULA}.rb" << RUBY
+          class ${FORMULA_CLASS} < Formula
+            desc "$( [ "$CRATE" = "redisctl-mcp" ] && echo "MCP server for AI-powered Redis management" || echo "CLI for Redis Cloud and Enterprise management" )"
+            homepage "https://github.com/${{ github.repository }}"
+            version "${VERSION}"
+            license any_of: ["MIT", "Apache-2.0"]
+
+            on_macos do
+              on_arm do
+                url "${BASE_URL}/${CRATE}-aarch64-apple-darwin.tar.xz"
+                sha256 "${sha_arm_mac}"
+              end
+              on_intel do
+                url "${BASE_URL}/${CRATE}-x86_64-apple-darwin.tar.xz"
+                sha256 "${sha_intel_mac}"
+              end
+            end
+
+            on_linux do
+              on_intel do
+                url "${BASE_URL}/${CRATE}-x86_64-unknown-linux-gnu.tar.xz"
+                sha256 "${sha_linux}"
+              end
+            end
+
+            def install
+              bin.install "${BINARY}"
+            end
+
+            test do
+              assert_match "${BINARY}", shell_output("#{bin}/${BINARY} --version")
+            end
+          end
+          RUBY
+
+          sed -i 's/^          //' "tap/Formula/${FORMULA}.rb"
+
+      - name: Commit and push
+        env:
+          COMMITTER_TOKEN: ${{ secrets.COMMITTER_TOKEN }}
+          FORMULA: ${{ steps.meta.outputs.formula }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          cd tap
+          git add "Formula/${FORMULA}.rb"
+          if git diff --cached --quiet; then
+            echo "No changes to formula"
+            exit 0
+          fi
+          git commit -m "Update ${FORMULA} to ${VERSION}"
+          git push

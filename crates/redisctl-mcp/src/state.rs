@@ -1,5 +1,6 @@
 //! Application state and credential resolution
 
+#[cfg(any(feature = "cloud", feature = "enterprise", feature = "database"))]
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -11,13 +12,13 @@ use redis_cloud::CloudClient;
 #[cfg(feature = "enterprise")]
 use redis_enterprise::EnterpriseClient;
 use redisctl_core::Config;
+#[cfg(any(feature = "cloud", feature = "enterprise", feature = "database"))]
 use tokio::sync::RwLock;
 
 use crate::policy::{Policy, SafetyTier};
 
 /// How credentials are resolved
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum CredentialSource {
     /// Resolve from redisctl profiles (local mode)
     /// Empty vec means use default profiles from config
@@ -25,6 +26,7 @@ pub enum CredentialSource {
 }
 
 /// Cached API clients and connections (per-profile for multi-cluster support)
+#[cfg(any(feature = "cloud", feature = "enterprise", feature = "database"))]
 pub struct CachedClients {
     #[cfg(feature = "cloud")]
     pub cloud: HashMap<String, CloudClient>,
@@ -51,7 +53,7 @@ pub struct AppState {
     /// Configured profiles (for multi-cluster support)
     profiles: Vec<String>,
     /// Cached API clients (keyed by profile name, "_default" for default)
-    #[allow(dead_code)]
+    #[cfg(any(feature = "cloud", feature = "enterprise", feature = "database"))]
     clients: RwLock<CachedClients>,
     /// Session-scoped command aliases (name → list of command arg arrays)
     #[cfg(feature = "database")]
@@ -82,6 +84,7 @@ impl AppState {
             client_name,
             config,
             profiles,
+            #[cfg(any(feature = "cloud", feature = "enterprise", feature = "database"))]
             clients: RwLock::new(CachedClients {
                 #[cfg(feature = "cloud")]
                 cloud: HashMap::new(),
@@ -96,7 +99,6 @@ impl AppState {
     }
 
     /// Get the list of configured profiles
-    #[allow(dead_code)]
     pub fn available_profiles(&self) -> &[String] {
         &self.profiles
     }
@@ -130,7 +132,6 @@ impl AppState {
 
     /// Get or create Cloud API client (uses default profile)
     #[cfg(feature = "cloud")]
-    #[allow(dead_code)]
     pub async fn cloud_client(&self) -> Result<CloudClient> {
         self.cloud_client_for_profile(None).await
     }
@@ -167,7 +168,6 @@ impl AppState {
 
     /// Get or create Enterprise API client (uses default profile)
     #[cfg(feature = "enterprise")]
-    #[allow(dead_code)]
     pub async fn enterprise_client(&self) -> Result<EnterpriseClient> {
         self.enterprise_client_for_profile(None).await
     }
@@ -393,7 +393,6 @@ impl AppState {
     ///
     /// Returns `true` for `ReadWrite` and `Full` tiers.
     /// Used for defense-in-depth in non-destructive write tool handlers.
-    #[allow(dead_code)]
     pub fn is_write_allowed(&self) -> bool {
         matches!(
             self.policy.global_tier(),
@@ -405,7 +404,6 @@ impl AppState {
     ///
     /// Returns `true` only for `Full` tier.
     /// Used for defense-in-depth in destructive tool handlers.
-    #[allow(dead_code)]
     pub fn is_destructive_allowed(&self) -> bool {
         matches!(self.policy.global_tier(), SafetyTier::Full)
     }
@@ -452,6 +450,7 @@ impl Clone for AppState {
             client_name: self.client_name.clone(),
             config: self.config.clone(),
             profiles: self.profiles.clone(),
+            #[cfg(any(feature = "cloud", feature = "enterprise", feature = "database"))]
             clients: RwLock::new(CachedClients {
                 #[cfg(feature = "cloud")]
                 cloud: HashMap::new(),
@@ -467,7 +466,6 @@ impl Clone for AppState {
 }
 
 /// Test helpers for creating AppState with pre-configured clients
-#[allow(dead_code)]
 impl AppState {
     /// Create a default read-only policy for tests
     pub fn test_policy() -> Arc<Policy> {

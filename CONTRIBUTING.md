@@ -39,7 +39,7 @@ Each issue has detailed guidance in the comments. Don't hesitate to ask question
    cd redisctl
    ```
 
-2. **Install Rust toolchain (1.89+)**
+2. **Install Rust toolchain (1.90+)**
    ```bash
    rustup update stable
    ```

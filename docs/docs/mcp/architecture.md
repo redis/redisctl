@@ -22,7 +22,7 @@ redisctl-mcp
     |       +-- Database tools -> redis crate -> Redis protocol
     |       +-- App tools -> redisctl-core -> local config
     |
-    +-- Credential resolution (profiles or OAuth)
+    +-- Credential resolution (profiles or direct database URL)
 ```
 
 ## Feature Flags
@@ -34,7 +34,7 @@ The binary is compiled with feature flags that gate platform-specific dependenci
 | `cloud` | yes | `redis-cloud` crate + cloud toolset |
 | `enterprise` | yes | `redis-enterprise` crate + enterprise toolset |
 | `database` | yes | `redis` crate + database toolset |
-| `http` | yes | HTTP/SSE transport with optional OAuth |
+| `http` | yes | Unauthenticated HTTP/SSE transport |
 
 Profile/app tools and the two system tools are always compiled in (they only depend on `redisctl-core`).
 
@@ -102,14 +102,10 @@ HTTP transport with Server-Sent Events for streaming. Useful for shared deployme
 redisctl-mcp --transport http --host 0.0.0.0 --port 8080
 ```
 
-Optional OAuth authentication protects the HTTP endpoint:
-
-```bash
-redisctl-mcp --transport http --oauth \
-  --oauth-issuer https://auth.example.com \
-  --oauth-audience my-audience \
-  --jwks-uri https://auth.example.com/.well-known/jwks.json
-```
+The HTTP transport does not provide built-in authentication. Keep the default
+loopback bind for local use. Shared deployments must put the server behind a
+trusted gateway or reverse proxy that provides authentication, authorization,
+and TLS.
 
 ## Credential Resolution
 
@@ -122,10 +118,6 @@ Credentials are resolved at tool invocation time, not at server startup. This al
 3. If no CLI profile, fall back to the default profile from `~/.config/redisctl/config.toml`
 4. Resolve credentials from the profile (including keyring lookups)
 5. Build or reuse a cached API client for that profile
-
-### OAuth-based (HTTP mode)
-
-In HTTP mode with OAuth enabled, credentials come from environment variables (`REDIS_CLOUD_API_KEY`, `REDIS_ENTERPRISE_URL`, etc.) rather than profiles.
 
 ## Policy Engine
 
@@ -141,12 +133,11 @@ The evaluation flow:
 
 A tower middleware (`AuditLayer`) sits between the transport and the tool router. It intercepts every tool call and emits structured events via the `tracing` crate with `target: "audit"`. See [Audit Logging](audit-logging.md) for configuration details.
 
-## Concurrency and Rate Limiting
+## Concurrency and Timeouts
 
-The server enforces concurrency and rate limits via CLI flags:
+The server bounds request concurrency and HTTP request duration via CLI flags:
 
 - `--max-concurrent 10` -- maximum parallel tool calls (default: 10)
-- `--rate-limit-ms 100` -- minimum interval between calls in milliseconds (default: 100)
 - `--request-timeout-secs 30` -- per-request timeout for HTTP transport (default: 30)
 
 ## Request Flow

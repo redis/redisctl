@@ -42,7 +42,7 @@ on:
   pull_request:
   push:
     tags:
-      - "**[0-9]+.[0-9]+.[0-9]+*"
+      - '**[0-9]+.[0-9]+.[0-9]+*'
 
 jobs:
   # Run 'dist plan' (or host) to determine what tasks we need to do
@@ -56,7 +56,7 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
           submodules: recursive
@@ -64,9 +64,9 @@ jobs:
         # we specify bash to get pipefail; it guards against the `curl` command
         # failing. otherwise `sh` won't catch that `curl` returned non-0
         shell: bash
-        run: "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.30.1/cargo-dist-installer.sh | sh"
+        run: "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh | sh"
       - name: Cache dist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: cargo-dist-cache
           path: ~/.cargo/bin/dist
@@ -82,7 +82,7 @@ jobs:
           cat plan-dist-manifest.json
           echo "manifest=$(jq -c "." plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
       - name: "Upload dist-manifest.json"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: artifacts-plan-dist-manifest
           path: plan-dist-manifest.json
@@ -116,7 +116,7 @@ jobs:
       - name: enable windows longpaths
         run: |
           git config --global core.longpaths true
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
           submodules: recursive
@@ -131,7 +131,7 @@ jobs:
         run: ${{ matrix.install_dist.run }}
       # Get the dist-manifest
       - name: Fetch local artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: artifacts-*
           path: target/distrib/
@@ -158,7 +158,7 @@ jobs:
 
           cp dist-manifest.json "$BUILD_MANIFEST_NAME"
       - name: "Upload artifacts"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: artifacts-build-local-${{ join(matrix.targets, '_') }}
           path: |
@@ -175,19 +175,19 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BUILD_MANIFEST_NAME: target/distrib/global-dist-manifest.json
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
           submodules: recursive
       - name: Install cached dist
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: cargo-dist-cache
           path: ~/.cargo/bin/
       - run: chmod +x ~/.cargo/bin/dist
       # Get all the local artifacts for the global tasks to use (for e.g. checksums)
       - name: Fetch local artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: artifacts-*
           path: target/distrib/
@@ -205,7 +205,7 @@ jobs:
 
           cp dist-manifest.json "$BUILD_MANIFEST_NAME"
       - name: "Upload artifacts"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: artifacts-build-global
           path: |
@@ -225,19 +225,19 @@ jobs:
     outputs:
       val: ${{ steps.host.outputs.manifest }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
           submodules: recursive
       - name: Install cached dist
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: cargo-dist-cache
           path: ~/.cargo/bin/
       - run: chmod +x ~/.cargo/bin/dist
       # Fetch artifacts from scratch-storage
       - name: Fetch artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: artifacts-*
           path: target/distrib/
@@ -250,14 +250,14 @@ jobs:
           cat dist-manifest.json
           echo "manifest=$(jq -c "." dist-manifest.json)" >> "$GITHUB_OUTPUT"
       - name: "Upload dist-manifest.json"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           # Overwrite the previous copy
           name: artifacts-dist-manifest
           path: dist-manifest.json
       # Create a GitHub Release while uploading all files to it
       - name: "Download GitHub Artifacts"
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: artifacts-*
           path: artifacts
@@ -278,140 +278,33 @@ jobs:
 
           gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
 
-  # Update Homebrew formulas after successful release
-  # NOTE: This job is manually maintained - cargo-dist regenerates release.yml
-  # and will remove this job. Re-add it after running `dist generate` or `dist init`.
-  #
-  # Handles both redisctl and redisctl-mcp releases, updating all platform
-  # URLs and SHA256 hashes in the corresponding formula.
-  update-homebrew:
+  custom-update-homebrew:
     needs:
       - plan
       - host
-    # Run for redisctl and redisctl-mcp releases (not redisctl-core or redisctl-config)
-    if: ${{ always() && needs.host.result == 'success' && (startsWith(needs.plan.outputs.tag, 'redisctl-v') || startsWith(needs.plan.outputs.tag, 'redisctl-mcp-v')) }}
-    runs-on: "ubuntu-22.04"
-    steps:
-      - name: Determine formula and version
-        id: meta
-        run: |
-          TAG="${{ needs.plan.outputs.tag }}"
-          if [[ "$TAG" == redisctl-mcp-v* ]]; then
-            echo "crate=redisctl-mcp" >> $GITHUB_OUTPUT
-            echo "formula=redisctl-mcp" >> $GITHUB_OUTPUT
-            echo "formula_class=RedisctlMcp" >> $GITHUB_OUTPUT
-            echo "version=${TAG#redisctl-mcp-v}" >> $GITHUB_OUTPUT
-            echo "binary=redisctl-mcp" >> $GITHUB_OUTPUT
-          else
-            echo "crate=redisctl" >> $GITHUB_OUTPUT
-            echo "formula=redisctl" >> $GITHUB_OUTPUT
-            echo "formula_class=Redisctl" >> $GITHUB_OUTPUT
-            echo "version=${TAG#redisctl-v}" >> $GITHUB_OUTPUT
-            echo "binary=redisctl" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Download SHA256 sums
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${{ needs.plan.outputs.tag }}"
-          CRATE="${{ steps.meta.outputs.crate }}"
-          gh release download "$TAG" \
-            --repo "${{ github.repository }}" \
-            --pattern "${CRATE}-aarch64-apple-darwin.tar.xz.sha256" \
-            --pattern "${CRATE}-x86_64-apple-darwin.tar.xz.sha256" \
-            --pattern "${CRATE}-x86_64-unknown-linux-gnu.tar.xz.sha256"
-
-          # Extract just the hash from each file (format: "hash *filename")
-          echo "sha_arm_mac=$(awk '{print $1}' ${CRATE}-aarch64-apple-darwin.tar.xz.sha256)" >> $GITHUB_ENV
-          echo "sha_intel_mac=$(awk '{print $1}' ${CRATE}-x86_64-apple-darwin.tar.xz.sha256)" >> $GITHUB_ENV
-          echo "sha_linux=$(awk '{print $1}' ${CRATE}-x86_64-unknown-linux-gnu.tar.xz.sha256)" >> $GITHUB_ENV
-
-      - name: Clone homebrew-tap
-        env:
-          COMMITTER_TOKEN: ${{ secrets.COMMITTER_TOKEN }}
-        run: |
-          git clone "https://x-access-token:${COMMITTER_TOKEN}@github.com/redis/homebrew-tap.git" tap
-          cd tap
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Generate formula
-        run: |
-          TAG="${{ needs.plan.outputs.tag }}"
-          VERSION="${{ steps.meta.outputs.version }}"
-          CRATE="${{ steps.meta.outputs.crate }}"
-          FORMULA="${{ steps.meta.outputs.formula }}"
-          CLASS="${{ steps.meta.outputs.formula_class }}"
-          BINARY="${{ steps.meta.outputs.binary }}"
-          BASE_URL="https://github.com/${{ github.repository }}/releases/download/${TAG}"
-
-          cat > "tap/Formula/${FORMULA}.rb" << RUBY
-          class ${CLASS} < Formula
-            desc "$( [ "$CRATE" = "redisctl-mcp" ] && echo "MCP server for AI-powered Redis management" || echo "CLI for Redis Cloud and Enterprise management" )"
-            homepage "https://github.com/${{ github.repository }}"
-            version "${VERSION}"
-            license any_of: ["MIT", "Apache-2.0"]
-
-            on_macos do
-              on_arm do
-                url "${BASE_URL}/${CRATE}-aarch64-apple-darwin.tar.xz"
-                sha256 "${sha_arm_mac}"
-              end
-              on_intel do
-                url "${BASE_URL}/${CRATE}-x86_64-apple-darwin.tar.xz"
-                sha256 "${sha_intel_mac}"
-              end
-            end
-
-            on_linux do
-              on_intel do
-                url "${BASE_URL}/${CRATE}-x86_64-unknown-linux-gnu.tar.xz"
-                sha256 "${sha_linux}"
-              end
-            end
-
-            def install
-              bin.install "${BINARY}"
-            end
-
-            test do
-              assert_match "${BINARY}", shell_output("#{bin}/${BINARY} --version")
-            end
-          end
-          RUBY
-
-          # Remove leading whitespace from heredoc indentation
-          sed -i 's/^          //' "tap/Formula/${FORMULA}.rb"
-
-      - name: Commit and push
-        env:
-          COMMITTER_TOKEN: ${{ secrets.COMMITTER_TOKEN }}
-        run: |
-          cd tap
-          FORMULA="${{ steps.meta.outputs.formula }}"
-          VERSION="${{ steps.meta.outputs.version }}"
-          git add "Formula/${FORMULA}.rb"
-          if git diff --cached --quiet; then
-            echo "No changes to formula"
-            exit 0
-          fi
-          git commit -m "Update ${FORMULA} to ${VERSION}"
-          git push
+    if: ${{ !fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases }}
+    uses: ./.github/workflows/update-homebrew.yml
+    with:
+      plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit
+    # publish jobs get escalated permissions
+    permissions:
+      "contents": "read"
 
   announce:
     needs:
       - plan
       - host
+      - custom-update-homebrew
     # use "always() && ..." to allow us to wait for all publish jobs while
     # still allowing individual publish jobs to skip themselves (for prereleases).
     # "host" however must run to completion, no skipping allowed!
-    if: ${{ always() && needs.host.result == 'success' }}
+    if: ${{ always() && needs.host.result == 'success' && (needs.custom-update-homebrew.result == 'skipped' || needs.custom-update-homebrew.result == 'success') }}
     runs-on: "ubuntu-22.04"
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
           submodules: recursive

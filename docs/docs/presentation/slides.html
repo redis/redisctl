@@ -101,7 +101,7 @@
                     </h1>
                     <h3>The CLI for Redis Cloud and Enterprise</h3>
                     <p class="small" style="margin-top: 2em">
-                        github.com/redis-developer/redisctl
+                        github.com/redis/redisctl
                     </p>
                 </section>
 
@@ -596,19 +596,19 @@ redisctl-mcp --profile my-cluster</code></pre>
                     <h2>Using with Docker</h2>
                     <p>No installation required</p>
                     <pre><code class="language-bash"># Run any command
-docker run --rm ghcr.io/redis-developer/redisctl \
+docker run --rm ghcr.io/redis/redisctl \
   cloud subscription list
 
 # With environment variables
 docker run --rm \
   -e REDIS_CLOUD_API_KEY=$KEY \
   -e REDIS_CLOUD_SECRET_KEY=$SECRET \
-  ghcr.io/redis-developer/redisctl cloud database list
+  ghcr.io/redis/redisctl cloud database list
 
 # Or mount your config
 docker run --rm \
   -v ~/.config/redisctl:/root/.config/redisctl \
-  ghcr.io/redis-developer/redisctl --profile prod cloud database list</code></pre>
+  ghcr.io/redis/redisctl --profile prod cloud database list</code></pre>
                 </section>
 
                 <!-- CI/CD -->
@@ -725,10 +725,10 @@ cargo install redisctl
 cargo install redisctl --features secure-storage
 
 # Docker
-docker run -it ghcr.io/redis-developer/redisctl --help
+docker run -it ghcr.io/redis/redisctl --help
 
 # From releases (Linux x86_64)
-curl -L https://github.com/redis-developer/redisctl/releases/latest/download/redisctl-x86_64-unknown-linux-gnu.tar.gz | tar xz
+curl -L https://github.com/redis/redisctl/releases/latest/download/redisctl-x86_64-unknown-linux-gnu.tar.gz | tar xz
 ./redisctl --help</code></pre>
                 </section>
 
@@ -745,7 +745,7 @@ redisctl profile set mycloud --type cloud --api-key $KEY --api-secret $SECRET
 redisctl cloud subscription list
 redisctl cloud database list --subscription-id 123456</code></pre>
                     <p style="margin-top: 1.5em"><br /></p>
-                    <h3>github.com/redis-developer/redisctl</h3>
+                    <h3>github.com/redis/redisctl</h3>
                     <p class="small">
                         Docs: redis-field-engineering.github.io/redisctl-docs
                     </p>

@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 # MCP framework
-tower-mcp = { version = "0.8.2", features = ["http", "oauth", "dynamic-tools"] }
+tower-mcp = { version = "0.8.2", features = ["http", "dynamic-tools"] }
 schemars = "1.2"
 
 # Internal crates
@@ -51,7 +51,7 @@ async-trait = { workspace = true }
 # CLI
 clap = { workspace = true }
 
-# HTTP/OAuth
+# HTTP middleware
 tower = { workspace = true }
 
 [features]
@@ -71,4 +71,4 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 redis = { workspace = true }
 serial_test = { workspace = true }
-docker-wrapper = { git = "https://github.com/joshrotenberg/docker-wrapper", features = ["testing", "template-redis"] }
+docker-wrapper = { git = "https://github.com/joshrotenberg/docker-wrapper", rev = "e122332360311e4acf4914ab4b8c97bc84b30ac1", features = ["testing", "template-redis"] }

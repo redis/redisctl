@@ -4,7 +4,8 @@ Context and instructions for AI coding agents working on the redisctl project.
 
 ## Project Overview
 
-redisctl is a Rust workspace with three crates that share a lockstep version (currently 0.9.1):
+redisctl is a Rust workspace with three crates that share the lockstep version
+declared in the root `Cargo.toml`:
 
 | Crate | Path | Purpose |
 |-------|------|---------|
