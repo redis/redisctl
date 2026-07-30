@@ -448,6 +448,18 @@ impl AppState {
         ))
     }
 
+    /// Create a full policy for tests that exercise destructive tools
+    pub fn test_full_policy() -> Arc<Policy> {
+        Arc::new(Policy::new(
+            crate::policy::PolicyConfig {
+                tier: SafetyTier::Full,
+                ..Default::default()
+            },
+            std::collections::HashMap::new(),
+            "test".to_string(),
+        ))
+    }
+
     /// Create test state with a pre-configured Cloud client and write access
     /// enabled, for tests that exercise write tools.
     #[cfg(feature = "cloud")]

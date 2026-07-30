@@ -11,6 +11,7 @@ use redisctl_core::cloud::{
 };
 use tower_mcp::{CallToolResult, ResultExt};
 
+use crate::serde_helpers;
 use crate::tools::macros::{cloud_tool, mcp_module};
 
 // ============================================================================
@@ -140,6 +141,7 @@ cloud_tool!(read_only, get_subscription, "get_subscription",
     "Get Pro subscription details by ID. Use get_fixed_subscription for Essentials/Fixed subscriptions.",
     {
         /// Subscription ID
+        #[serde(deserialize_with = "serde_helpers::string_or_i32::deserialize")]
         pub subscription_id: i32,
     } => |client, input| {
         let handler = SubscriptionHandler::new(client);

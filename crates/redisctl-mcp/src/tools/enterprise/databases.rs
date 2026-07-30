@@ -12,6 +12,7 @@ use redisctl_core::enterprise::{
 use serde_json::Value;
 use tower_mcp::{CallToolResult, ResultExt};
 
+use crate::serde_helpers;
 use crate::tools::macros::{enterprise_tool, mcp_module};
 
 mcp_module! {
@@ -253,6 +254,7 @@ enterprise_tool!(write, create_enterprise_database, "create_enterprise_database"
         pub name: String,
         /// Memory size in **bytes** (not GB — unlike Cloud tools). Example: 1073741824 = 1 GB.
         /// IMPORTANT: passing a value in GB (e.g., 1.0) will create a 1-byte database.
+        #[serde(default, deserialize_with = "serde_helpers::string_or_opt_u64::deserialize")]
         pub memory_size: Option<u64>,
         /// Port number (optional, cluster will assign if not specified)
         pub port: Option<u16>,

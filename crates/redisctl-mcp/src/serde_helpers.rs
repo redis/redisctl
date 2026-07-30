@@ -4,6 +4,28 @@
 //! of `0`). These helpers accept both native JSON numbers and string-encoded
 //! numbers for seamless interoperability.
 
+/// Deserialize an `i32` from either a JSON number or a string.
+pub mod string_or_i32 {
+    use serde::{Deserialize, Deserializer};
+    use serde_json::Value;
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<i32, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match Value::deserialize(deserializer)? {
+            Value::Number(n) => {
+                let value = n
+                    .as_i64()
+                    .ok_or_else(|| serde::de::Error::custom("number out of i32 range"))?;
+                i32::try_from(value).map_err(serde::de::Error::custom)
+            }
+            Value::String(s) => s.parse::<i32>().map_err(serde::de::Error::custom),
+            _ => Err(serde::de::Error::custom("expected number or string")),
+        }
+    }
+}
+
 /// Deserialize an `i64` from either a JSON number or a string.
 pub mod string_or_i64 {
     use serde::{Deserialize, Deserializer};
@@ -159,6 +181,12 @@ mod tests {
     use serde_json::json;
 
     #[derive(Deserialize)]
+    struct TestI32 {
+        #[serde(deserialize_with = "super::string_or_i32::deserialize")]
+        val: i32,
+    }
+
+    #[derive(Deserialize)]
     struct TestI64 {
         #[serde(deserialize_with = "super::string_or_i64::deserialize")]
         val: i64,
@@ -198,6 +226,24 @@ mod tests {
     struct TestF64 {
         #[serde(deserialize_with = "super::string_or_f64::deserialize")]
         val: f64,
+    }
+
+    #[test]
+    fn i32_from_number() {
+        let t: TestI32 = serde_json::from_value(json!({"val": 42})).unwrap();
+        assert_eq!(t.val, 42);
+    }
+
+    #[test]
+    fn i32_from_string() {
+        let t: TestI32 = serde_json::from_value(json!({"val": "42"})).unwrap();
+        assert_eq!(t.val, 42);
+    }
+
+    #[test]
+    fn i32_rejects_out_of_range_number() {
+        let result = serde_json::from_value::<TestI32>(json!({"val": i64::from(i32::MAX) + 1}));
+        assert!(result.is_err());
     }
 
     #[test]
