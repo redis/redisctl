@@ -216,7 +216,7 @@ impl AppState {
                     .with_context(|| format!("Profile '{}' not found", resolved_profile_name))?;
 
                 // Get credentials
-                let (api_key, api_secret, _base_url) = profile
+                let (api_key, api_secret, base_url) = profile
                     .resolve_cloud_credentials()
                     .context("Failed to resolve cloud credentials")?
                     .context("No cloud credentials in profile")?;
@@ -224,6 +224,7 @@ impl AppState {
                 CloudClient::builder()
                     .api_key(api_key)
                     .api_secret(api_secret)
+                    .base_url(&base_url)
                     .build()
                     .context("Failed to build Cloud client")
             }

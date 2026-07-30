@@ -55,15 +55,17 @@ clap = { workspace = true }
 tower = { workspace = true }
 
 [features]
-default = ["http", "cloud", "enterprise", "database"]
+default = ["http", "cloud", "enterprise", "database", "secure-storage"]
 http = []
 cloud = ["dep:redis-cloud"]
 enterprise = ["dep:redis-enterprise"]
 database = ["dep:redis", "dep:urlencoding"]
+secure-storage = ["redisctl-core/secure-storage"]
 test-support = []
 
 [dev-dependencies]
 tokio = { workspace = true }
+tempfile = { workspace = true }
 redis-cloud = { workspace = true, features = ["test-support"] }
 redis-enterprise = { workspace = true, features = ["test-support"] }
 wiremock = { workspace = true }
