@@ -1,6 +1,8 @@
 #![cfg(feature = "enterprise")]
 //! Integration tests for Redis Enterprise MCP tools using mock server
 
+mod support;
+
 use std::sync::Arc;
 
 use redis_enterprise::testing::{
@@ -12,23 +14,13 @@ use tower_mcp::Tool;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
-// Import the tools and state from the MCP crate
-use redisctl_mcp::policy::{Policy, PolicyConfig, SafetyTier};
 use redisctl_mcp::state::AppState;
 use redisctl_mcp::tools::enterprise;
+use support::{state_full, state_write};
 
 /// Build an AppState with a full-tier policy so destructive tools are permitted.
 fn full_policy_state(client: redis_enterprise::EnterpriseClient) -> Arc<AppState> {
-    let mut state = AppState::with_enterprise_client(client);
-    state.policy = Arc::new(Policy::new(
-        PolicyConfig {
-            tier: SafetyTier::Full,
-            ..Default::default()
-        },
-        std::collections::HashMap::new(),
-        "test-full".to_string(),
-    ));
-    Arc::new(state)
+    state_full(AppState::with_enterprise_client(client))
 }
 
 /// Helper to call a tool and get text result
@@ -1219,14 +1211,12 @@ async fn test_create_enterprise_database() {
         .await;
 
     let client = server.client();
-    let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
-    let state = Arc::new(state);
+    let state = state_write(AppState::with_enterprise_client(client));
     let tool = enterprise::create_enterprise_database(state);
 
     let result = call_tool_json(
         &tool,
-        json!({"name": "new-db", "memory_size": 1073741824u64}),
+        json!({"name": "new-db", "memory_size": "1073741824"}),
     )
     .await;
 
