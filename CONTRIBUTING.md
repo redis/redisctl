@@ -51,10 +51,14 @@ Each issue has detailed guidance in the comments. Don't hesitate to ask question
    cargo fmt --all -- --check
    ```
 
-4. **Start local Redis Enterprise for testing**
+4. **Start local Redis Enterprise for the live test suites**
    ```bash
-   docker compose up -d
+   docker compose -f docker/docker-compose.enterprise-demo.yml up -d
    ```
+
+   These suites are `#[ignore]`d and are not needed for most changes. See
+   [TESTING.md](TESTING.md) for the full picture: local test tiers, Docker prerequisites,
+   and what CI enforces.
 
 ### Making Changes
 
@@ -127,6 +131,9 @@ Each issue has detailed guidance in the comments. Don't hesitate to ask question
 - Add integration tests for new commands
 - Test both success and error cases
 - Mock external API calls
+
+[TESTING.md](TESTING.md) covers the test tiers, the Docker-gated live suites, and the CI gates
+in detail.
 
 ### Documentation
 
