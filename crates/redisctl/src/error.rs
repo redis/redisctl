@@ -120,12 +120,11 @@ pub enum RedisCtlError {
         available_profiles: Vec<String>,
     },
 
-    // Intended error types that no code path constructs yet: the CLI currently
-    // reports these conditions with generic errors instead. Kept (with their
-    // messages and suggestions) to be wired up rather than cut; see #1049.
-    #[allow(dead_code)]
-    #[error("No profile configured. Use 'redisctl profile set' to configure a profile.")]
-    NoProfileConfigured,
+    #[error("No {deployment_type} profiles configured. {suggestion}")]
+    NoProfileConfigured {
+        deployment_type: String,
+        suggestion: String,
+    },
 
     #[error("Missing credentials for profile '{name}': {missing_fields}")]
     MissingCredentials {
@@ -148,7 +147,6 @@ pub enum RedisCtlError {
     #[error("Cancelled at the confirmation prompt: {prompt}")]
     Cancelled { prompt: String },
 
-    #[allow(dead_code)] // intended but not yet produced by any code path; see #1049
     #[error("Command not supported for deployment type '{deployment_type}'")]
     UnsupportedDeploymentType { deployment_type: String },
     #[error("File error for '{path}': {message}")]
@@ -176,9 +174,13 @@ impl RedisCtlError {
                 format!("Create profile '{}': redisctl profile set {}", name, name),
                 format!("Check profile name spelling"),
             ],
-            RedisCtlError::NoProfileConfigured => vec![
+            RedisCtlError::NoProfileConfigured {
+                deployment_type, ..
+            } => vec![
                 "Run the setup wizard: redisctl profile init".to_string(),
-                "Or create manually: redisctl profile set <name> --type <cloud|enterprise|database> ...".to_string(),
+                format!(
+                    "Or create manually: redisctl profile set <name> --type {deployment_type} ..."
+                ),
                 "View profile help: redisctl profile set --help".to_string(),
             ],
             RedisCtlError::MissingCredentials { name, .. } => vec![
@@ -198,21 +200,30 @@ impl RedisCtlError {
                     "Refresh credentials: redisctl profile set {} --type <type> ... (preserves other settings)",
                     profile_name,
                 ));
-                suggestions.push(
-                    "Test connectivity: redisctl profile validate --connect".to_string(),
-                );
+                suggestions
+                    .push("Test connectivity: redisctl profile validate --connect".to_string());
                 suggestions
             }
-            RedisCtlError::ConnectionError { message } if message.contains("certificate") || message.contains("SSL") || message.contains("tls") => vec![
-                "For self-signed certificates, recreate profile with --insecure".to_string(),
-                "Or provide a CA cert: --ca-cert /path/to/ca.pem".to_string(),
-                "Verify the URL uses the correct port (9443 for Enterprise admin)".to_string(),
-            ],
-            RedisCtlError::ConnectionError { message } if message.contains("Connection refused") => vec![
-                "The server is not accepting connections on this address/port".to_string(),
-                "Verify the URL: redisctl profile show <profile>".to_string(),
-                "Check that the server is running and the port is correct".to_string(),
-            ],
+            RedisCtlError::ConnectionError { message }
+                if message.contains("certificate")
+                    || message.contains("SSL")
+                    || message.contains("tls") =>
+            {
+                vec![
+                    "For self-signed certificates, recreate profile with --insecure".to_string(),
+                    "Or provide a CA cert: --ca-cert /path/to/ca.pem".to_string(),
+                    "Verify the URL uses the correct port (9443 for Enterprise admin)".to_string(),
+                ]
+            }
+            RedisCtlError::ConnectionError { message }
+                if message.contains("Connection refused") =>
+            {
+                vec![
+                    "The server is not accepting connections on this address/port".to_string(),
+                    "Verify the URL: redisctl profile show <profile>".to_string(),
+                    "Check that the server is running and the port is correct".to_string(),
+                ]
+            }
             RedisCtlError::ConnectionError { message } if message.contains("timed out") => vec![
                 "The server did not respond in time".to_string(),
                 "Check network connectivity and firewall rules".to_string(),
@@ -288,7 +299,7 @@ impl RedisCtlError {
             RedisCtlError::Other(_) => "error",
             RedisCtlError::ProfileNotFound { .. } => "profile_not_found",
             RedisCtlError::ProfileTypeMismatch { .. } => "profile_type_mismatch",
-            RedisCtlError::NoProfileConfigured => "no_profile_configured",
+            RedisCtlError::NoProfileConfigured { .. } => "no_profile_configured",
             RedisCtlError::MissingCredentials { .. } => "missing_credentials",
             RedisCtlError::AuthenticationFailed { .. } => "authentication_failed",
             RedisCtlError::ApiError { .. } => "api_error",
@@ -314,7 +325,7 @@ impl RedisCtlError {
             RedisCtlError::Configuration(_)
             | RedisCtlError::ProfileNotFound { .. }
             | RedisCtlError::ProfileTypeMismatch { .. }
-            | RedisCtlError::NoProfileConfigured
+            | RedisCtlError::NoProfileConfigured { .. }
             | RedisCtlError::MissingCredentials { .. } => exit_code::CONFIG,
 
             RedisCtlError::AuthenticationFailed { .. } => exit_code::AUTH,
@@ -490,6 +501,13 @@ impl From<redisctl_core::ConfigError> for RedisCtlError {
             redisctl_core::ConfigError::ProfileNotFound { name } => {
                 RedisCtlError::ProfileNotFound { name }
             }
+            redisctl_core::ConfigError::NoProfilesOfType {
+                deployment_type,
+                suggestion,
+            } => RedisCtlError::NoProfileConfigured {
+                deployment_type,
+                suggestion,
+            },
             other => RedisCtlError::Configuration(other.to_string()),
         }
     }
@@ -654,7 +672,10 @@ mod tests {
     #[test]
     fn classified_variants_do_not_return_generic() {
         for err in [
-            RedisCtlError::NoProfileConfigured,
+            RedisCtlError::NoProfileConfigured {
+                deployment_type: "cloud".into(),
+                suggestion: "create one".into(),
+            },
             RedisCtlError::MissingCredentials {
                 name: "p".into(),
                 missing_fields: "api_key".into(),
@@ -666,5 +687,28 @@ mod tests {
         ] {
             assert_ne!(err.exit_code(), exit_code::GENERIC, "{err}");
         }
+    }
+
+    #[test]
+    fn config_errors_keep_actionable_profile_types() {
+        let missing = RedisCtlError::from(redisctl_core::ConfigError::ProfileNotFound {
+            name: "missing".into(),
+        });
+        assert!(matches!(
+            missing,
+            RedisCtlError::ProfileNotFound { ref name } if name == "missing"
+        ));
+
+        let empty = RedisCtlError::from(redisctl_core::ConfigError::NoProfilesOfType {
+            deployment_type: "cloud".into(),
+            suggestion: "create one".into(),
+        });
+        assert!(matches!(
+            empty,
+            RedisCtlError::NoProfileConfigured {
+                ref deployment_type,
+                ref suggestion,
+            } if deployment_type == "cloud" && suggestion == "create one"
+        ));
     }
 }

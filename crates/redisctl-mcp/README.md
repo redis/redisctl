@@ -60,8 +60,8 @@ redisctl-mcp
 # Use a specific profile
 redisctl-mcp --profile production
 
-# Read-only mode (disables write operations)
-redisctl-mcp --profile production --read-only
+# Enable write operations (read-only is the default)
+redisctl-mcp --profile production --read-only=false
 
 # With a direct Redis database connection
 redisctl-mcp --database-url redis://localhost:6379
@@ -69,19 +69,15 @@ redisctl-mcp --database-url redis://localhost:6379
 
 ### HTTP Transport
 
-For shared deployments accessible over the network:
+The HTTP transport is unauthenticated. Keep the default loopback bind for local
+use, or put shared deployments behind a trusted gateway or reverse proxy that
+provides authentication, authorization, and TLS.
 
 ```bash
-# Basic HTTP server
+# Local HTTP server
 redisctl-mcp --transport http --port 8080
 
-# With OAuth authentication
-redisctl-mcp --transport http --port 8080 \
-  --oauth \
-  --oauth-issuer https://accounts.google.com \
-  --oauth-audience my-app-id
-
-# With custom rate limiting
+# With custom concurrency and timeout limits
 redisctl-mcp --transport http --port 8080 \
   --max-concurrent 20 \
   --request-timeout-secs 60
@@ -140,7 +136,8 @@ insecure = true
 
 ### Environment Variables
 
-For OAuth/HTTP mode or when not using profiles:
+For deployments that use environment-backed credentials instead of storing
+credential values directly in profiles:
 
 ```bash
 # Redis Cloud
@@ -164,19 +161,19 @@ Options:
   -t, --transport <TRANSPORT>      Transport mode [default: stdio]
                                    - stdio: For CLI integrations
                                    - http: For web deployments
-  -p, --profile <PROFILE>          Profile name for credentials
-      --read-only                  Disable write operations
+  -p, --profile <PROFILE>          Profile name(s) for credentials; repeatable
+      --read-only <BOOL>           Read-only mode [default: true]
+      --policy <PATH>              TOML policy file
       --database-url <URL>         Redis URL for direct connections
+      --cluster                    Enable Redis Cluster mode
+      --client-name <NAME>         Redis client name [default: redisctl-mcp]
+      --tools <SPECS>              Toolsets or sub-modules to expose
+      --skills-dir <PATH>          Directory of SKILL.md prompt packages
 
   HTTP Options:
       --host <HOST>                Bind host [default: 127.0.0.1]
       --port <PORT>                Bind port [default: 8080]
-      --oauth                      Enable OAuth authentication
-      --oauth-issuer <URL>         OAuth issuer URL
-      --oauth-audience <AUD>       OAuth audience
-      --jwks-uri <URI>             JWKS URI (auto-discovered if not set)
       --max-concurrent <N>         Max concurrent requests [default: 10]
-      --rate-limit-ms <MS>         Rate limit interval [default: 100]
       --request-timeout-secs <S>   Request timeout [default: 30]
 
   Logging:
@@ -207,7 +204,7 @@ let router = McpRouter::new()
 
 ## Security Considerations
 
-- Use `--read-only` mode in production to prevent accidental modifications
-- For HTTP transport, always enable OAuth in production environments
+- Keep the default read-only mode unless write tools are explicitly required
+- Keep HTTP bound to loopback or protect it with an authenticating gateway
 - Store credentials using environment variables or secure credential storage
 - The server respects profile-based credential isolation

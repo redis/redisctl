@@ -27,7 +27,6 @@ const SERVICE_NAME: &str = "redisctl";
 
 /// Storage backend for credentials
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum CredentialStorage {
     /// Store in OS keyring
     #[cfg(feature = "secure-storage")]
@@ -38,7 +37,7 @@ pub enum CredentialStorage {
 
 /// Credential store abstraction
 pub struct CredentialStore {
-    #[allow(dead_code)]
+    #[cfg(feature = "secure-storage")]
     storage: CredentialStorage,
 }
 
@@ -66,9 +65,7 @@ impl CredentialStore {
         }
         #[cfg(not(feature = "secure-storage"))]
         {
-            Self {
-                storage: CredentialStorage::Plaintext,
-            }
+            Self {}
         }
     }
 
@@ -87,7 +84,6 @@ impl CredentialStore {
     }
 
     /// Store a credential value
-    #[allow(dead_code)]
     pub fn store_credential(&self, key: &str, value: &str) -> Result<String> {
         #[cfg(feature = "secure-storage")]
         {
@@ -186,7 +182,6 @@ impl CredentialStore {
     }
 
     /// Delete a credential from storage
-    #[allow(dead_code)]
     pub fn delete_credential(&self, key: &str) -> Result<()> {
         #[cfg(feature = "secure-storage")]
         {
@@ -214,13 +209,11 @@ impl CredentialStore {
     }
 
     /// Check if a value is a keyring reference
-    #[allow(dead_code)]
     pub fn is_keyring_reference(value: &str) -> bool {
         value.starts_with(KEYRING_PREFIX)
     }
 
     /// Get the current storage backend
-    #[allow(dead_code)]
     pub fn storage_backend(&self) -> &str {
         #[cfg(feature = "secure-storage")]
         {

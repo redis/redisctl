@@ -31,6 +31,7 @@
 ///     }
 /// );
 /// ```
+#[cfg(feature = "database")]
 macro_rules! database_tool {
     // --- Permission guard dispatch ---
 
@@ -162,6 +163,7 @@ macro_rules! database_tool {
         database_tool!(@impl_stateful destructive, destructive_guard, $($rest)*);
     };
 }
+#[cfg(feature = "database")]
 pub(crate) use database_tool;
 
 /// Define an MCP tool for Redis Cloud API operations.
@@ -374,6 +376,7 @@ pub(crate) use enterprise_tool;
 ///         .tool(dbsize(state.clone()))
 /// }
 /// ```
+#[cfg(any(feature = "cloud", feature = "enterprise", feature = "database"))]
 macro_rules! mcp_module {
     { $( $fn_name:ident => $tool_name:literal ),* $(,)? } => {
         pub(super) const TOOL_NAMES: &[&str] = &[$($tool_name),*];
@@ -386,4 +389,5 @@ macro_rules! mcp_module {
         }
     };
 }
+#[cfg(any(feature = "cloud", feature = "enterprise", feature = "database"))]
 pub(crate) use mcp_module;

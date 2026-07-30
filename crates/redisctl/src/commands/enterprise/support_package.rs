@@ -548,7 +548,19 @@ async fn generate_cluster_package(
     // Output based on format
     match output_format {
         OutputFormat::Json => {
-            let mut result = SupportPackageResult {
+            #[cfg(feature = "upload")]
+            let message = if uploaded_path.is_some() {
+                format!(
+                    "Support package {} and uploaded to Files.com",
+                    if should_save { "created" } else { "uploaded" }
+                )
+            } else {
+                "Support package created successfully".to_string()
+            };
+            #[cfg(not(feature = "upload"))]
+            let message = "Support package created successfully".to_string();
+
+            let result = SupportPackageResult {
                 success: true,
                 package_type: "cluster".to_string(),
                 file_path: output_path.display().to_string(),
@@ -557,17 +569,9 @@ async fn generate_cluster_package(
                 elapsed_seconds: elapsed.as_secs(),
                 cluster_name,
                 cluster_version,
-                message: "Support package created successfully".to_string(),
+                message,
                 timestamp: chrono::Utc::now().to_rfc3339(),
             };
-
-            #[cfg(feature = "upload")]
-            if uploaded_path.is_some() {
-                result.message = format!(
-                    "Support package {} and uploaded to Files.com",
-                    if should_save { "created" } else { "uploaded" }
-                );
-            }
 
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
@@ -747,7 +751,19 @@ async fn generate_database_package(
     // Output based on format
     match output_format {
         OutputFormat::Json => {
-            let mut result = SupportPackageResult {
+            #[cfg(feature = "upload")]
+            let message = if uploaded_path.is_some() {
+                format!(
+                    "Database support package {} and uploaded to Files.com",
+                    if should_save { "created" } else { "uploaded" }
+                )
+            } else {
+                "Database support package created successfully".to_string()
+            };
+            #[cfg(not(feature = "upload"))]
+            let message = "Database support package created successfully".to_string();
+
+            let result = SupportPackageResult {
                 success: true,
                 package_type: format!("database-{}", uid),
                 file_path: output_path.display().to_string(),
@@ -756,17 +772,9 @@ async fn generate_database_package(
                 elapsed_seconds: elapsed.as_secs(),
                 cluster_name: Some(format!("Database {}", uid)),
                 cluster_version: database_name,
-                message: "Database support package created successfully".to_string(),
+                message,
                 timestamp: chrono::Utc::now().to_rfc3339(),
             };
-
-            #[cfg(feature = "upload")]
-            if uploaded_path.is_some() {
-                result.message = format!(
-                    "Database support package {} and uploaded to Files.com",
-                    if should_save { "created" } else { "uploaded" }
-                );
-            }
 
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
@@ -976,7 +984,26 @@ async fn generate_node_package(
                 "nodes".to_string()
             };
 
-            let mut result = SupportPackageResult {
+            #[cfg(feature = "upload")]
+            let message = if uploaded_path.is_some() {
+                format!(
+                    "{} support package {} and uploaded to Files.com",
+                    if uid.is_some() { "Node" } else { "Nodes" },
+                    if should_save { "created" } else { "uploaded" }
+                )
+            } else if uid.is_some() {
+                "Node support package created successfully".to_string()
+            } else {
+                "Nodes support package created successfully".to_string()
+            };
+            #[cfg(not(feature = "upload"))]
+            let message = if uid.is_some() {
+                "Node support package created successfully".to_string()
+            } else {
+                "Nodes support package created successfully".to_string()
+            };
+
+            let result = SupportPackageResult {
                 success: true,
                 package_type,
                 file_path: output_path.display().to_string(),
@@ -985,22 +1012,9 @@ async fn generate_node_package(
                 elapsed_seconds: elapsed.as_secs(),
                 cluster_name: uid.map(|id| format!("Node {}", id)),
                 cluster_version: node_address,
-                message: if uid.is_some() {
-                    "Node support package created successfully".to_string()
-                } else {
-                    "Nodes support package created successfully".to_string()
-                },
+                message,
                 timestamp: chrono::Utc::now().to_rfc3339(),
             };
-
-            #[cfg(feature = "upload")]
-            if uploaded_path.is_some() {
-                result.message = format!(
-                    "{} support package {} and uploaded to Files.com",
-                    if uid.is_some() { "Node" } else { "Nodes" },
-                    if should_save { "created" } else { "uploaded" }
-                );
-            }
 
             println!("{}", serde_json::to_string_pretty(&result)?);
         }

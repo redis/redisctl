@@ -12,26 +12,20 @@ use clap::{Parser, ValueEnum};
 use redisctl_core::Config;
 #[cfg(any(feature = "cloud", feature = "enterprise", feature = "database"))]
 use redisctl_core::DeploymentType;
+use redisctl_mcp::{
+    audit::{self, AuditLayer},
+    policy::{self, Policy, PolicyConfig, SafetyTier, ToolsetKind},
+    presets::{self, ToolVisibility, ToolsConfig},
+    prompts,
+    state::{AppState, CredentialSource},
+    tools,
+};
 use tower_mcp::{
     CapabilityFilter, DenialBehavior, DynamicPromptRegistry, McpRouter, PromptBuilder, Tool,
     transport::StdioTransport,
 };
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
-
-mod audit;
-mod policy;
-mod presets;
-mod prompts;
-mod resources;
-mod serde_helpers;
-mod state;
-mod tools;
-
-use audit::AuditLayer;
-use policy::{Policy, PolicyConfig, SafetyTier, ToolsetKind};
-use presets::{ToolVisibility, ToolsConfig};
-use state::{AppState, CredentialSource};
 
 /// Transport mode for the MCP server
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
@@ -130,13 +124,13 @@ impl EnabledToolsets {
     }
 
     /// Check whether a toolset is enabled (with any selection).
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn contains(&self, toolset: &Toolset) -> bool {
         self.selections.contains_key(toolset)
     }
 
     /// Get the sub-module selection for a toolset.
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn selection(&self, toolset: &Toolset) -> Option<&SubModuleSelection> {
         self.selections.get(toolset)
     }
@@ -827,10 +821,10 @@ fn build_router(
     }
 
     // Register built-in prompts
-    prompt_registry.register(crate::prompts::troubleshoot_database_prompt());
-    prompt_registry.register(crate::prompts::analyze_performance_prompt());
-    prompt_registry.register(crate::prompts::capacity_planning_prompt());
-    prompt_registry.register(crate::prompts::migration_planning_prompt());
+    prompt_registry.register(prompts::troubleshoot_database_prompt());
+    prompt_registry.register(prompts::analyze_performance_prompt());
+    prompt_registry.register(prompts::capacity_planning_prompt());
+    prompt_registry.register(prompts::migration_planning_prompt());
 
     // Load skills as dynamic prompts
     if let Some(dir) = skills_dir {
@@ -884,8 +878,9 @@ fn build_router(
     }
 
     let suffix = "\n## Authentication\n\n\
-         In stdio mode, credentials are resolved from redisctl profiles.\n\
-         In HTTP mode with OAuth, credentials can be passed via JWT claims.";
+         Credentials are resolved from redisctl profiles in both transport modes.\n\
+         HTTP transport does not authenticate clients; keep it on loopback or place it \
+         behind a trusted gateway that provides authentication, authorization, and TLS.";
 
     router = router.auto_instructions_with(Some(prefix), Some(suffix));
 
@@ -1004,7 +999,7 @@ mod tests {
     fn test_state() -> Arc<AppState> {
         Arc::new(
             AppState::new(
-                state::CredentialSource::Profiles(vec![]),
+                CredentialSource::Profiles(vec![]),
                 AppState::test_policy(),
                 None,
                 false,
