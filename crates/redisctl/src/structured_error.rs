@@ -111,6 +111,22 @@ impl StructuredError {
     }
 }
 
+impl From<redisctl_core::cloud::quick_database::QuickDatabaseError> for StructuredError {
+    fn from(err: redisctl_core::cloud::quick_database::QuickDatabaseError) -> Self {
+        use redisctl_core::cloud::quick_database::QuickDatabaseError as E;
+        match err {
+            E::InvalidName(m) => Self::invalid_name(m),
+            E::NameConflict(m) => Self::name_conflict(m),
+            E::FreeDbExists(m) => Self::free_db_exists(m),
+            E::QuotaExceeded(m) => Self::quota_exceeded(m),
+            E::NotAuthenticated(m) => Self::not_authenticated(m),
+            E::Transient(m) => Self::transient_api_error(m),
+            E::RateLimited(m) => Self::rate_limited(m),
+            E::Other(m) => Self::unknown(m),
+        }
+    }
+}
+
 impl From<AuthError> for StructuredError {
     fn from(err: AuthError) -> Self {
         match err {
@@ -179,6 +195,32 @@ mod tests {
             StructuredError::from(AuthError::Protocol("boom".into())).code,
             "sm_exchange_failed"
         );
+    }
+
+    #[test]
+    fn quick_database_error_mapping() {
+        use redisctl_core::cloud::quick_database::QuickDatabaseError as E;
+        // Each core provisioning error maps to its inventory code with the expected exit class.
+        let cases = [
+            (E::InvalidName("x".into()), "invalid_name", 2u8),
+            (E::NameConflict("x".into()), "name_conflict", 2),
+            (E::FreeDbExists("x".into()), "free_db_exists", 4),
+            (E::QuotaExceeded("x".into()), "quota_exceeded", 4),
+            (E::NotAuthenticated("x".into()), "not_authenticated", 2),
+            (E::Transient("x".into()), "transient_api_error", 3),
+            (E::RateLimited("x".into()), "rate_limited", 3),
+            (E::Other("x".into()), "unknown", 1),
+        ];
+        for (err, code, exit) in cases {
+            let se = StructuredError::from(err);
+            assert_eq!(se.code, code);
+            assert_eq!(se.exit_code, exit, "{code}: exit code");
+            assert_eq!(
+                se.retryable,
+                exit == 3,
+                "{code}: retryable aligns with exit 3"
+            );
+        }
     }
 
     #[test]
