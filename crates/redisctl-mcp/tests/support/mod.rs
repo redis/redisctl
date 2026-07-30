@@ -93,3 +93,9 @@ pub fn enterprise_client() -> EnterpriseClient {
 pub fn enterprise_state() -> Arc<AppState> {
     state_readonly(AppState::with_enterprise_client(enterprise_client()))
 }
+
+/// Build a full-tier AppState for bounded Enterprise Docker write tests.
+#[cfg(feature = "enterprise")]
+pub fn enterprise_state_full() -> Arc<AppState> {
+    state_full(AppState::with_enterprise_client(enterprise_client()))
+}
