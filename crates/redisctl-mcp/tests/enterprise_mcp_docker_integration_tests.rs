@@ -2,13 +2,13 @@
 //! Docker-backed Enterprise MCP live-integration tests.
 //!
 //! Requires the local Enterprise demo cluster:
-//!   docker compose up -d
-//!   docker compose logs -f redis-enterprise-init  # wait for ready
+//!   docker compose -f docker/docker-compose.enterprise-demo.yml up -d
+//!   docker compose -f docker/docker-compose.enterprise-demo.yml logs -f redis-enterprise-init  # wait for ready
 //!
 //! Run with:
 //!   cargo test --test enterprise_mcp_docker_integration_tests --features enterprise -- --ignored
 //!
-//! Env vars (set by docker-compose.yml):
+//! Env vars (set by docker/docker-compose.enterprise-demo.yml):
 //!   REDIS_ENTERPRISE_URL=https://localhost:9443
 //!   REDIS_ENTERPRISE_USER=admin@redis.local
 //!   REDIS_ENTERPRISE_PASSWORD=Redis123!

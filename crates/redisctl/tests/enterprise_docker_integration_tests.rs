@@ -3,9 +3,9 @@
 //! These tests require a running Redis Enterprise cluster via Docker Compose:
 //!
 //! ```bash
-//! docker compose up -d
+//! docker compose -f docker/docker-compose.enterprise-demo.yml up -d
 //! # Wait for initialization
-//! docker compose logs -f redis-enterprise-init
+//! docker compose -f docker/docker-compose.enterprise-demo.yml logs -f redis-enterprise-init
 //! ```
 //!
 //! Run tests with:
@@ -13,7 +13,7 @@
 //! cargo test --test enterprise_docker_integration_tests -- --ignored
 //! ```
 //!
-//! Environment variables (set by docker-compose.yml):
+//! Environment variables (set by docker/docker-compose.enterprise-demo.yml):
 //! - REDIS_ENTERPRISE_URL: https://localhost:9443
 //! - REDIS_ENTERPRISE_USER: admin@redis.local
 //! - REDIS_ENTERPRISE_PASSWORD: Redis123!
