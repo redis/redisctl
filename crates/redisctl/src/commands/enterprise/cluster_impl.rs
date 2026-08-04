@@ -7,7 +7,6 @@ use crate::error::Result as CliResult;
 use anyhow::Context;
 use redis_enterprise::bootstrap::BootstrapHandler;
 use redis_enterprise::cluster::ClusterHandler;
-use redis_enterprise::debuginfo::DebugInfoHandler;
 use redis_enterprise::license::LicenseHandler;
 use redis_enterprise::nodes::NodeHandler;
 use redis_enterprise::ocsp::OcspHandler;
@@ -373,9 +372,8 @@ pub async fn bootstrap_cluster(
         return Ok(());
     }
 
-    // Use raw API since BootstrapRequest doesn't have Deserialize trait
     let result = client
-        .post_raw("/v1/bootstrap", bootstrap_data)
+        .post_bootstrap("/v1/bootstrap/create_cluster", &bootstrap_data)
         .await
         .map_err(RedisCtlError::from)?;
     let data = handle_output(result, output_format, query)?;
@@ -645,25 +643,6 @@ pub async fn disable_maintenance_mode(
         .await?;
 
     let data = handle_output(result, output_format, query)?;
-    print_formatted_output(data, output_format)?;
-    Ok(())
-}
-
-pub async fn collect_debug_info(
-    conn_mgr: &ConnectionManager,
-    profile_name: Option<&str>,
-    output_format: OutputFormat,
-    query: Option<&str>,
-) -> CliResult<()> {
-    let client = conn_mgr.create_enterprise_client(profile_name).await?;
-    let _handler = DebugInfoHandler::new(client.clone());
-
-    // Use raw API since handler.create expects CreateCrdbRequest
-    let result = client
-        .post_raw("/v1/debuginfo", serde_json::json!({}))
-        .await?;
-    let result_json = serde_json::to_value(result).context("Failed to serialize result")?;
-    let data = handle_output(result_json, output_format, query)?;
     print_formatted_output(data, output_format)?;
     Ok(())
 }

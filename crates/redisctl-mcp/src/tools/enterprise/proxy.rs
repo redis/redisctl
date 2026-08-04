@@ -8,7 +8,6 @@ use crate::tools::macros::{enterprise_tool, mcp_module};
 mcp_module! {
     list_proxies => "list_enterprise_proxies",
     get_proxy => "get_enterprise_proxy",
-    get_proxy_stats => "get_enterprise_proxy_stats",
     update_proxy => "update_enterprise_proxy",
 }
 
@@ -38,22 +37,6 @@ enterprise_tool!(read_only, get_proxy, "get_enterprise_proxy",
             .tool_context("Failed to get proxy")?;
 
         CallToolResult::from_serialize(&proxy)
-    }
-);
-
-enterprise_tool!(read_only, get_proxy_stats, "get_enterprise_proxy_stats",
-    "Get statistics for a specific proxy including connection counts and throughput.",
-    {
-        /// Proxy UID
-        pub uid: u32,
-    } => |client, input| {
-        let handler = redis_enterprise::proxies::ProxyHandler::new(client);
-        let stats = handler
-            .stats(input.uid)
-            .await
-            .tool_context("Failed to get proxy stats")?;
-
-        CallToolResult::from_serialize(&stats)
     }
 );
 

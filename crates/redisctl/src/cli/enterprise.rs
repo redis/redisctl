@@ -224,6 +224,11 @@ pub enum EnterpriseWorkflowCommands {
         #[arg(long, default_value = "1")]
         database_memory_gb: i64,
 
+        /// Redis version for the default database (major.minor, for example 7.2).
+        /// By default, redisctl derives this from cluster and node capabilities.
+        #[arg(long, value_name = "MAJOR.MINOR")]
+        database_redis_version: Option<String>,
+
         /// Async operation options
         #[command(flatten)]
         async_ops: crate::commands::cloud::async_utils::AsyncOperationArgs,
@@ -597,10 +602,6 @@ pub enum EnterpriseClusterCommands {
     /// Disable maintenance mode
     #[command(name = "maintenance-mode-disable")]
     MaintenanceModeDisable,
-
-    /// Collect debug information
-    #[command(name = "debug-info")]
-    DebugInfo,
 
     /// Check cluster health status
     #[command(name = "check-status")]
@@ -2211,17 +2212,6 @@ pub enum EnterpriseCrdbCommands {
     /// Get specific task details
     #[command(name = "get-task")]
     GetTask {
-        /// CRDB ID
-        #[arg(name = "crdb-id")]
-        crdb_id: u32,
-        /// Task ID
-        #[arg(long)]
-        task: String,
-    },
-
-    /// Retry failed task
-    #[command(name = "retry-task")]
-    RetryTask {
         /// CRDB ID
         #[arg(name = "crdb-id")]
         crdb_id: u32,

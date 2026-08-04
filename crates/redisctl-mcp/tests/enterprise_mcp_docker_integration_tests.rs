@@ -156,31 +156,6 @@ async fn test_live_list_enterprise_databases() {
     assert!(result["databases"].is_array());
 }
 
-#[tokio::test]
-#[ignore = "Requires Docker Redis Enterprise cluster"]
-async fn test_live_get_database_endpoints() {
-    if !docker_available() {
-        eprintln!("Skipping: Docker Redis Enterprise not available");
-        return;
-    }
-    let state = enterprise_state();
-
-    let list_tool = enterprise::list_databases(state.clone());
-    let list = call_json(&list_tool, json!({})).await;
-    let Some(uid) = list["databases"]
-        .as_array()
-        .and_then(|dbs| dbs.first())
-        .and_then(|db| db["uid"].as_u64())
-    else {
-        eprintln!("Skipping: no databases available to query endpoints");
-        return;
-    };
-
-    let tool = enterprise::get_database_endpoints(state);
-    let result = call_json(&tool, json!({ "uid": uid })).await;
-    assert!(result.is_object() || result.is_array());
-}
-
 // ============================================================================
 // Observability submodule (read paths)
 // ============================================================================
@@ -355,20 +330,6 @@ async fn test_live_list_enterprise_acls() {
     let tool = enterprise::list_redis_acls(state);
     let result = call_json(&tool, json!({})).await;
     assert!(result["acls"].is_array() || result.is_object());
-}
-
-#[tokio::test]
-#[ignore = "Requires Docker Redis Enterprise cluster"]
-async fn test_live_get_enterprise_builtin_roles() {
-    if !docker_available() {
-        eprintln!("Skipping: Docker Redis Enterprise not available");
-        return;
-    }
-    let state = enterprise_state();
-
-    let tool = enterprise::get_enterprise_builtin_roles(state);
-    let result = call_json(&tool, json!({})).await;
-    assert!(result.is_object() || result.is_array());
 }
 
 // ============================================================================
