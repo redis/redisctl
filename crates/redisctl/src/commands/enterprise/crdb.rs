@@ -262,17 +262,6 @@ pub async fn handle_crdb_command(
             )
             .await
         }
-        EnterpriseCrdbCommands::RetryTask { crdb_id, task } => {
-            crdb_impl::retry_crdb_task(
-                conn_mgr,
-                profile_name,
-                *crdb_id,
-                task.clone(),
-                output_format,
-                query,
-            )
-            .await
-        }
         EnterpriseCrdbCommands::CancelTask { crdb_id, task } => {
             crdb_impl::cancel_crdb_task(
                 conn_mgr,

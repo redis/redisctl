@@ -70,7 +70,7 @@ The server resolves which toolsets to load in this order:
 | Toolset | Sub-modules | Total Tools |
 |---------|-------------|-------------|
 | `cloud` | `subscriptions`, `account`, `networking`, `fixed`, `raw` | 151 |
-| `enterprise` | `cluster`, `databases`, `rbac`, `observability`, `proxy`, `services`, `raw` | 92 |
+| `enterprise` | `cluster`, `databases`, `rbac`, `observability`, `proxy`, `services`, `raw` | 85 |
 | `database` | `server`, `keys`, `structures`, `diagnostics`, `json`, `search`, `aliases`, `bulk`, `raw` | 139 |
 | `app` | *(none -- flat toolset)* | 8 |
 | *(system)* | *(always loaded)* | 2 |

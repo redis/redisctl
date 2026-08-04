@@ -1,7 +1,11 @@
-use crate::error::RedisCtlError;
 use anyhow::Context;
 use clap::Subcommand;
+use futures::StreamExt;
+use redis_enterprise::usage_report::{UsageReport, UsageReportRecord};
+use serde::Serialize;
+use std::collections::BTreeSet;
 
+use crate::error::RedisCtlError;
 use crate::{cli::OutputFormat, connection::ConnectionManager, error::Result as CliResult};
 
 pub async fn handle_usage_report_command(
@@ -18,19 +22,27 @@ pub async fn handle_usage_report_command(
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum UsageReportCommands {
-    /// Get current usage report
+    /// Get the current usage report
     Get,
 
-    /// Export usage report to file
+    /// Export the usage report to a file
     Export {
         /// Output file path
-        #[arg(short, long)]
-        output: String,
+        #[arg(long)]
+        file: String,
 
         /// Export format (json or csv)
         #[arg(short, long, default_value = "json")]
         format: String,
     },
+}
+
+#[derive(Debug, Serialize)]
+struct UsageReportOutput {
+    /// Database usage records. This is always an array, including for zero or one record.
+    reports: Vec<UsageReport>,
+    /// Final MD5 checksum supplied by Redis Software, or null for an empty response.
+    checksum: Option<String>,
 }
 
 impl UsageReportCommands {
@@ -41,152 +53,180 @@ impl UsageReportCommands {
         output_format: OutputFormat,
         query: Option<&str>,
     ) -> CliResult<()> {
-        handle_usage_report_command_impl(conn_mgr, profile_name, self, output_format, query).await
+        let client = conn_mgr.create_enterprise_client(profile_name).await?;
+        let report = collect_usage_report(&client).await?;
+        let structured =
+            serde_json::to_value(&report).context("Failed to serialize usage report")?;
+        let output_data = if let Some(q) = query {
+            super::utils::apply_jmespath(&structured, q)?
+        } else {
+            structured
+        };
+
+        match self {
+            UsageReportCommands::Get => {
+                if query.is_none()
+                    && matches!(
+                        crate::output::resolve_auto(output_format),
+                        OutputFormat::Table
+                    )
+                {
+                    print_usage_report_table(&report)?;
+                } else {
+                    super::utils::print_formatted_output(output_data, output_format)?;
+                }
+            }
+            UsageReportCommands::Export { file, format } => match format.as_str() {
+                "json" => {
+                    let json = serde_json::to_string_pretty(&output_data)
+                        .context("Failed to serialize usage report to JSON")?;
+                    std::fs::write(file, json)
+                        .with_context(|| format!("Failed to write usage report to {file}"))?;
+                    print_export_summary(
+                        file,
+                        "JSON",
+                        report.reports.len(),
+                        report.checksum.as_deref(),
+                    );
+                }
+                "csv" => {
+                    let csv = json_to_csv(&output_data)?;
+                    std::fs::write(file, csv)
+                        .with_context(|| format!("Failed to write usage report to {file}"))?;
+                    print_export_summary(
+                        file,
+                        "CSV",
+                        report.reports.len(),
+                        report.checksum.as_deref(),
+                    );
+                }
+                _ => {
+                    return Err(RedisCtlError::InvalidInput {
+                        message: format!("Unsupported format: {format}. Use 'json' or 'csv'"),
+                    });
+                }
+            },
+        }
+
+        Ok(())
     }
 }
 
-async fn handle_usage_report_command_impl(
-    conn_mgr: &ConnectionManager,
-    profile_name: Option<&str>,
-    command: &UsageReportCommands,
-    output_format: OutputFormat,
-    query: Option<&str>,
-) -> CliResult<()> {
-    let client = conn_mgr.create_enterprise_client(profile_name).await?;
+async fn collect_usage_report(
+    client: &redis_enterprise::EnterpriseClient,
+) -> CliResult<UsageReportOutput> {
+    let mut stream = client
+        .usage_reports()
+        .stream()
+        .await
+        .map_err(RedisCtlError::from)?;
+    let mut reports = Vec::new();
+    let mut checksum = None;
 
-    match command {
-        UsageReportCommands::Get => {
-            let body = client
-                .get_text("/v1/usage_report")
-                .await
-                .map_err(RedisCtlError::from)?;
-
-            // Try JSON first; if the body is non-JSON (e.g. a bare MD5 checksum
-            // returned by demo clusters with no usage data), emit a clear message.
-            let body_trimmed = body.trim();
-            if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(body_trimmed) {
-                let output_data = if let Some(q) = query {
-                    super::utils::apply_jmespath(&json_val, q)?
-                } else {
-                    json_val
-                };
-                super::utils::print_formatted_output(output_data, output_format)?;
-            } else if is_md5_hex(body_trimmed) {
-                // Bare MD5 checksum = cluster has no usage data yet
-                println!(
-                    "usage-report: cluster returned a checksum ({body_trimmed}) with no report \
-                     data — this cluster has not yet accrued any usage. \
-                     No report to display."
-                );
-            } else if body_trimmed.is_empty() {
-                println!(
-                    "usage-report: endpoint returned an empty body — no usage data available."
-                );
-            } else {
-                // Unknown non-JSON shape; surface the raw text so the user can act on it
-                println!("usage-report: endpoint returned non-JSON content:\n{body_trimmed}");
-            }
-        }
-        UsageReportCommands::Export { output, format } => {
-            let response: serde_json::Value = client
-                .get("/v1/usage_report")
-                .await
-                .map_err(RedisCtlError::from)?;
-
-            let output_data = if let Some(q) = query {
-                super::utils::apply_jmespath(&response, q)?
-            } else {
-                response
-            };
-
-            match format.as_str() {
-                "json" => {
-                    let json_str = serde_json::to_string_pretty(&output_data)
-                        .context("Failed to serialize to JSON")?;
-                    std::fs::write(output, json_str)
-                        .context(format!("Failed to write to {}", output))?;
-                    println!("Usage report exported to {}", output);
-                }
-                "csv" => {
-                    // Convert JSON to CSV format
-                    let csv_data = json_to_csv(&output_data)?;
-                    std::fs::write(output, csv_data)
-                        .context(format!("Failed to write to {}", output))?;
-                    println!("Usage report exported to {} as CSV", output);
-                }
-                _ => {
-                    return Err(anyhow::anyhow!(
-                        "Unsupported format: {}. Use 'json' or 'csv'",
-                        format
-                    )
-                    .into());
-                }
-            }
+    while let Some(record) = stream.next().await {
+        match record.map_err(RedisCtlError::from)? {
+            UsageReportRecord::Report(report) => reports.push(*report),
+            UsageReportRecord::Checksum(value) => checksum = Some(value),
         }
     }
 
+    Ok(UsageReportOutput { reports, checksum })
+}
+
+fn print_usage_report_table(report: &UsageReportOutput) -> CliResult<()> {
+    if report.reports.is_empty() {
+        println!("No usage records available.");
+    } else {
+        let rows = serde_json::to_value(&report.reports)
+            .context("Failed to serialize usage report rows")?;
+        super::utils::print_formatted_output(rows, OutputFormat::Table)?;
+    }
+
+    match &report.checksum {
+        Some(checksum) => println!("Checksum: {checksum}"),
+        None => println!("Checksum: unavailable (empty response)"),
+    }
     Ok(())
 }
 
+fn print_export_summary(output: &str, format: &str, records: usize, checksum: Option<&str>) {
+    println!("Usage report exported to {output} as {format} ({records} records)");
+    if let Some(checksum) = checksum {
+        println!("Checksum: {checksum}");
+    }
+}
+
 fn json_to_csv(data: &serde_json::Value) -> CliResult<String> {
-    // Simple CSV conversion for usage report data
+    let rows = match data {
+        serde_json::Value::Object(object) => object
+            .get("reports")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_else(|| vec![data.clone()]),
+        serde_json::Value::Array(rows) => rows.clone(),
+        serde_json::Value::Null => Vec::new(),
+        _ => {
+            return Err(RedisCtlError::InvalidInput {
+                message: "CSV export requires usage-report object or array data".to_string(),
+            });
+        }
+    };
+
+    let headers: Vec<String> = rows
+        .iter()
+        .filter_map(serde_json::Value::as_object)
+        .flat_map(|object| object.keys().cloned())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    if rows.is_empty() || headers.is_empty() {
+        return Ok(String::new());
+    }
+    if rows.iter().any(|row| !row.is_object()) {
+        return Err(RedisCtlError::InvalidInput {
+            message: "CSV export requires an array of usage-report objects".to_string(),
+        });
+    }
+
     let mut csv = String::new();
+    csv.push_str(
+        &headers
+            .iter()
+            .map(|h| csv_field(h))
+            .collect::<Vec<_>>()
+            .join(","),
+    );
+    csv.push('\n');
 
-    if let Some(obj) = data.as_object() {
-        // Create header row from keys
-        let headers: Vec<String> = obj.keys().map(|k| k.to_string()).collect();
-        csv.push_str(&headers.join(","));
-        csv.push('\n');
-
-        // Create data row from values
-        let values: Vec<String> = obj
-            .values()
-            .map(|v| match v {
-                serde_json::Value::String(s) => format!("\"{}\"", s.replace('"', "\"\"")),
-                _ => v.to_string(),
-            })
-            .collect();
+    for row in rows {
+        let Some(object) = row.as_object() else {
+            return Err(RedisCtlError::InvalidInput {
+                message: "usage report rows must be JSON objects".to_string(),
+            });
+        };
+        let values = headers
+            .iter()
+            .map(|header| object.get(header).map(csv_value).unwrap_or_default())
+            .collect::<Vec<_>>();
         csv.push_str(&values.join(","));
         csv.push('\n');
-    } else if let Some(arr) = data.as_array() {
-        // Handle array of objects
-        if let Some(first) = arr.first()
-            && let Some(obj) = first.as_object()
-        {
-            // Create header row from first object's keys
-            let headers: Vec<String> = obj.keys().map(|k| k.to_string()).collect();
-            csv.push_str(&headers.join(","));
-            csv.push('\n');
-
-            // Create data rows
-            for item in arr {
-                if let Some(obj) = item.as_object() {
-                    let values: Vec<String> = headers
-                        .iter()
-                        .map(|h| {
-                            obj.get(h)
-                                .map(|v| match v {
-                                    serde_json::Value::String(s) => {
-                                        format!("\"{}\"", s.replace('"', "\"\""))
-                                    }
-                                    _ => v.to_string(),
-                                })
-                                .unwrap_or_else(|| String::from(""))
-                        })
-                        .collect();
-                    csv.push_str(&values.join(","));
-                    csv.push('\n');
-                }
-            }
-        }
     }
 
     Ok(csv)
 }
 
-/// Returns true if `s` looks like a bare MD5 hex digest (32 hex chars).
-fn is_md5_hex(s: &str) -> bool {
-    s.len() == 32 && s.chars().all(|c| c.is_ascii_hexdigit())
+fn csv_value(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::String(value) => csv_field(value),
+        serde_json::Value::Bool(_) | serde_json::Value::Number(_) => value.to_string(),
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => csv_field(&value.to_string()),
+    }
+}
+
+fn csv_field(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
 }
 
 #[cfg(test)]
@@ -203,62 +243,44 @@ mod tests {
             cmd: UsageReportCommands,
         }
 
-        // Test get command
         let cli = TestCli::parse_from(["test", "get"]);
         assert!(matches!(cli.cmd, UsageReportCommands::Get));
 
-        // Test export command
-        let cli = TestCli::parse_from(["test", "export", "--output", "report.json"]);
-        if let UsageReportCommands::Export { output, format } = cli.cmd {
-            assert_eq!(output, "report.json");
-            assert_eq!(format, "json");
-        } else {
-            panic!("Expected Export command");
-        }
-
-        // Test export with CSV format
-        let cli = TestCli::parse_from(["test", "export", "-o", "report.csv", "-f", "csv"]);
-        if let UsageReportCommands::Export { output, format } = cli.cmd {
-            assert_eq!(output, "report.csv");
-            assert_eq!(format, "csv");
-        } else {
-            panic!("Expected Export command");
-        }
+        let cli = TestCli::parse_from(["test", "export", "--file", "report.json"]);
+        assert!(matches!(
+            cli.cmd,
+            UsageReportCommands::Export { file, format }
+                if file == "report.json" && format == "json"
+        ));
     }
 
     #[test]
-    fn test_json_to_csv() {
-        // Test single object
-        let json = serde_json::json!({
-            "cluster": "test-cluster",
-            "databases": 5,
-            "memory_gb": 128
+    fn csv_has_one_row_per_report_and_unions_headers() {
+        let data = serde_json::json!({
+            "reports": [
+                {"bdb_uid": "1", "cluster_name": "one"},
+                {"bdb_uid": "2", "used_memory": 2048}
+            ],
+            "checksum": "d41d8cd98f00b204e9800998ecf8427e"
         });
-        let csv = json_to_csv(&json).unwrap();
-        assert!(csv.contains("cluster,databases,memory_gb"));
-        assert!(csv.contains("\"test-cluster\",5,128"));
+        let csv = json_to_csv(&data).unwrap();
+        let lines = csv.lines().collect::<Vec<_>>();
 
-        // Test array of objects
-        let json = serde_json::json!([
-            {"name": "db1", "memory": 1024},
-            {"name": "db2", "memory": 2048}
-        ]);
-        let csv = json_to_csv(&json).unwrap();
-        // Check header (order may vary)
-        assert!(csv.contains("memory,name") || csv.contains("name,memory"));
-        // Check data rows
-        assert!(csv.contains("\"db1\""));
-        assert!(csv.contains("\"db2\""));
-        assert!(csv.contains("1024"));
-        assert!(csv.contains("2048"));
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], "\"bdb_uid\",\"cluster_name\",\"used_memory\"");
+        assert!(lines[1].contains("\"one\""));
+        assert!(lines[2].contains("2048"));
     }
 
     #[test]
-    fn test_is_md5_hex() {
-        assert!(is_md5_hex("d41d8cd98f00b204e9800998ecf8427e"));
-        assert!(is_md5_hex("D41D8CD98F00B204E9800998ECF8427E"));
-        assert!(!is_md5_hex("not-a-checksum"));
-        assert!(!is_md5_hex(""));
-        assert!(!is_md5_hex("d41d8cd98f00b204e9800998ecf8427")); // 31 chars, too short
+    fn csv_is_empty_for_checksum_only_or_empty_responses() {
+        assert_eq!(
+            json_to_csv(&serde_json::json!({"reports": [], "checksum": "abc"})).unwrap(),
+            ""
+        );
+        assert_eq!(
+            json_to_csv(&serde_json::json!({"reports": [], "checksum": null})).unwrap(),
+            ""
+        );
     }
 }

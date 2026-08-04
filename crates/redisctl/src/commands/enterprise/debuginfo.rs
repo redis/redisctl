@@ -12,10 +12,6 @@ pub enum DebugInfoCommands {
         /// Output file path (saves as tar.gz). If not specified, returns JSON metadata
         #[arg(long, short = 'f')]
         file: Option<PathBuf>,
-
-        /// Use new API endpoint (/v1/cluster/debuginfo) instead of deprecated one
-        #[arg(long)]
-        use_new_api: bool,
     },
 
     /// Collect node debug info
@@ -27,10 +23,6 @@ pub enum DebugInfoCommands {
         /// Output file path (saves as tar.gz). If not specified, returns JSON metadata
         #[arg(long, short = 'f')]
         file: Option<PathBuf>,
-
-        /// Use new API endpoint (/v1/nodes/debuginfo) instead of deprecated one
-        #[arg(long)]
-        use_new_api: bool,
     },
 
     /// Collect database-specific debug info
@@ -41,10 +33,6 @@ pub enum DebugInfoCommands {
         /// Output file path (saves as tar.gz). If not specified, returns JSON metadata
         #[arg(long, short = 'f')]
         file: Option<PathBuf>,
-
-        /// Use new API endpoint (/v1/bdbs/{uid}/debuginfo) instead of deprecated one
-        #[arg(long)]
-        use_new_api: bool,
     },
 }
 
@@ -56,19 +44,15 @@ pub async fn handle_debuginfo_command(
     _query: Option<&str>,
 ) -> Result<(), RedisCtlError> {
     match cmd {
-        DebugInfoCommands::All { file, use_new_api } => {
+        DebugInfoCommands::All { file } => {
             // These endpoints always return binary data, so we need to save to a file
             let output_path = file.unwrap_or_else(|| {
                 let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
                 std::path::PathBuf::from(format!("support-package-cluster-{}.tar.gz", timestamp))
             });
-            handle_debuginfo_all_binary(conn_mgr, profile_name, output_path, use_new_api).await
+            handle_debuginfo_all_binary(conn_mgr, profile_name, output_path).await
         }
-        DebugInfoCommands::Node {
-            node_uid,
-            file,
-            use_new_api,
-        } => {
+        DebugInfoCommands::Node { node_uid, file } => {
             // These endpoints always return binary data, so we need to save to a file
             let output_path = file.unwrap_or_else(|| {
                 let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
@@ -79,14 +63,9 @@ pub async fn handle_debuginfo_command(
                 };
                 std::path::PathBuf::from(format!("{}-{}.tar.gz", prefix, timestamp))
             });
-            handle_debuginfo_node_binary(conn_mgr, profile_name, node_uid, output_path, use_new_api)
-                .await
+            handle_debuginfo_node_binary(conn_mgr, profile_name, node_uid, output_path).await
         }
-        DebugInfoCommands::Database {
-            bdb_uid,
-            file,
-            use_new_api,
-        } => {
+        DebugInfoCommands::Database { bdb_uid, file } => {
             // These endpoints always return binary data, so we need to save to a file
             let output_path = file.unwrap_or_else(|| {
                 let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
@@ -95,14 +74,7 @@ pub async fn handle_debuginfo_command(
                     bdb_uid, timestamp
                 ))
             });
-            handle_debuginfo_database_binary(
-                conn_mgr,
-                profile_name,
-                bdb_uid,
-                output_path,
-                use_new_api,
-            )
-            .await
+            handle_debuginfo_database_binary(conn_mgr, profile_name, bdb_uid, output_path).await
         }
     }
 }
@@ -113,7 +85,6 @@ async fn handle_debuginfo_all_binary(
     conn_mgr: &ConnectionManager,
     profile_name: Option<&str>,
     output_path: PathBuf,
-    use_new_api: bool,
 ) -> Result<(), RedisCtlError> {
     use indicatif::{ProgressBar, ProgressStyle};
     use std::fs;
@@ -130,19 +101,11 @@ async fn handle_debuginfo_all_binary(
     spinner.set_message("Generating support package...");
     spinner.enable_steady_tick(std::time::Duration::from_millis(100));
 
-    // Use new or deprecated endpoint based on flag
     let debuginfo_handler = redis_enterprise::debuginfo::DebugInfoHandler::new(client);
-    let data = if use_new_api {
-        debuginfo_handler
-            .cluster_debuginfo_binary()
-            .await
-            .map_err(RedisCtlError::from)?
-    } else {
-        debuginfo_handler
-            .all_binary()
-            .await
-            .map_err(RedisCtlError::from)?
-    };
+    let data = debuginfo_handler
+        .cluster_debuginfo_binary()
+        .await
+        .map_err(RedisCtlError::from)?;
 
     spinner.finish_and_clear();
 
@@ -172,7 +135,6 @@ async fn handle_debuginfo_node_binary(
     profile_name: Option<&str>,
     node_uid: Option<u32>,
     output_path: PathBuf,
-    use_new_api: bool,
 ) -> Result<(), RedisCtlError> {
     use indicatif::{ProgressBar, ProgressStyle};
     use std::fs;
@@ -191,32 +153,15 @@ async fn handle_debuginfo_node_binary(
 
     let debuginfo_handler = redis_enterprise::debuginfo::DebugInfoHandler::new(client);
     let data = if let Some(uid) = node_uid {
-        // Specific node
-        if use_new_api {
-            debuginfo_handler
-                .node_debuginfo_binary(uid)
-                .await
-                .context(format!("Failed to collect debug info for node {}", uid))?
-        } else {
-            // Old API doesn't have specific node endpoint, use general node endpoint
-            debuginfo_handler
-                .node_binary()
-                .await
-                .map_err(RedisCtlError::from)?
-        }
+        debuginfo_handler
+            .node_debuginfo_binary(uid)
+            .await
+            .context(format!("Failed to collect debug info for node {}", uid))?
     } else {
-        // All nodes
-        if use_new_api {
-            debuginfo_handler
-                .nodes_debuginfo_binary()
-                .await
-                .map_err(RedisCtlError::from)?
-        } else {
-            debuginfo_handler
-                .node_binary()
-                .await
-                .map_err(RedisCtlError::from)?
-        }
+        debuginfo_handler
+            .nodes_debuginfo_binary()
+            .await
+            .map_err(RedisCtlError::from)?
     };
 
     spinner.finish_and_clear();
@@ -247,7 +192,6 @@ async fn handle_debuginfo_database_binary(
     profile_name: Option<&str>,
     bdb_uid: u32,
     output_path: PathBuf,
-    use_new_api: bool,
 ) -> Result<(), RedisCtlError> {
     use indicatif::{ProgressBar, ProgressStyle};
     use std::fs;
@@ -268,23 +212,13 @@ async fn handle_debuginfo_database_binary(
     spinner.enable_steady_tick(std::time::Duration::from_millis(100));
 
     let debuginfo_handler = redis_enterprise::debuginfo::DebugInfoHandler::new(client);
-    let data = if use_new_api {
-        debuginfo_handler
-            .database_debuginfo_binary(bdb_uid)
-            .await
-            .context(format!(
-                "Failed to collect debug info for database {}",
-                bdb_uid
-            ))?
-    } else {
-        debuginfo_handler
-            .all_bdb_binary(bdb_uid)
-            .await
-            .context(format!(
-                "Failed to collect debug info for database {}",
-                bdb_uid
-            ))?
-    };
+    let data = debuginfo_handler
+        .database_debuginfo_binary(bdb_uid)
+        .await
+        .context(format!(
+            "Failed to collect debug info for database {}",
+            bdb_uid
+        ))?;
 
     spinner.finish_and_clear();
 

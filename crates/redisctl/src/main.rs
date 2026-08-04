@@ -1125,6 +1125,7 @@ async fn handle_enterprise_workflow_command(
             skip_database,
             database_name,
             database_memory_gb,
+            database_redis_version,
             // init-cluster does not consume the async flags; the value used to
             // flow into WorkflowContext.wait_timeout, which was never read.
             async_ops: _,
@@ -1136,6 +1137,9 @@ async fn handle_enterprise_workflow_command(
             args.insert("create_database", !skip_database);
             args.insert("database_name", database_name);
             args.insert("database_memory_gb", database_memory_gb);
+            if let Some(database_redis_version) = database_redis_version {
+                args.insert("database_redis_version", database_redis_version);
+            }
 
             let context = WorkflowContext {
                 conn_mgr: conn_mgr.clone(),
@@ -1423,8 +1427,6 @@ mod tests {
         "redisctl enterprise database delete",
         "redisctl enterprise database flush",
         "redisctl enterprise database upgrade",
-        "redisctl enterprise job-scheduler delete",
-        "redisctl enterprise migration cancel",
         "redisctl enterprise module delete",
         "redisctl enterprise node remove",
         "redisctl enterprise node restart",

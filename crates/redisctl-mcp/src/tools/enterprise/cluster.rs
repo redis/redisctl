@@ -23,7 +23,6 @@ mcp_module! {
     get_license => "get_license",
     get_license_usage => "get_license_usage",
     update_license => "update_enterprise_license",
-    validate_license => "validate_enterprise_license",
     list_nodes => "list_nodes",
     get_node => "get_node",
     get_node_stats => "get_node_stats",
@@ -258,11 +257,43 @@ enterprise_tool!(read_only, get_license, "get_license",
 enterprise_tool!(read_only, get_license_usage, "get_license_usage",
     "Get license utilization statistics including shards, nodes, and RAM usage against limits",
     {} => |client, _input| {
-        let handler = LicenseHandler::new(client);
-        let usage = handler
-            .usage()
+        let license: Value = client
+            .get("/v1/license")
             .await
-            .tool_context("Failed to get license usage")?;
+            .tool_context("Failed to get license")?;
+        let cluster: Value = client
+            .get("/v1/cluster")
+            .await
+            .tool_context("Failed to get cluster usage")?;
+
+        let limit = |field: &str| license.get(field).and_then(Value::as_i64).unwrap_or(0);
+        let used = |field: &str| cluster.get(field).and_then(Value::as_i64).unwrap_or(0);
+        let available = |limit: i64, used: i64| (limit - used).max(0);
+        let shards_limit = limit("shards_limit");
+        let shards_used = used("shards_used");
+        let ram_limit = limit("ram_limit");
+        let ram_used = used("ram_used");
+
+        let usage = serde_json::json!({
+            "shards": {
+                "limit": shards_limit,
+                "used": shards_used,
+                "available": available(shards_limit, shards_used),
+            },
+            "ram": {
+                "limit_bytes": ram_limit,
+                "used_bytes": ram_used,
+                "available_bytes": available(ram_limit, ram_used),
+            },
+            "nodes": {
+                "limit": limit("nodes_limit"),
+                "used": used("nodes_count"),
+            },
+            "expiration": {
+                "date": license.get("expiration_date"),
+                "expired": license.get("expired").and_then(Value::as_bool).unwrap_or(false),
+            }
+        });
 
         CallToolResult::from_serialize(&usage)
     }
@@ -282,22 +313,6 @@ enterprise_tool!(write, update_license, "update_enterprise_license",
             .update(request)
             .await
             .tool_context("Failed to update license")?;
-
-        CallToolResult::from_serialize(&license)
-    }
-);
-
-enterprise_tool!(read_only, validate_license, "validate_enterprise_license",
-    "Validate a license key without applying it (dry-run).",
-    {
-        /// The license key string to validate
-        pub license_key: String,
-    } => |client, input| {
-        let handler = LicenseHandler::new(client);
-        let license = handler
-            .validate(&input.license_key)
-            .await
-            .tool_context("License validation failed")?;
 
         CallToolResult::from_serialize(&license)
     }

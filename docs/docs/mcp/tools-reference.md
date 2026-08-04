@@ -88,11 +88,11 @@ Essentials/Fixed tier subscriptions and databases -- plans, backup, import, tagg
 |------|-------------|
 | `cloud_raw_api` | Execute arbitrary Redis Cloud REST API requests |
 
-## Enterprise Toolset (92 tools)
+## Enterprise Toolset (85 tools)
 
 Redis Enterprise cluster management tools. Select with `--tools enterprise` or target specific sub-modules.
 
-### `enterprise:cluster` (24 tools)
+### `enterprise:cluster` (23 tools)
 
 Cluster-level configuration -- license management, cluster policies, maintenance mode, TLS certificates, services, and node lifecycle.
 
@@ -107,24 +107,23 @@ Cluster-level configuration -- license management, cluster policies, maintenance
 | `list_nodes` | List all cluster nodes |
 | `get_node` | Get node details |
 
-### `enterprise:databases` (20 tools)
+### `enterprise:databases` (19 tools)
 
-Database and Active-Active CRDB management -- CRUD, backup/import/export/restore, stats, endpoints, alerts, and version upgrades.
+Database and Active-Active CRDB management -- CRUD, backup/import/export/restore, stats, alerts, and version upgrades.
 
 | Representative Tools | Description |
 |---------------------|-------------|
 | `list_enterprise_databases` | List all databases |
 | `get_enterprise_database` | Get database details |
 | `get_database_stats` | Get database statistics |
-| `get_database_endpoints` | Get database endpoints |
 | `create_enterprise_database` | Create a database *(write)* |
 | `update_enterprise_database` | Update database config *(write)* |
 | `backup_enterprise_database` | Trigger backup *(write)* |
 | `list_enterprise_crdbs` | List Active-Active databases |
 
-### `enterprise:rbac` (20 tools)
+### `enterprise:rbac` (19 tools)
 
-Role-based access control -- users, roles, ACL rules, built-in roles, and LDAP configuration.
+Role-based access control -- users, roles, ACL rules, and LDAP configuration.
 
 | Representative Tools | Description |
 |---------------------|-------------|
@@ -137,9 +136,9 @@ Role-based access control -- users, roles, ACL rules, built-in roles, and LDAP c
 | `list_enterprise_acls` | List ACL rules |
 | `get_enterprise_ldap_config` | Get LDAP configuration |
 
-### `enterprise:observability` (16 tools)
+### `enterprise:observability` (13 tools)
 
-Monitoring -- alerts, audit logs, aggregate stats for nodes/databases/shards, debug info, and module listing.
+Monitoring -- alerts, audit logs, aggregate stats for nodes/databases/shards, and module listing.
 
 | Representative Tools | Description |
 |---------------------|-------------|
@@ -152,15 +151,14 @@ Monitoring -- alerts, audit logs, aggregate stats for nodes/databases/shards, de
 | `get_shard_stats` | Get shard statistics |
 | `list_modules` | List available modules |
 
-### `enterprise:proxy` (4 tools)
+### `enterprise:proxy` (3 tools)
 
-Proxy management -- list, inspect, stats, and configuration updates.
+Proxy management -- list, inspect, and configuration updates.
 
 | Tool | Description |
 |------|-------------|
 | `list_enterprise_proxies` | List all proxy instances |
 | `get_enterprise_proxy` | Get proxy details |
-| `get_enterprise_proxy_stats` | Get proxy statistics |
 | `update_enterprise_proxy` | Update proxy configuration *(write)* |
 
 ### `enterprise:services` (7 tools)
@@ -343,7 +341,7 @@ Profile and configuration management tools. Always compiled in; no sub-modules.
 | Toolset | Sub-modules | Tools |
 |---------|-------------|-------|
 | Cloud | `subscriptions` (36), `account` (35), `networking` (52), `fixed` (27), `raw` (1) | **151** |
-| Enterprise | `cluster` (24), `databases` (20), `rbac` (20), `observability` (16), `proxy` (4), `services` (7), `raw` (1) | **92** |
+| Enterprise | `cluster` (23), `databases` (19), `rbac` (19), `observability` (13), `proxy` (3), `services` (7), `raw` (1) | **85** |
 | Database | `server` (14), `keys` (33), `structures` (41), `diagnostics` (5), `json` (16), `search` (19), `aliases` (4), `bulk` (6), `raw` (1) | **139** |
 | App | *(flat)* | **8** |
 | System | *(always on)* | **2** |

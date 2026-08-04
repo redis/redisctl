@@ -262,11 +262,6 @@ mod tests {
         let _ = tools::enterprise::get_shard(state.clone());
         let _ = tools::enterprise::get_shard_stats(state.clone());
         let _ = tools::enterprise::get_all_shards_stats(state.clone());
-        // Endpoints
-        let _ = tools::enterprise::get_database_endpoints(state.clone());
-        // Debug info
-        let _ = tools::enterprise::list_debug_info_tasks(state.clone());
-        let _ = tools::enterprise::get_debug_info_status(state.clone());
         // Modules
         let _ = tools::enterprise::list_modules(state.clone());
         let _ = tools::enterprise::get_module(state.clone());

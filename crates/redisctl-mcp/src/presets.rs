@@ -84,7 +84,6 @@ pub const ENTERPRISE_ESSENTIALS: &[&str] = &[
     "list_enterprise_databases",
     "get_enterprise_database",
     "get_database_stats",
-    "get_database_endpoints",
     "list_enterprise_users",
     "get_enterprise_user",
     "list_enterprise_roles",

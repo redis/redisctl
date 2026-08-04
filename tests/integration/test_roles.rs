@@ -99,56 +99,6 @@ async fn test_role_list() {
 }
 
 #[tokio::test]
-async fn test_role_list_with_builtin() {
-    let (mock_server, client) = setup_mock_server().await;
-
-    let regular_roles = json!([
-        {
-            "uid": 1,
-            "name": "custom_role",
-            "management": "db_viewer",
-            "data_access": "read_only"
-        }
-    ]);
-
-    let builtin_roles = json!([
-        {
-            "uid": 100,
-            "name": "Admin",
-            "management": "admin",
-            "data_access": "full"
-        },
-        {
-            "uid": 101,
-            "name": "DB Viewer",
-            "management": "db_viewer",
-            "data_access": "read_only"
-        }
-    ]);
-
-    Mock::given(method("GET"))
-        .and(path("/v1/roles"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(&regular_roles))
-        .mount(&mock_server)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path("/v1/roles/builtin"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(&builtin_roles))
-        .mount(&mock_server)
-        .await;
-
-    let command = RoleCommands::List { builtin: true };
-    let result = handle_role_command(&client, command).await.unwrap();
-
-    let roles = result.as_array().unwrap();
-    assert_eq!(roles.len(), 3); // 1 custom + 2 builtin
-    assert_eq!(roles[0]["name"], "custom_role");
-    assert_eq!(roles[1]["name"], "Admin");
-    assert_eq!(roles[2]["name"], "DB Viewer");
-}
-
-#[tokio::test]
 async fn test_role_get() {
     let (mock_server, client) = setup_mock_server().await;
 
