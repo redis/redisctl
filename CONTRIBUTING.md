@@ -162,6 +162,7 @@ in detail.
 5. When complete and green, mark the PR “Ready for review”.
 6. Prefer “Squash and merge” to produce a clean, single commit on `main`.
 7. Reference and close related issues in the PR description.
+8. When updating a full-SHA GitHub Action pin, keep its trailing release-version annotation in sync.
 
 ## Release Process
 
