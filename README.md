@@ -182,7 +182,8 @@ cargo test --workspace
 cargo clippy --all-targets -- -D warnings
 ```
 
-See the [Contributing Guide](https://redis-field-engineering.github.io/redisctl-docs/developer/contributing.html).
+See the [Contributing Guide](https://redis-field-engineering.github.io/redisctl-docs/developer/contributing.html)
+and [TESTING.md](TESTING.md) for the test tiers, Docker-gated live suites, and CI gates.
 
 ---
 
