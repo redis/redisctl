@@ -11,7 +11,7 @@ declared in the root `Cargo.toml`:
 |-------|------|---------|
 | **redisctl-core** | `crates/redisctl-core/` | Shared library: config/profile management, Cloud and Enterprise API clients, error handling |
 | **redisctl** | `crates/redisctl/` | CLI binary: commands, workflows, connection management |
-| **redisctl-mcp** | `crates/redisctl-mcp/` | MCP server for AI agents: ~371 tools, policy engine, skills system |
+| **redisctl-mcp** | `crates/redisctl-mcp/` | MCP server for AI agents: ~364 tools, policy engine, skills system |
 
 ## Build and Test
 
@@ -80,7 +80,7 @@ MCP tools are organized into toolsets with sub-modules:
 tools/
   redis/          # ~125 tools: server, keys, structures, json, search, diagnostics, bulk
   cloud/          # ~147 tools: subscriptions, account, networking, fixed
-  enterprise/     # ~91 tools: cluster, databases, rbac, observability, proxy, services
+  enterprise/     # ~85 tools: cluster, databases, rbac, observability, proxy, services
   profile.rs      # 8 tools: profile management
 ```
 

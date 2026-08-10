@@ -21,7 +21,6 @@ mcp_module! {
     create_enterprise_role => "create_enterprise_role",
     update_enterprise_role => "update_enterprise_role",
     delete_enterprise_role => "delete_enterprise_role",
-    get_enterprise_builtin_roles => "get_enterprise_builtin_roles",
     list_redis_acls => "list_enterprise_acls",
     get_redis_acl => "get_enterprise_acl",
     create_enterprise_acl => "create_enterprise_acl",
@@ -219,9 +218,8 @@ enterprise_tool!(read_only, get_role, "get_enterprise_role",
 );
 
 enterprise_tool!(write, create_enterprise_role, "create_enterprise_role",
-    "Create a new role. \
-     Prerequisites: 1) get_enterprise_builtin_roles -- review built-in roles before creating custom ones. \
-     2) list_enterprise_acls -- identify Redis ACLs to attach to the role.",
+    "Create a new role. Use list_enterprise_roles to review existing roles and \
+     list_enterprise_acls to identify Redis ACLs before creating it.",
     {
         /// Role name
         pub name: String,
@@ -298,23 +296,6 @@ enterprise_tool!(destructive, delete_enterprise_role, "delete_enterprise_role",
             "message": "Role deleted successfully",
             "uid": input.uid
         }))
-    }
-);
-
-// ============================================================================
-// Built-in Roles
-// ============================================================================
-
-enterprise_tool!(read_only, get_enterprise_builtin_roles, "get_enterprise_builtin_roles",
-    "Get the list of built-in roles.",
-    {} => |client, _input| {
-        let handler = RolesHandler::new(client);
-        let roles = handler
-            .built_in()
-            .await
-            .tool_context("Failed to get built-in roles")?;
-
-        CallToolResult::from_list("roles", &roles)
     }
 );
 

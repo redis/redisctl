@@ -2,7 +2,7 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use serde_json::json;
 use tempfile::TempDir;
-use wiremock::matchers::{header, method, path, query_param};
+use wiremock::matchers::{body_json, header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Helper to create a test command with isolated config
@@ -1236,8 +1236,8 @@ async fn test_env_vars_work_without_config_file() {
 ///
 /// When the endpoint is available the API returns HTTP 200 with an empty
 /// body.  The old typed `client.get::<Value>()` tried to JSON-deserialise
-/// that empty body and failed.  The fix uses `get_text` + synthesises the
-/// result, so the command must succeed and output `"available": true`.
+/// that empty body and failed. The typed client now models this status-only
+/// response as `Result<()>`, and the CLI synthesizes `"available": true`.
 #[tokio::test]
 async fn test_enterprise_endpoint_availability_empty_200_body() {
     let temp_dir = TempDir::new().unwrap();
@@ -1264,6 +1264,315 @@ async fn test_enterprise_endpoint_availability_empty_200_body() {
         .success()
         .stdout(predicate::str::contains("available"))
         .stdout(predicate::str::contains("true"));
+}
+
+#[tokio::test]
+async fn test_enterprise_usage_report_empty_response_is_structured() {
+    let temp_dir = TempDir::new().unwrap();
+    let mock_server = MockServer::start().await;
+    create_enterprise_profile(&temp_dir, &mock_server.uri()).unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/v1/usage_report"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    test_cmd(&temp_dir)
+        .args(["-o", "json", "enterprise", "usage-report", "get"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"reports\": []"))
+        .stdout(predicate::str::contains("\"checksum\": null"));
+}
+
+#[tokio::test]
+async fn test_enterprise_usage_report_checksum_only_is_structured() {
+    let temp_dir = TempDir::new().unwrap();
+    let mock_server = MockServer::start().await;
+    create_enterprise_profile(&temp_dir, &mock_server.uri()).unwrap();
+    let checksum = "d41d8cd98f00b204e9800998ecf8427e";
+
+    Mock::given(method("GET"))
+        .and(path("/v1/usage_report"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(format!("{checksum}\n"), "application/x-ndjson"),
+        )
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    test_cmd(&temp_dir)
+        .args(["-o", "json", "enterprise", "usage-report", "get"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"reports\": []"))
+        .stdout(predicate::str::contains(checksum));
+}
+
+#[tokio::test]
+async fn test_enterprise_usage_report_query_uses_reports_shape() {
+    let temp_dir = TempDir::new().unwrap();
+    let mock_server = MockServer::start().await;
+    create_enterprise_profile(&temp_dir, &mock_server.uri()).unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/v1/usage_report"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            concat!(
+                "{\"cluster_name\":\"demo\",\"bdb_uid\":\"1\",\"used_memory\":100}\n",
+                "{\"cluster_name\":\"demo\",\"bdb_uid\":\"2\",\"used_memory\":200}\n",
+                "0123456789abcdef0123456789abcdef\n"
+            ),
+            "application/x-ndjson",
+        ))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    test_cmd(&temp_dir)
+        .args([
+            "-o",
+            "json",
+            "--query",
+            "reports[].bdb_uid",
+            "enterprise",
+            "usage-report",
+            "get",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"1\""))
+        .stdout(predicate::str::contains("\"2\""));
+}
+
+#[tokio::test]
+async fn test_enterprise_usage_report_single_record_json_export() {
+    let temp_dir = TempDir::new().unwrap();
+    let mock_server = MockServer::start().await;
+    create_enterprise_profile(&temp_dir, &mock_server.uri()).unwrap();
+    let output = temp_dir.path().join("usage.json");
+
+    Mock::given(method("GET"))
+        .and(path("/v1/usage_report"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            concat!(
+                "{\"cluster_name\":\"demo\",\"bdb_uid\":\"1\",\"used_memory\":100}\n",
+                "0123456789abcdef0123456789abcdef\n"
+            ),
+            "application/x-ndjson",
+        ))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    test_cmd(&temp_dir)
+        .args(["enterprise", "usage-report", "export", "--file"])
+        .arg(&output)
+        .args(["--format", "json"])
+        .assert()
+        .success();
+
+    let exported: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(output).unwrap()).unwrap();
+    assert_eq!(exported["reports"].as_array().unwrap().len(), 1);
+    assert_eq!(exported["reports"][0]["bdb_uid"], "1");
+    assert_eq!(exported["checksum"], "0123456789abcdef0123456789abcdef");
+}
+
+#[tokio::test]
+async fn test_enterprise_usage_report_multi_record_csv_export() {
+    let temp_dir = TempDir::new().unwrap();
+    let mock_server = MockServer::start().await;
+    create_enterprise_profile(&temp_dir, &mock_server.uri()).unwrap();
+    let output = temp_dir.path().join("usage.csv");
+
+    Mock::given(method("GET"))
+        .and(path("/v1/usage_report"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            concat!(
+                "{\"cluster_name\":\"demo\",\"bdb_uid\":\"1\",\"used_memory\":100}\n",
+                "{\"cluster_name\":\"demo\",\"bdb_uid\":\"2\",\"used_memory\":200}\n",
+                "0123456789abcdef0123456789abcdef\n"
+            ),
+            "application/x-ndjson",
+        ))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    test_cmd(&temp_dir)
+        .args(["enterprise", "usage-report", "export", "--file"])
+        .arg(&output)
+        .args(["--format", "csv"])
+        .assert()
+        .success();
+
+    let csv = std::fs::read_to_string(output).unwrap();
+    assert_eq!(csv.lines().count(), 3);
+    assert!(csv.contains("\"1\""));
+    assert!(csv.contains("\"2\""));
+}
+
+#[tokio::test]
+async fn test_enterprise_diagnostics_uses_global_configuration_routes() {
+    let temp_dir = TempDir::new().unwrap();
+    let mock_server = MockServer::start().await;
+    create_enterprise_profile(&temp_dir, &mock_server.uri()).unwrap();
+
+    Mock::given(method("PUT"))
+        .and(path("/v1/diagnostics"))
+        .and(body_json(json!({
+            "bdb_target": {"cron_expression": "*/15 * * * *"}
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "bdb_target": {"cron_expression": "*/15 * * * *"}
+        })))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    test_cmd(&temp_dir)
+        .args([
+            "-o",
+            "json",
+            "enterprise",
+            "diagnostics",
+            "update",
+            "--data",
+            "{\"bdb_target\":{\"cron_expression\":\"*/15 * * * *\"}}",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"bdb_target\""));
+}
+
+#[tokio::test]
+async fn test_enterprise_job_scheduler_uses_global_configuration_routes() {
+    let temp_dir = TempDir::new().unwrap();
+    let mock_server = MockServer::start().await;
+    create_enterprise_profile(&temp_dir, &mock_server.uri()).unwrap();
+
+    Mock::given(method("PUT"))
+        .and(path("/v1/job_scheduler"))
+        .and(body_json(json!({
+            "backup_job_settings": {"cron_expression": "*/10 * * * *"}
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "backup_job_settings": {"cron_expression": "*/10 * * * *"}
+        })))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    test_cmd(&temp_dir)
+        .args([
+            "-o",
+            "json",
+            "enterprise",
+            "job-scheduler",
+            "update",
+            "--data",
+            "{\"backup_job_settings\":{\"cron_expression\":\"*/10 * * * *\"}}",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"backup_job_settings\""));
+}
+
+#[tokio::test]
+async fn test_enterprise_suffix_update_uses_patch() {
+    let temp_dir = TempDir::new().unwrap();
+    let mock_server = MockServer::start().await;
+    create_enterprise_profile(&temp_dir, &mock_server.uri()).unwrap();
+
+    Mock::given(method("PATCH"))
+        .and(path("/v1/suffix/prod"))
+        .and(body_json(json!({"dns_suffix": "redis.example.com"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "name": "prod",
+            "dns_suffix": "redis.example.com"
+        })))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    test_cmd(&temp_dir)
+        .args([
+            "-o",
+            "json",
+            "enterprise",
+            "suffix",
+            "update",
+            "prod",
+            "--dns-suffix",
+            "redis.example.com",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("redis.example.com"));
+}
+
+#[tokio::test]
+async fn test_enterprise_support_package_uses_documented_binary_route() {
+    let temp_dir = TempDir::new().unwrap();
+    let mock_server = MockServer::start().await;
+    create_enterprise_profile(&temp_dir, &mock_server.uri()).unwrap();
+    let output = temp_dir.path().join("support.tar.gz");
+
+    Mock::given(method("GET"))
+        .and(path("/v1/cluster"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "name": "demo",
+            "software_version": "8.2.0"
+        })))
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/cluster/debuginfo"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            b"documented-binary-support-package".to_vec(),
+            "application/gzip",
+        ))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    test_cmd(&temp_dir)
+        .args(["enterprise", "support-package", "cluster", "--file"])
+        .arg(&output)
+        .arg("--skip-checks")
+        .assert()
+        .success();
+
+    assert_eq!(
+        std::fs::read(output).unwrap(),
+        b"documented-binary-support-package"
+    );
+}
+
+#[test]
+fn retired_enterprise_commands_are_not_exposed() {
+    let cases: &[&[&str]] = &[
+        &["enterprise", "action", "cancel", "1"],
+        &["enterprise", "diagnostics", "run"],
+        &["enterprise", "job-scheduler", "list"],
+        &["enterprise", "migration", "list"],
+        &["enterprise", "suffix", "create"],
+        &["enterprise", "support-package", "status", "task-1"],
+    ];
+
+    for args in cases {
+        let temp_dir = TempDir::new().unwrap();
+        create_enterprise_profile(&temp_dir, "https://enterprise.invalid:9443").unwrap();
+        test_cmd(&temp_dir)
+            .args(*args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("unrecognized subcommand"));
+    }
 }
 
 #[tokio::test]

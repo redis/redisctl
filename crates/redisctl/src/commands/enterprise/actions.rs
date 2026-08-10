@@ -44,12 +44,6 @@ pub enum ActionCommands {
         v2: bool,
     },
 
-    /// Cancel a running action
-    Cancel {
-        /// Action UID
-        uid: String,
-    },
-
     /// List actions for a specific database
     #[command(name = "list-for-bdb")]
     ListForBdb {
@@ -192,26 +186,6 @@ impl ActionCommands {
                     super::utils::apply_jmespath(&status_info, q)?
                 } else {
                     status_info
-                };
-                super::utils::print_formatted_output(output_data, output_format)?;
-            }
-
-            ActionCommands::Cancel { uid } => {
-                handler
-                    .cancel(uid)
-                    .await
-                    .context(format!("Failed to cancel action {}", uid))?;
-
-                // Create success response
-                let response = serde_json::json!({
-                    "status": "success",
-                    "message": format!("Action '{}' cancelled successfully", uid)
-                });
-
-                let output_data = if let Some(q) = query {
-                    super::utils::apply_jmespath(&response, q)?
-                } else {
-                    response
                 };
                 super::utils::print_formatted_output(output_data, output_format)?;
             }

@@ -19,7 +19,6 @@ mcp_module! {
     list_databases => "list_enterprise_databases",
     get_database => "get_enterprise_database",
     get_database_stats => "get_database_stats",
-    get_database_endpoints => "get_database_endpoints",
     list_database_alerts => "list_database_alerts",
     backup_enterprise_database => "backup_enterprise_database",
     import_enterprise_database => "import_enterprise_database",
@@ -143,22 +142,6 @@ enterprise_tool!(read_only, get_database_stats, "get_database_stats",
     }
 );
 
-enterprise_tool!(read_only, get_database_endpoints, "get_database_endpoints",
-    "Get connection endpoints for a specific database.",
-    {
-        /// Database UID
-        pub uid: u32,
-    } => |client, input| {
-        let handler = DatabaseHandler::new(client);
-        let endpoints = handler
-            .endpoints(input.uid)
-            .await
-            .tool_context("Failed to get endpoints")?;
-
-        CallToolResult::from_list("endpoints", &endpoints)
-    }
-);
-
 enterprise_tool!(read_only, list_database_alerts, "list_database_alerts",
     "List all alerts for a specific database.",
     {
@@ -256,6 +239,8 @@ enterprise_tool!(write, create_enterprise_database, "create_enterprise_database"
         /// IMPORTANT: passing a value in GB (e.g., 1.0) will create a 1-byte database.
         #[serde(default, deserialize_with = "serde_helpers::string_or_opt_u64::deserialize")]
         pub memory_size: Option<u64>,
+        /// Redis engine version in MAJOR.MINOR form (for example, "7.2")
+        pub redis_version: Option<String>,
         /// Port number (optional, cluster will assign if not specified)
         pub port: Option<u16>,
         /// Enable replication for high availability
@@ -275,6 +260,7 @@ enterprise_tool!(write, create_enterprise_database, "create_enterprise_database"
         let request = CreateDatabaseRequest {
             name: input.name.clone(),
             memory_size: input.memory_size,
+            redis_version: input.redis_version.clone(),
             port: input.port,
             replication: input.replication,
             persistence: input.persistence.clone(),
