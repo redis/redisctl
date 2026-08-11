@@ -2,6 +2,10 @@
 
 Profile and settings file format reference.
 
+Profiles are persistent user data covered by the
+[Compatibility and Support Policy](compatibility.md). The explicit 1.0 schema version and migration
+mechanism are being established before the policy takes effect with redisctl 1.0.0.
+
 ## Location
 
 | Platform | Path |

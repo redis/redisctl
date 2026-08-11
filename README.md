@@ -156,6 +156,7 @@ Connect directly to any Redis instance for key inspection, data structure operat
 - [Configuration](https://redis-field-engineering.github.io/redisctl-docs/configuration/)
 - [MCP Server](https://redis-field-engineering.github.io/redisctl-docs/mcp/)
 - [Command Reference](https://redis-field-engineering.github.io/redisctl-docs/reference/)
+- [Compatibility and Support Policy](https://redis-field-engineering.github.io/redisctl-docs/reference/compatibility/)
 - [Workflows](https://redis-field-engineering.github.io/redisctl-docs/workflows/)
 
 ---
