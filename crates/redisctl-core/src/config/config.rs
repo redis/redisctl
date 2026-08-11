@@ -77,14 +77,14 @@ fn default_prod_capi_url() -> String {
 }
 
 impl CloudAuthConfig {
-    /// Built-in production defaults. The Okta issuer/client id and SM host are filled in when
-    /// IT/IAM provisions the prod app; until then [`CloudAuthConfig::is_complete`] reports
-    /// what's missing.
+    /// Built-in production defaults, so `cloud auth login` works against production without a
+    /// `[cloud_auth.<profile>]` section. The client id is a public OIDC identifier (the app is a
+    /// public client with no secret), so it ships in the binary.
     pub fn prod_defaults() -> Self {
         Self {
-            okta_issuer: String::new(),
-            okta_client_id: String::new(),
-            sm_api_url: String::new(),
+            okta_issuer: "https://auth.redis.com/oauth2/default".to_string(),
+            okta_client_id: "0oaw90hjzrLoATW0q5d7".to_string(),
+            sm_api_url: "https://cloud.redis.io/api/v1".to_string(),
             capi_url: default_prod_capi_url(),
         }
     }
