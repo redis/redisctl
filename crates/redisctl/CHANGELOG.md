@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/redis/redisctl/compare/redisctl-v0.11.1...redisctl-v0.12.0) - 2026-08-11
+
+### Added
+
+- *(cli)* give failures a taxonomy exit code instead of a blanket 1 ([#1058](https://github.com/redis/redisctl/pull/1058))
+- *(cli)* emit a structured error envelope under -o json/yaml ([#1048](https://github.com/redis/redisctl/pull/1048))
+
+### Fixed
+
+- *(enterprise)* migrate to redis-enterprise 0.10 ([#1081](https://github.com/redis/redisctl/pull/1081))
+- *(cli)* standardize confirmation bypass flags ([#1070](https://github.com/redis/redisctl/pull/1070))
+- *(cli)* report a nonexistent profile as ProfileNotFound ([#1061](https://github.com/redis/redisctl/pull/1061))
+- *(cli)* make a declined confirmation exit non-zero ([#1059](https://github.com/redis/redisctl/pull/1059))
+- *(cli)* send tracing to stderr so -o json stays clean ([#1046](https://github.com/redis/redisctl/pull/1046))
+- *(cli)* stop labeling anyhow-wrapped errors "Configuration error" ([#1047](https://github.com/redis/redisctl/pull/1047))
+- *(cli)* unify confirmation prompts and fail non-interactive deletes ([#1044](https://github.com/redis/redisctl/pull/1044))
+- *(cli)* stop cm-settings import panicking on duplicate -f short ([#1043](https://github.com/redis/redisctl/pull/1043))
+
+### Other
+
+- *(mcp)* stabilize the library embedding API ([#1097](https://github.com/redis/redisctl/pull/1097))
+- define 1.0 compatibility policy ([#1094](https://github.com/redis/redisctl/pull/1094))
+- correct compose file path in Docker integration test doc comments ([#1076](https://github.com/redis/redisctl/pull/1076))
+- add TESTING.md covering test tiers, Docker suites, and CI gates ([#1075](https://github.com/redis/redisctl/pull/1075))
+- harden project maintenance and release hygiene ([#1069](https://github.com/redis/redisctl/pull/1069))
+- *(core)* centralize API client resolution ([#1071](https://github.com/redis/redisctl/pull/1071))
+- *(cli)* use the canonical dispatch pattern for alerts and license ([#1056](https://github.com/redis/redisctl/pull/1056))
+- drop the redundant redisctl lib target ([#1051](https://github.com/redis/redisctl/pull/1051))
+- remove dead resilience flags and modules ([#1050](https://github.com/redis/redisctl/pull/1050))
+- post-0.11.1 cleanup ([#1023](https://github.com/redis/redisctl/pull/1023))
+
 ## [0.11.1](https://github.com/redis/redisctl/compare/redisctl-v0.11.0...redisctl-v0.11.1) - 2026-06-11
 
 ### Other

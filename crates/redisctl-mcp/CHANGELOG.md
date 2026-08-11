@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/redis/redisctl/compare/redisctl-mcp-v0.11.1...redisctl-mcp-v0.12.0) - 2026-08-11
+
+### Fixed
+
+- *(enterprise)* migrate to redis-enterprise 0.10 ([#1081](https://github.com/redis/redisctl/pull/1081))
+- *(cloud)* add mock tests locking in tags/plans surfacing after 0.11 upgrade ([#1029](https://github.com/redis/redisctl/pull/1029))
+
+### Other
+
+- *(mcp)* stabilize the library embedding API ([#1097](https://github.com/redis/redisctl/pull/1097))
+- *(mcp)* establish catalog compatibility contract ([#1096](https://github.com/redis/redisctl/pull/1096))
+- correct compose file path in Docker integration test doc comments ([#1076](https://github.com/redis/redisctl/pull/1076))
+- *(mcp)* cover enterprise write lifecycles ([#1074](https://github.com/redis/redisctl/pull/1074))
+- *(mcp)* cover tolerant numeric tool inputs ([#1073](https://github.com/redis/redisctl/pull/1073))
+- harden project maintenance and release hygiene ([#1069](https://github.com/redis/redisctl/pull/1069))
+- *(core)* centralize API client resolution ([#1071](https://github.com/redis/redisctl/pull/1071))
+- remove non-functional MCP OAuth surface and dead McpError ([#1053](https://github.com/redis/redisctl/pull/1053))
+- remove dead resilience flags and modules ([#1050](https://github.com/redis/redisctl/pull/1050))
+- *(mcp)* cover fixed-plan cloud tools request shapes ([#997](https://github.com/redis/redisctl/pull/997)) ([#1032](https://github.com/redis/redisctl/pull/1032))
+- *(mcp)* cover all redis_seed data types and error paths ([#1031](https://github.com/redis/redisctl/pull/1031))
+- *(mcp)* add request-shape tests for cloud account write/destructive tools ([#1025](https://github.com/redis/redisctl/pull/1025))
+- migrate to redis-cloud 0.11.0 (handle breaking changes) ([#1028](https://github.com/redis/redisctl/pull/1028))
+
 ## [0.11.1](https://github.com/redis/redisctl/compare/redisctl-mcp-v0.11.0...redisctl-mcp-v0.11.1) - 2026-06-11
 
 ### Other
