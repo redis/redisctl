@@ -34,7 +34,7 @@ This page covers all three, with emphasis on `--tools` for controlling the tool 
     untrusted network.
 
     Stdio is the stable 1.0 transport. See the
-    [Compatibility and Support Policy](../reference/compatibility.md) for the MCP contract.
+    [MCP Compatibility and Catalog](compatibility.md) for the detailed MCP contract.
 
 ## The `--tools` Flag
 
@@ -72,9 +72,9 @@ The server resolves which toolsets to load in this order:
 
 | Toolset | Sub-modules | Total Tools |
 |---------|-------------|-------------|
-| `cloud` | `subscriptions`, `account`, `networking`, `fixed`, `raw` | 151 |
+| `cloud` | `subscriptions`, `account`, `networking`, `fixed`, `raw` | 148 |
 | `enterprise` | `cluster`, `databases`, `rbac`, `observability`, `proxy`, `services`, `raw` | 85 |
-| `database` | `server`, `keys`, `structures`, `diagnostics`, `json`, `search`, `aliases`, `bulk`, `raw` | 139 |
+| `database` | `server`, `keys`, `structures`, `diagnostics`, `json`, `search`, `aliases`, `bulk`, `raw` | 132 |
 | `app` | *(none -- flat toolset)* | 8 |
 | *(system)* | *(always loaded)* | 2 |
 
@@ -82,7 +82,7 @@ The two system tools (`list_available_tools` and `show_policy`) are always regis
 
 ### Examples
 
-**Cloud only** -- all Cloud sub-modules (151 tools + system):
+**Cloud only** -- all Cloud sub-modules (148 tools + system):
 
 ```bash
 redisctl-mcp --profile my-cloud --tools cloud
@@ -94,13 +94,13 @@ redisctl-mcp --profile my-cloud --tools cloud
 redisctl-mcp --profile my-cloud --tools cloud:subscriptions,cloud:networking
 ```
 
-**Enterprise monitoring** -- cluster info + observability (40 tools + system):
+**Enterprise monitoring** -- cluster info + observability (36 tools + system):
 
 ```bash
 redisctl-mcp --profile my-re --tools enterprise:cluster,enterprise:observability
 ```
 
-**Database only** -- direct Redis operations (139 tools + system):
+**Database only** -- direct Redis operations (132 tools + system):
 
 ```bash
 redisctl-mcp --database-url redis://localhost:6379 --tools database

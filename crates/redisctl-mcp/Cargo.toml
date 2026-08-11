@@ -65,6 +65,7 @@ test-support = []
 
 [dev-dependencies]
 tokio = { workspace = true }
+tower-mcp = { version = "0.8.2", features = ["testing"] }
 redis-cloud = { workspace = true, features = ["test-support"] }
 redis-enterprise = { workspace = true, features = ["test-support"] }
 wiremock = { workspace = true }
