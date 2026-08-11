@@ -2,10 +2,12 @@
 name = "redisctl"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+documentation.workspace = true
 description = "Unified CLI for Redis Cloud and Enterprise"
 keywords = ["redis", "cli", "cloud", "enterprise", "database"]
 categories = ["command-line-utilities", "api-bindings"]

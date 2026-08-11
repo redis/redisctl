@@ -19,6 +19,7 @@ use crate::presets::ToolsConfig;
 /// Safety tier determining which categories of tools are allowed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum SafetyTier {
     /// Only read-only tools (`read_only_hint = true`)
     #[default]
@@ -42,6 +43,7 @@ impl fmt::Display for SafetyTier {
 /// Per-toolset policy override.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct ToolsetPolicy {
     /// Whether this toolset is enabled. `None` or `Some(true)` = enabled,
     /// `Some(false)` = disabled (tools are never registered).
@@ -60,6 +62,7 @@ pub struct ToolsetPolicy {
 /// TOML-deserializable policy configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct PolicyConfig {
     /// Global default safety tier
     pub tier: SafetyTier,
@@ -224,10 +227,15 @@ impl PolicyConfig {
 
 /// Which toolset a tool belongs to (for per-toolset policy lookup).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ToolsetKind {
+    /// Redis Cloud management tools.
     Cloud,
+    /// Redis Enterprise management tools.
     Enterprise,
+    /// Direct Redis database tools.
     Database,
+    /// Application-level profile and system tools.
     App,
 }
 

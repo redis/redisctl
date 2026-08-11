@@ -7,6 +7,7 @@ pub(crate) mod macros;
 /// Each sub-module within a toolset declares a static `TOOL_NAMES` array and
 /// exposes a `router()` function. This struct lets the parent toolset `mod.rs`
 /// advertise its sub-modules for selective CLI loading via `--tools cloud:subscriptions`.
+#[allow(dead_code)]
 pub struct SubModule {
     /// Sub-module name as used on the CLI (e.g. `"subscriptions"`).
     pub name: &'static str,

@@ -2,10 +2,12 @@
 name = "redisctl-mcp"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+documentation = "https://docs.rs/redisctl-mcp"
 description = "MCP (Model Context Protocol) server for Redis Cloud and Enterprise"
 readme = "README.md"
 keywords = ["redis", "mcp", "ai", "cloud", "enterprise"]
@@ -14,6 +16,26 @@ categories = ["api-bindings", "development-tools"]
 [[bin]]
 name = "redisctl-mcp"
 path = "src/main.rs"
+
+[[test]]
+name = "cloud_tools"
+required-features = ["cloud", "test-support"]
+
+[[test]]
+name = "enterprise_mcp_docker_integration_tests"
+required-features = ["enterprise", "test-support"]
+
+[[test]]
+name = "enterprise_tools"
+required-features = ["enterprise", "test-support"]
+
+[[test]]
+name = "redis_stack_tools"
+required-features = ["database", "test-support"]
+
+[[test]]
+name = "redis_tools"
+required-features = ["database", "test-support"]
 
 [dependencies]
 # MCP framework
@@ -61,6 +83,7 @@ cloud = ["dep:redis-cloud"]
 enterprise = ["dep:redis-enterprise"]
 database = ["dep:redis", "dep:urlencoding"]
 secure-storage = ["redisctl-core/secure-storage"]
+# Internal integration-test seam; not part of the supported Rust API.
 test-support = []
 
 [dev-dependencies]

@@ -2,10 +2,12 @@
 name = "redisctl-core"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+documentation = "https://docs.rs/redisctl-core"
 description = "Core library for Redis CLI tools - config, workflows, and shared logic"
 
 [dependencies]

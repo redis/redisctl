@@ -19,6 +19,28 @@ Runtime discovery remains authoritative for a particular installation. Feature f
 visibility presets, and policy tiers can expose a supported subset of this catalog. Call
 `list_available_tools` to inspect that resolved subset.
 
+## Rust embedding API
+
+The supported Rust embedding entry point is `McpServerBuilder`. It constructs the same router used
+by the `redisctl-mcp` binary, including:
+
+- the tool-to-toolset mapping used by per-toolset policy rules;
+- safety-tier and allow/deny filtering;
+- visibility presets and the two system tools;
+- built-in and dynamically loaded prompts; and
+- server instructions and shared application state.
+
+This is an intentional security boundary: creating state with a policy is not sufficient unless
+the router also installs that policy as a capability filter. The binary and library now share one
+construction path so those behaviors cannot drift. A toolset disabled by policy remains disabled
+even when a caller or CLI invocation selects it explicitly.
+
+Generated input structs and individual tool-constructor functions are implementation details, not
+supported Rust APIs. They are hidden in normal builds. The `test-support` feature exposes them only
+for redisctl's own integration tests and carries no 1.x compatibility promise. The MCP names,
+schemas, annotations, and tiers produced by those internals remain protected by the catalog
+contract described on this page.
+
 ## What the catalog records
 
 Each entry records:

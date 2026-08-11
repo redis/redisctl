@@ -4,25 +4,25 @@ use std::sync::Arc;
 
 #[cfg(feature = "enterprise")]
 use redis_enterprise::EnterpriseClient;
-use redisctl_mcp::state::AppState;
+use redisctl_mcp::AppState;
 #[cfg(feature = "database")]
-use redisctl_mcp::state::CredentialSource;
+use redisctl_mcp::CredentialSource;
 
 /// Wrap an AppState with an explicit read-only policy.
 pub fn state_readonly(mut state: AppState) -> Arc<AppState> {
-    state.policy = AppState::test_policy();
+    state.set_test_policy(AppState::test_policy());
     Arc::new(state)
 }
 
 /// Wrap an AppState with an explicit read-write policy.
 pub fn state_write(mut state: AppState) -> Arc<AppState> {
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     Arc::new(state)
 }
 
 /// Wrap an AppState with an explicit full policy.
 pub fn state_full(mut state: AppState) -> Arc<AppState> {
-    state.policy = AppState::test_full_policy();
+    state.set_test_policy(AppState::test_full_policy());
     Arc::new(state)
 }
 

@@ -24,6 +24,7 @@ const REDISCTL_MCP_USER_AGENT: &str = concat!("redisctl-mcp/", env!("CARGO_PKG_V
 
 /// How credentials are resolved
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum CredentialSource {
     /// Resolve from redisctl profiles (local mode)
     /// Empty vec means use default profiles from config
@@ -32,27 +33,27 @@ pub enum CredentialSource {
 
 /// Cached API clients and connections (per-profile for multi-cluster support)
 #[cfg(any(feature = "cloud", feature = "enterprise", feature = "database"))]
-pub struct CachedClients {
+pub(crate) struct CachedClients {
     #[cfg(feature = "cloud")]
-    pub cloud: HashMap<String, CloudClient>,
+    pub(crate) cloud: HashMap<String, CloudClient>,
     #[cfg(feature = "enterprise")]
-    pub enterprise: HashMap<String, EnterpriseClient>,
+    pub(crate) enterprise: HashMap<String, EnterpriseClient>,
     #[cfg(feature = "database")]
-    pub database: HashMap<String, crate::tools::redis::RedisConnection>,
+    pub(crate) database: HashMap<String, crate::tools::redis::RedisConnection>,
 }
 
 /// Shared application state
 pub struct AppState {
     /// Credential source configuration
-    pub credential_source: CredentialSource,
+    pub(crate) credential_source: CredentialSource,
     /// Resolved policy for granular tool access control
-    pub policy: Arc<Policy>,
+    pub(crate) policy: Arc<Policy>,
     /// Optional Redis database URL for direct connections
-    pub database_url: Option<String>,
+    pub(crate) database_url: Option<String>,
     /// Enable Redis Cluster mode (handles MOVED/ASK redirections)
-    pub cluster: bool,
+    pub(crate) cluster: bool,
     /// Client name for CLIENT SETNAME (identifies connections in CLIENT LIST)
-    pub client_name: Option<String>,
+    pub(crate) client_name: Option<String>,
     /// redisctl config (for profile-based auth)
     config: Option<Config>,
     /// Configured profiles (for multi-cluster support)
@@ -101,6 +102,31 @@ impl AppState {
             #[cfg(feature = "database")]
             aliases: RwLock::new(HashMap::new()),
         })
+    }
+
+    /// Return the credential source used to resolve platform clients.
+    pub fn credential_source(&self) -> &CredentialSource {
+        &self.credential_source
+    }
+
+    /// Return the resolved safety policy installed on this state.
+    pub fn policy(&self) -> &Arc<Policy> {
+        &self.policy
+    }
+
+    /// Return the configured direct Redis URL, if any.
+    pub fn database_url(&self) -> Option<&str> {
+        self.database_url.as_deref()
+    }
+
+    /// Return whether Redis Cluster redirection handling is enabled.
+    pub fn cluster_mode(&self) -> bool {
+        self.cluster
+    }
+
+    /// Return the Redis client name used by direct database connections.
+    pub fn client_name(&self) -> Option<&str> {
+        self.client_name.as_deref()
     }
 
     /// Get the list of configured profiles
@@ -426,7 +452,14 @@ impl Clone for AppState {
 }
 
 /// Test helpers for creating AppState with pre-configured clients
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
 impl AppState {
+    /// Replace the active policy in integration tests.
+    pub fn set_test_policy(&mut self, policy: Arc<Policy>) {
+        self.policy = policy;
+    }
+
     /// Create a default read-only policy for tests
     pub fn test_policy() -> Arc<Policy> {
         Arc::new(Policy::new(
