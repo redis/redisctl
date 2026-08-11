@@ -11,6 +11,7 @@ use std::pin::Pin;
 
 pub mod cloud;
 pub mod enterprise;
+pub mod init;
 
 /// Common trait for all workflows
 pub trait Workflow: Send + Sync {
