@@ -27,11 +27,14 @@ This page covers all three, with emphasis on `--tools` for controlling the tool 
 | `--request-timeout-secs` | -- | -- | `30` | Request timeout in seconds (HTTP transport only) |
 | `--log-level` | -- | `RUST_LOG` | `info` | Log level |
 
-!!! warning "HTTP transport does not provide built-in authentication"
+!!! warning "HTTP transport is preview and does not provide built-in authentication"
     Keep the default loopback bind unless the server is protected by a trusted
     gateway or reverse proxy that provides authentication, authorization, and
     TLS. Do not expose an unprotected `redisctl-mcp` HTTP endpoint to an
     untrusted network.
+
+    Stdio is the stable 1.0 transport. See the
+    [Compatibility and Support Policy](../reference/compatibility.md) for the MCP contract.
 
 ## The `--tools` Flag
 

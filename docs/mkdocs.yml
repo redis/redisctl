@@ -159,6 +159,7 @@ nav:
           - cookbook/enterprise/node-management.md
   - Reference:
       - reference/index.md
+      - Compatibility and Support: reference/compatibility.md
       - Environment Variables: reference/environment-variables.md
       - Configuration File: reference/config-file.md
       - Shell Completions: reference/shell-completions.md

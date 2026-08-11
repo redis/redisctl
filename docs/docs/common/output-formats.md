@@ -2,6 +2,9 @@
 
 Control how redisctl displays results.
 
+For automation guarantees—including stable fields, upstream-controlled payloads, stderr behavior,
+and exit codes—see the [Compatibility and Support Policy](../reference/compatibility.md).
+
 ## Available Formats
 
 | Format | Flag | Best For |
