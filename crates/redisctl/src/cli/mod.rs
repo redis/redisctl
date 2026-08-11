@@ -11,9 +11,11 @@ use redisctl_core::DeploymentType;
 
 pub mod cloud;
 pub mod enterprise;
+pub mod init;
 
 pub use cloud::*;
 pub use enterprise::*;
+pub use init::*;
 
 /// Redis management CLI with unified access to Cloud and Enterprise
 #[derive(Parser, Debug)]
@@ -243,6 +245,12 @@ PROFILE REQUIREMENT:
     redisctl profile set <name> --type database --host <HOST> --port <PORT>
   List existing profiles: redisctl profile list")]
     Db(DbCommands),
+
+    /// Onboard this project to Redis + set up your AI coding agent
+    // Hidden while the command is incomplete: merges to main can auto-release, and a
+    // half-wired command must not surface in --help.
+    #[command(hide = true)]
+    Init(InitArgs),
 
     /// Version information
     #[command(visible_alias = "ver", visible_alias = "v")]
