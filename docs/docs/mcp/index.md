@@ -28,11 +28,11 @@ With the MCP server, you can:
 
     Read-only mode by default. Credentials stay in your profiles, never exposed to AI.
 
--   :material-cloud:{ .lg .middle } **Full Coverage**
+-   :material-cloud:{ .lg .middle } **Broad Coverage**
 
     ---
 
-    392 tools covering Redis Cloud, Redis Enterprise, and direct database operations.
+    Hundreds of cataloged tools covering Redis Cloud, Redis Enterprise, and direct database operations.
 
 -   :material-cog:{ .lg .middle } **IDE Integration**
 

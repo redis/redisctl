@@ -15,7 +15,7 @@ redisctl-mcp
     |
     +-- Policy engine (tier checks, allow/deny lists)
     +-- Audit layer (structured logging of tool calls)
-    +-- Tool router (392 tools across 4 toolsets)
+    +-- Tool router (cataloged tools across 4 toolsets)
     |       |
     |       +-- Cloud tools -> redis-cloud client -> Cloud REST API
     |       +-- Enterprise tools -> redis-enterprise client -> Enterprise REST API

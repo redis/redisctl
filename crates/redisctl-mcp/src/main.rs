@@ -948,9 +948,12 @@ async fn run_http_server(
 }
 
 #[cfg(test)]
+mod catalog_contract;
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    use redisctl_core::{Profile, ProfileCredentials};
+    use redisctl_core::{DeploymentType, Profile, ProfileCredentials};
 
     fn cloud_profile() -> Profile {
         Profile {
@@ -1536,6 +1539,7 @@ mod tests {
         };
         let disabled = config.disabled_toolsets();
 
+        #[allow(unused_mut)]
         let mut toolsets = vec![Toolset::App];
         #[cfg(feature = "cloud")]
         toolsets.push(Toolset::Cloud);

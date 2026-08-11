@@ -130,8 +130,8 @@ Feature-gated tools are covered when their documented feature is enabled. A tool
 that was not built cannot be assumed to exist. Upstream-controlled payload fields have the same
 exception described for machine-readable CLI output.
 
-The canonical catalog and CI enforcement are tracked by
-[issue #1089](https://github.com/redis/redisctl/issues/1089).
+The [MCP Compatibility and Catalog](../mcp/compatibility.md) page documents the canonical catalog,
+CI enforcement, intentional update workflow, and tool deprecation convention.
 
 ## Rust crate compatibility
 
