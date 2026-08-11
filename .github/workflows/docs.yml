@@ -127,7 +127,14 @@ jobs:
           shared-key: "doc"
           cache-targets: false
 
-      - name: Check that API docs build
+      - name: Check supported redisctl-mcp API docs
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc -p redisctl-mcp --no-deps
+
+      - name: Check that all API docs build
+        env:
+          RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps --all-features
 
   # Status check for documentation

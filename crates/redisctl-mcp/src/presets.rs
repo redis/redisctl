@@ -27,6 +27,7 @@ use crate::policy::ToolsetKind;
 /// ```
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct ToolsConfig {
     /// Preset name. `"all"` (default) loads every tool; `"essentials"` loads
     /// a curated subset per enabled toolset.

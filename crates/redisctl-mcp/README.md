@@ -88,7 +88,7 @@ redisctl-mcp --transport http --port 8080 \
 ### Redis Cloud
 
 | Tool | Description |
-|------|-------------|
+| --- | --- |
 | `list_subscriptions` | List all Redis Cloud subscriptions |
 | `get_subscription` | Get details of a specific subscription |
 | `list_databases` | List databases in a subscription |
@@ -97,7 +97,7 @@ redisctl-mcp --transport http --port 8080 \
 ### Redis Enterprise
 
 | Tool | Description |
-|------|-------------|
+| --- | --- |
 | `get_cluster` | Get cluster information (name, version, config) |
 | `list_enterprise_databases` | List all databases on the cluster |
 | `get_enterprise_database` | Get database details by UID |
@@ -106,7 +106,7 @@ redisctl-mcp --transport http --port 8080 \
 ### Direct Redis Operations
 
 | Tool | Description |
-|------|-------------|
+| --- | --- |
 | `redis_ping` | Test connectivity to a Redis database |
 | `redis_info` | Get Redis INFO output (optionally by section) |
 | `redis_keys` | List keys matching a pattern (uses SCAN) |
@@ -156,7 +156,7 @@ export REDIS_URL=redis://localhost:6379
 
 ## Command Line Options
 
-```
+```text
 Options:
   -t, --transport <TRANSPORT>      Transport mode [default: stdio]
                                    - stdio: For CLI integrations
@@ -182,25 +182,29 @@ Options:
 
 ## Library Usage
 
-You can embed these tools in your own MCP server:
+You can build the same policy-filtered router used by the binary. The builder
+installs policy, visibility presets, system tools, prompts, skills, and server
+instructions as one unit:
 
 ```rust
-use std::sync::Arc;
-use redisctl_mcp::{AppState, CredentialSource, tools};
-use tower_mcp::McpRouter;
+use redisctl_mcp::{CredentialSource, McpServerBuilder, PolicyConfig};
 
-let state = Arc::new(AppState::new(
-    CredentialSource::Profile(Some("default".to_string())),
-    true, // read-only
-    None, // no database URL
-)?);
+fn build_router() -> anyhow::Result<tower_mcp::McpRouter> {
+    let server = McpServerBuilder::new(
+        CredentialSource::Profiles(vec!["default".to_string()]),
+        PolicyConfig::default(), // read-only by default
+        "embedded default",
+    )
+    .with_tool_specs(["cloud", "enterprise", "app"])?
+    .with_client_name(Some("my-embedded-server".to_string()))
+    .build()?;
 
-let router = McpRouter::new()
-    .tool(tools::cloud::list_subscriptions(state.clone()))
-    .tool(tools::cloud::get_subscription(state.clone()))
-    .tool(tools::enterprise::get_cluster(state.clone()))
-    .tool(tools::redis::ping(state.clone()));
+    Ok(server.into_router())
+}
 ```
+
+The `test-support` feature exposes unstable direct tool constructors for this
+repository's integration tests. It is not part of the supported 1.x Rust API.
 
 ## Security Considerations
 

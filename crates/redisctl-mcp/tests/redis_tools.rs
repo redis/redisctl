@@ -25,7 +25,7 @@ use serde_json::json;
 use tokio::sync::OnceCell;
 use tower_mcp::Tool;
 
-use redisctl_mcp::state::AppState;
+use redisctl_mcp::AppState;
 use redisctl_mcp::tools::redis;
 use support::{database_state_full, database_state_readonly, database_state_write};
 

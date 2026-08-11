@@ -21,6 +21,7 @@ use crate::policy::ToolsetKind;
 /// Audit logging level controlling which events are emitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum AuditLevel {
     /// Log every tool call
     #[default]
@@ -36,6 +37,7 @@ pub enum AuditLevel {
 /// Audit configuration, typically loaded from the `[audit]` section of the policy file.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct AuditConfig {
     /// Master switch for audit logging
     pub enabled: bool,

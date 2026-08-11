@@ -1,14 +1,17 @@
 //! Compatibility contract for the all-features MCP tool catalog.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
-use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tower_mcp::TestClient;
 
-use super::*;
+use crate::policy::{PolicyConfig, SafetyTier, ToolsetKind};
+use crate::server::parse_skill;
+#[cfg(any(feature = "cloud", feature = "enterprise", feature = "database"))]
+use crate::tools;
+use crate::{CredentialSource, McpServerBuilder};
 
 const CATALOG_FORMAT_VERSION: u32 = 1;
 #[cfg(all(feature = "cloud", feature = "enterprise", feature = "database"))]
@@ -77,53 +80,24 @@ impl Changes {
     }
 }
 
-fn all_toolsets() -> EnabledToolsets {
-    #[allow(unused_mut)]
-    let mut toolsets = vec![Toolset::App];
-    #[cfg(feature = "cloud")]
-    toolsets.push(Toolset::Cloud);
-    #[cfg(feature = "enterprise")]
-    toolsets.push(Toolset::Enterprise);
-    #[cfg(feature = "database")]
-    toolsets.push(Toolset::Database);
-    EnabledToolsets::all_of(toolsets)
-}
-
 async fn current_catalog() -> Catalog {
     current_catalog_for_tier(SafetyTier::Full).await
 }
 
 async fn current_catalog_for_tier(tier: SafetyTier) -> Catalog {
-    let enabled = all_toolsets();
-    let tool_toolset = build_tool_toolset_mapping(&enabled);
-    let policy_config = PolicyConfig {
-        tier,
-        ..Default::default()
-    };
-    let policy = Arc::new(Policy::new(
-        policy_config,
-        tool_toolset.clone(),
-        "catalog-contract".to_string(),
-    ));
-    let state = Arc::new(
-        AppState::new(
-            CredentialSource::Profiles(vec![]),
-            policy.clone(),
-            None,
-            false,
-            Some("redisctl-mcp-catalog-test".to_string()),
-        )
-        .expect("catalog state should build"),
-    );
-    let router = build_router(
-        state,
-        policy,
-        &enabled,
-        ToolsConfig::default(),
-        &tool_toolset,
-        None,
+    let server = McpServerBuilder::new(
+        CredentialSource::Profiles(vec![]),
+        PolicyConfig {
+            tier,
+            ..Default::default()
+        },
+        "catalog-contract",
     )
+    .with_client_name(Some("redisctl-mcp-catalog-test".to_string()))
+    .build()
     .expect("catalog router should build");
+    let tool_toolset = server.tool_toolset().clone();
+    let router = server.into_router();
 
     let mut client = TestClient::from_router(router);
     client.initialize().await;

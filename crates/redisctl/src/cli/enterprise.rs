@@ -792,7 +792,7 @@ NOTE: Memory size is in bytes. Common values:
         #[arg(long)]
         redis_password: Option<String>,
 
-        /// Module to enable (can be repeated). Format: name[@version][:args]
+        /// Module to enable (can be repeated). Format: `name[@version][:args]`
         /// Use 'enterprise module list' to see available modules.
         /// Examples: --module search  --module search@2.10.27  --module search@2.10.27:PARTITIONS=AUTO
         #[arg(long = "module", value_name = "NAME[@VERSION][:ARGS]")]
@@ -1974,7 +1974,7 @@ pub enum EnterpriseCrdbCommands {
     AddCluster {
         /// CRDB ID
         id: u32,
-        /// Cluster URL (e.g., https://cluster2.example.com:9443)
+        /// Cluster URL (for example, <https://cluster2.example.com:9443>)
         #[arg(long)]
         url: Option<String>,
         /// Cluster name

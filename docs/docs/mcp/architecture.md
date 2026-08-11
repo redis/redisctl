@@ -6,13 +6,14 @@ How the redisctl MCP server is structured internally.
 
 `redisctl-mcp` is a standalone binary built on [tower-mcp](https://crates.io/crates/tower-mcp), a Rust MCP framework. It exposes Redis management operations as MCP tools that AI assistants can discover and invoke.
 
-```
+```text
 AI Assistant (Claude, Cursor, etc.)
     |
     | MCP protocol (stdio or HTTP/SSE)
     v
 redisctl-mcp
     |
+    +-- McpServerBuilder (canonical binary + library assembly)
     +-- Policy engine (tier checks, allow/deny lists)
     +-- Audit layer (structured logging of tool calls)
     +-- Tool router (cataloged tools across 4 toolsets)
@@ -30,7 +31,7 @@ redisctl-mcp
 The binary is compiled with feature flags that gate platform-specific dependencies:
 
 | Feature | Default | Gates |
-|---------|---------|-------|
+| --- | --- | --- |
 | `cloud` | yes | `redis-cloud` crate + cloud toolset |
 | `enterprise` | yes | `redis-enterprise` crate + enterprise toolset |
 | `database` | yes | `redis` crate + database toolset |
@@ -38,6 +39,9 @@ The binary is compiled with feature flags that gate platform-specific dependenci
 | `secure-storage` | yes | Keyring-backed profile credentials through `redisctl-core` |
 
 Profile/app tools and the two system tools are always compiled in (they only depend on `redisctl-core`).
+
+The `test-support` feature is reserved for this repository's integration tests. It exposes direct
+tool constructors that are otherwise private and is not part of the supported Rust API.
 
 Compile with `--no-default-features` and selectively enable what you need:
 
@@ -67,6 +71,10 @@ mcp_module! {
 ```
 
 This produces a `TOOL_NAMES` array and a `router()` function that builds tools and merges them into the MCP router.
+
+These generated constructors are internal assembly details. Embedders use `McpServerBuilder`,
+which composes the selected internal routers and then installs policy and visibility filters,
+system tools, prompts, skills, and instructions. The standalone binary uses the same builder.
 
 ### Tool Macros
 
