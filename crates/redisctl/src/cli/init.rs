@@ -33,6 +33,10 @@ pub struct InitArgs {
     #[arg(long = "agent", value_enum, value_delimiter = ',', value_name = "NAME")]
     pub agents: Vec<AgentArg>,
 
+    /// Skip installing redis-cli when it is missing
+    #[arg(long = "no-install-cli")]
+    pub no_install_cli: bool,
+
     /// Print the plan without changing anything
     #[arg(long)]
     pub dry_run: bool,

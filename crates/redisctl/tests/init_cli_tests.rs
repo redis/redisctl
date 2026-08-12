@@ -184,6 +184,11 @@ fn dead_url_writes_env_then_fails_validation_with_the_stale_hint() {
     assert!(env.contains("REDIS_URL=\"redis://127.0.0.1:9\""), "{env}");
     let gitignore = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
     assert!(gitignore.contains(".env"), "{gitignore}");
+    let example = std::fs::read_to_string(dir.path().join(".env.example")).unwrap();
+    assert!(
+        example.contains("REDIS_URL=\"redis://localhost:6379\""),
+        "{example}"
+    );
 }
 
 #[test]
@@ -227,4 +232,39 @@ fn a_different_existing_redis_url_is_kept_not_clobbered() {
         std::fs::read_to_string(dir.path().join(".env")).unwrap(),
         "REDIS_URL=\"redis://keep-me:1\"\n"
     );
+}
+
+#[test]
+fn rust_project_plans_cargo_add_and_the_example_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    // cargo is guaranteed on PATH wherever these tests run.
+    std::fs::write(dir.path().join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+    redisctl()
+        .current_dir(dir.path())
+        .args(["init", "--dry-run", "--url", "redis://localhost:6379"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(".env.example"))
+        .stdout(predicate::str::contains("would run: cargo add redis"))
+        .stdout(predicate::str::contains("redis-cli"));
+}
+
+#[test]
+fn no_install_cli_is_respected() {
+    let dir = tempfile::tempdir().unwrap();
+    redisctl()
+        .current_dir(dir.path())
+        .args([
+            "init",
+            "--dry-run",
+            "--no-install-cli",
+            "--url",
+            "redis://localhost:6379",
+        ])
+        .assert()
+        .success()
+        // Whether redis-cli is installed here or not, the line must never plan the
+        // installer under --no-install-cli.
+        .stdout(predicate::str::contains("would install via").not())
+        .stdout(predicate::str::contains("redis-cli"));
 }

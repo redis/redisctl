@@ -15,6 +15,7 @@ pub(crate) enum FileAction {
         rel: String,
         content: String,
         status: Status,
+        note: String,
     },
     Unchanged {
         rel: String,
@@ -28,7 +29,9 @@ pub(crate) enum FileAction {
 impl FileAction {
     pub(crate) fn preview(&self) -> Change {
         match self {
-            FileAction::Write { rel, status, .. } => Change::new(rel.clone(), *status, ""),
+            FileAction::Write {
+                rel, status, note, ..
+            } => Change::new(rel.clone(), *status, note.clone()),
             FileAction::Unchanged { rel } => Change::new(rel.clone(), Status::Unchanged, ""),
             FileAction::Kept { rel, note } => Change::new(rel.clone(), Status::Kept, note.clone()),
         }
@@ -108,6 +111,7 @@ pub(crate) fn plan_env_set(
             rel: rel.to_string(),
             content: format!("# Added by redisctl init\n{line}\n"),
             status: Status::Created,
+            note: String::new(),
         });
     };
     match read_env_key(dir, rel, key) {
@@ -128,6 +132,7 @@ pub(crate) fn plan_env_set(
                 ending_with_newline(&content)
             ),
             status: Status::Updated,
+            note: String::new(),
         }),
     }
 }
@@ -155,6 +160,7 @@ pub(crate) fn plan_gitignore_env(dir: &Path) -> Result<FileAction, InitError> {
         rel: ".gitignore".to_string(),
         content: format!("{base}\n# Added by redisctl init - never commit credentials\n.env\n"),
         status,
+        note: String::new(),
     })
 }
 
