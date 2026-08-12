@@ -4,13 +4,14 @@ Context and instructions for AI coding agents working on the redisctl project.
 
 ## Project Overview
 
-redisctl is a Rust workspace with three crates that share the lockstep version
+redisctl is a Rust workspace with four crates that share the lockstep version
 declared in the root `Cargo.toml`:
 
 | Crate | Path | Purpose |
 |-------|------|---------|
 | **redisctl-core** | `crates/redisctl-core/` | Shared library: config/profile management, Cloud and Enterprise API clients, error handling |
 | **redisctl** | `crates/redisctl/` | CLI binary: commands, workflows, connection management |
+| **redisctl-init** | `crates/redisctl-init/` | Onboarding engine for `redisctl init` (internal, `publish = false`): detection, planning, secret-safe URL handling |
 | **redisctl-mcp** | `crates/redisctl-mcp/` | MCP server for AI agents: ~364 tools, policy engine, skills system |
 
 ## Build and Test

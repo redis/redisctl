@@ -1,41 +1,36 @@
 //! `redisctl init` - onboard a project to Redis services and make its AI coding
 //! agent Redis-fluent.
 //!
-//! This module is the step sequence; each concern lives in its own submodule.
+//! This module owns only the CLI surface: argument shaping, banner, colours, and
+//! rendering. The decisions live in the `redisctl-init` engine crate.
 
 mod output;
-mod project;
-mod util;
 
-use std::sync::OnceLock;
+use redisctl_init as engine;
 
-use crate::cli::InitArgs;
+use crate::cli::{AgentArg, InitArgs};
 use crate::error::RedisCtlError;
 use output::{bold, dim, ok, yellow};
 
-/// What counts as a connection string, wherever one arrives: the --url flag or a
-/// bare positional (the Redis Cloud console hands out `redis-cli -u <url>`; accept
-/// that paste whole and pull the URL out of it).
-fn url_regex() -> &'static regex::Regex {
-    static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r#"rediss?://[^\s"']+"#).expect("static regex"))
-}
-
-/// Pull a Redis URL out of pasted text. `Ok(None)` when the text is blank,
-/// an error when there is text but no URL in it.
-fn extract_url(pasted: &str) -> Result<Option<String>, RedisCtlError> {
-    if let Some(m) = url_regex().find(pasted) {
-        return Ok(Some(m.as_str().to_string()));
+fn requested_agents(flags: &[AgentArg]) -> Option<Vec<engine::Agent>> {
+    if flags.is_empty() {
+        return None;
     }
-    if pasted.trim().is_empty() {
-        return Ok(None);
+    if flags.contains(&AgentArg::All) {
+        return Some(engine::KNOWN_AGENTS.to_vec());
     }
-    Err(RedisCtlError::InvalidInput {
-        message: format!(
-            "no redis:// or rediss:// URL found in: {}",
-            util::mask_url(pasted.trim())
-        ),
-    })
+    Some(
+        flags
+            .iter()
+            .filter_map(|flag| match flag {
+                AgentArg::Claude => Some(engine::Agent::Claude),
+                AgentArg::Cursor => Some(engine::Agent::Cursor),
+                AgentArg::Vscode => Some(engine::Agent::Vscode),
+                AgentArg::Codex => Some(engine::Agent::Codex),
+                AgentArg::All => None,
+            })
+            .collect(),
+    )
 }
 
 pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
@@ -44,7 +39,15 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
         .chain(args.pasted.iter().cloned())
         .collect::<Vec<_>>()
         .join(" ");
-    let given_url = extract_url(&pasted)?;
+    let options = engine::Options {
+        cwd: std::env::current_dir().map_err(|e| RedisCtlError::FileError {
+            path: ".".into(),
+            message: e.to_string(),
+        })?,
+        url_input: (!pasted.trim().is_empty()).then_some(pasted),
+        agents: requested_agents(&args.agents),
+    };
+    let plan = engine::plan(&options)?;
 
     output::banner();
     let dry = args.dry_run;
@@ -60,11 +63,7 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
         ))
     );
 
-    let cwd = std::env::current_dir().map_err(|e| RedisCtlError::FileError {
-        path: ".".into(),
-        message: e.to_string(),
-    })?;
-    let proj = project::detect(&cwd);
+    let proj = &plan.project;
     let mut descriptor = proj.runtime.as_str().to_string();
     if let Some(pm) = proj.pm {
         descriptor.push_str(&format!(", {pm}"));
@@ -79,14 +78,14 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
         dim(&format!("({descriptor})"))
     );
 
-    let agents = project::choose_agents(&args.agents, &project::detect_agents(&cwd));
     let agent_bits = proj
         .agent_markers
         .iter()
         .map(|(marker, found)| format!("{marker} {}", if *found { ok("✓") } else { dim("✗") }))
         .collect::<Vec<_>>()
         .join("  ");
-    let names = agents
+    let names = plan
+        .agents
         .iter()
         .map(|a| a.as_str())
         .collect::<Vec<_>>()
@@ -102,7 +101,7 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
         },
         dim(&format!("existing: {agent_bits}"))
     );
-    if proj.runtime == project::Runtime::Unknown {
+    if proj.runtime == engine::Runtime::Unknown {
         println!(
             "{}",
             yellow(
@@ -111,15 +110,15 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
         );
     }
 
-    // No step records changes yet, so the summary prints a subject with no lines.
-    let subject = given_url.as_deref().map(|url| {
+    let subject = plan.database.as_ref().map(|db| {
         format!(
-            "database: {}{} via provided URL",
-            util::mask_url(url),
+            "database: {}{} via {}",
+            engine::mask_url(&db.url),
             args.name
                 .as_deref()
                 .map(|n| format!(" [{n}]"))
-                .unwrap_or_default()
+                .unwrap_or_default(),
+            db.source
         )
     });
     println!(
@@ -137,63 +136,4 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
         );
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn blank_paste_means_no_url() {
-        assert_eq!(extract_url("").unwrap(), None);
-        assert_eq!(extract_url("   ").unwrap(), None);
-    }
-
-    #[test]
-    fn raw_urls_pass_through() {
-        assert_eq!(
-            extract_url("redis://localhost:6379").unwrap().as_deref(),
-            Some("redis://localhost:6379")
-        );
-        assert_eq!(
-            extract_url("rediss://h:12000").unwrap().as_deref(),
-            Some("rediss://h:12000")
-        );
-    }
-
-    #[test]
-    fn pasted_connect_command_yields_its_url() {
-        assert_eq!(
-            extract_url("redis-cli -u redis://default:pw@host:12000")
-                .unwrap()
-                .as_deref(),
-            Some("redis://default:pw@host:12000")
-        );
-    }
-
-    #[test]
-    fn quotes_delimit_the_url() {
-        assert_eq!(
-            extract_url(r#"redis-cli -u "rediss://h:1""#)
-                .unwrap()
-                .as_deref(),
-            Some("rediss://h:1")
-        );
-    }
-
-    #[test]
-    fn text_without_a_url_is_an_error_naming_the_text() {
-        let err = extract_url("garbage in").unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("no redis:// or rediss:// URL found"), "{msg}");
-        assert!(msg.contains("garbage in"), "{msg}");
-    }
-
-    #[test]
-    fn rejected_input_never_echoes_a_credential() {
-        let err = extract_url("redisx://default:secret@host:6379").unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("redisx://default:****@host:6379"), "{msg}");
-        assert!(!msg.contains("secret"), "{msg}");
-    }
 }
