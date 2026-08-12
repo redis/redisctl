@@ -39,6 +39,12 @@ pub struct InitArgs {
 
     /// A pasted connect command, same as --url (the Cloud console's Copy button
     /// output works verbatim)
-    #[arg(value_name = "PASTED", hide = true, num_args = 0..)]
+    #[arg(
+        value_name = "PASTED",
+        hide = true,
+        num_args = 0..,
+        trailing_var_arg = true,
+        allow_hyphen_values = true
+    )]
     pub pasted: Vec<String>,
 }
