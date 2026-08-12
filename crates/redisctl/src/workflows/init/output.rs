@@ -45,6 +45,7 @@ fn icon(status: redisctl_init::Status) -> String {
         Status::Updated => yellow("~"),
         Status::Unchanged => dim("="),
         Status::Kept => yellow("!"),
+        Status::Skipped => dim("-"),
         Status::Planned => yellow("»"),
     }
 }
