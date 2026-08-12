@@ -2,9 +2,7 @@
 
 use std::path::Path;
 
-use crate::cli::AgentArg;
-
-use super::util::{exists, has_bin, read_if};
+use crate::util::{exists, has_bin, read_if};
 
 /// The coding agents `redisctl init` can configure, in canonical order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,33 +144,17 @@ pub fn detect(dir: &Path) -> Project {
     }
 }
 
-/// The agents to configure: an explicit `--agent` list wins (canonical order, `all`
-/// expands), otherwise whatever was detected, otherwise all of them - having no agent
-/// tooling detected is not a reason to configure none.
-pub fn choose_agents(requested: &[AgentArg], detected: &[Agent]) -> Vec<Agent> {
-    if !requested.is_empty() {
-        if requested.contains(&AgentArg::All) {
-            return KNOWN_AGENTS.to_vec();
-        }
-        return KNOWN_AGENTS
+/// The agents to configure: an explicit request wins (canonical order, deduped),
+/// otherwise whatever was detected, otherwise all of them - having no agent tooling
+/// detected is not a reason to configure none.
+pub fn resolve_agents(requested: Option<&[Agent]>, detected: &[Agent]) -> Vec<Agent> {
+    match requested {
+        Some(requested) => KNOWN_AGENTS
             .into_iter()
-            .filter(|agent| {
-                requested.iter().any(|r| {
-                    matches!(
-                        (r, agent),
-                        (AgentArg::Claude, Agent::Claude)
-                            | (AgentArg::Cursor, Agent::Cursor)
-                            | (AgentArg::Vscode, Agent::Vscode)
-                            | (AgentArg::Codex, Agent::Codex)
-                    )
-                })
-            })
-            .collect();
-    }
-    if detected.is_empty() {
-        KNOWN_AGENTS.to_vec()
-    } else {
-        detected.to_vec()
+            .filter(|agent| requested.contains(agent))
+            .collect(),
+        None if detected.is_empty() => KNOWN_AGENTS.to_vec(),
+        None => detected.to_vec(),
     }
 }
 
@@ -310,22 +292,17 @@ mod tests {
 
     #[test]
     fn explicit_agents_win_in_canonical_order() {
-        let chosen = choose_agents(&[AgentArg::Codex, AgentArg::Claude], &[Agent::Vscode]);
+        let chosen = resolve_agents(Some(&[Agent::Codex, Agent::Claude]), &[Agent::Vscode]);
         assert_eq!(chosen, vec![Agent::Claude, Agent::Codex]);
     }
 
     #[test]
-    fn all_expands_to_every_agent() {
-        assert_eq!(choose_agents(&[AgentArg::All], &[]), KNOWN_AGENTS.to_vec());
-    }
-
-    #[test]
-    fn detected_agents_used_when_no_flag() {
-        assert_eq!(choose_agents(&[], &[Agent::Cursor]), vec![Agent::Cursor]);
+    fn detected_agents_used_when_nothing_requested() {
+        assert_eq!(resolve_agents(None, &[Agent::Cursor]), vec![Agent::Cursor]);
     }
 
     #[test]
     fn nothing_detected_configures_all() {
-        assert_eq!(choose_agents(&[], &[]), KNOWN_AGENTS.to_vec());
+        assert_eq!(resolve_agents(None, &[]), KNOWN_AGENTS.to_vec());
     }
 }

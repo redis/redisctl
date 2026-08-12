@@ -102,7 +102,9 @@ fn url_without_a_redis_url_is_a_validation_error() {
         .code(6)
         .stderr(predicate::str::contains(
             "no redis:// or rediss:// URL found",
-        ));
+        ))
+        // The generic file-format tips make no sense for a connection string.
+        .stderr(predicate::str::contains("JSON/YAML").not());
 }
 
 #[test]
