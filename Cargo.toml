@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/redisctl-core",
     "crates/redisctl",
+    "crates/redisctl-init",
     "crates/redisctl-mcp",
 ]
 default-members = [
