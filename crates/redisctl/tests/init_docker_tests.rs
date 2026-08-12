@@ -52,8 +52,9 @@ fn container_running(name: &str) -> Option<bool> {
 #[serial]
 fn full_run_provisions_validates_and_rerun_is_unchanged() {
     let tmp = tempfile::tempdir().unwrap();
+    // Deliberately no manifest: a package.json here would make the run perform a
+    // real npm install, and this suite needs Docker only.
     let (dir, container, _cleanup) = project_dir(tmp.path(), "full");
-    std::fs::write(dir.join("package.json"), r#"{"name":"live-full"}"#).unwrap();
 
     redisctl()
         .current_dir(&dir)
