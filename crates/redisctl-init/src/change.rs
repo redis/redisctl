@@ -8,6 +8,7 @@ pub enum Status {
     Updated,
     Unchanged,
     Kept,
+    Skipped,
     Planned,
 }
 
@@ -18,6 +19,7 @@ impl Status {
             Status::Updated => "updated",
             Status::Unchanged => "unchanged",
             Status::Kept => "kept",
+            Status::Skipped => "skipped",
             Status::Planned => "planned",
         }
     }

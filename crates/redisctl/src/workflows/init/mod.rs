@@ -46,6 +46,7 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
         })?,
         url_input: (!pasted.trim().is_empty()).then_some(pasted),
         agents: requested_agents(&args.agents),
+        install_cli: !args.no_install_cli,
     };
     let plan = engine::plan(&options)?;
 
