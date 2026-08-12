@@ -31,7 +31,10 @@ fn extract_url(pasted: &str) -> Result<Option<String>, RedisCtlError> {
         return Ok(None);
     }
     Err(RedisCtlError::InvalidInput {
-        message: format!("no redis:// or rediss:// URL found in: {}", pasted.trim()),
+        message: format!(
+            "no redis:// or rediss:// URL found in: {}",
+            util::mask_url(pasted.trim())
+        ),
     })
 }
 
@@ -184,5 +187,13 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("no redis:// or rediss:// URL found"), "{msg}");
         assert!(msg.contains("garbage in"), "{msg}");
+    }
+
+    #[test]
+    fn rejected_input_never_echoes_a_credential() {
+        let err = extract_url("redisx://default:secret@host:6379").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("redisx://default:****@host:6379"), "{msg}");
+        assert!(!msg.contains("secret"), "{msg}");
     }
 }

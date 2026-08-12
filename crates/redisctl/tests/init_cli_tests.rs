@@ -104,3 +104,54 @@ fn url_without_a_redis_url_is_a_validation_error() {
             "no redis:// or rediss:// URL found",
         ));
 }
+
+#[test]
+fn rejected_url_input_is_credential_masked_on_stderr() {
+    let dir = tempfile::tempdir().unwrap();
+    redisctl()
+        .current_dir(dir.path())
+        .args(["init", "--url", "redisx://default:s3cret@host:6379"])
+        .assert()
+        .code(6)
+        .stderr(predicate::str::contains("redisx://default:****@host:6379"))
+        .stderr(predicate::str::contains("s3cret").not());
+}
+
+#[test]
+fn rejected_url_input_is_credential_masked_in_the_json_envelope() {
+    let dir = tempfile::tempdir().unwrap();
+    redisctl()
+        .current_dir(dir.path())
+        .args([
+            "init",
+            "-o",
+            "json",
+            "--url",
+            "redisx://default:s3cret@host:6379",
+        ])
+        .assert()
+        .code(6)
+        .stderr(predicate::str::contains("****"))
+        .stderr(predicate::str::contains("s3cret").not());
+}
+
+#[test]
+fn verbatim_unquoted_console_paste_is_accepted() {
+    let dir = tempfile::tempdir().unwrap();
+    // The shell-split form of an unquoted paste: -u must not parse as a redisctl flag.
+    redisctl()
+        .current_dir(dir.path())
+        .args([
+            "init",
+            "redis-cli",
+            "-u",
+            "redis://default:s3cret@host.example:12000",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "redis://default:****@host.example:12000",
+        ))
+        .stdout(predicate::str::contains("via provided URL"))
+        .stdout(predicate::str::contains("s3cret").not());
+}
