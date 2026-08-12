@@ -2919,6 +2919,7 @@ dependencies = [
  "redis-cloud",
  "redis-enterprise",
  "redisctl-core",
+ "redisctl-init",
  "regex",
  "rpassword",
  "serde",
@@ -2968,6 +2969,17 @@ dependencies = [
  "url",
  "urlencoding",
  "wiremock",
+]
+
+[[package]]
+name = "redisctl-init"
+version = "0.11.1"
+dependencies = [
+ "regex",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+ "which 7.0.3",
 ]
 
 [[package]]
