@@ -3,11 +3,14 @@
 use std::path::Path;
 use std::sync::OnceLock;
 
-/// Mask the password in a Redis URL so it never lands in terminal output.
+/// Mask the password in URL-shaped text - deliberately broader than valid redis://
+/// URLs, because rejected input gets echoed in error messages.
 pub fn mask_url(url: &str) -> String {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
-    let re =
-        RE.get_or_init(|| regex::Regex::new(r"(rediss?://[^:@/]*):[^@]*@").expect("static regex"));
+    let re = RE.get_or_init(|| {
+        regex::Regex::new(r#"([A-Za-z][A-Za-z0-9+.-]*://[^:@/\s"']*|[^:@\s/"']+):[^@\s"']+@"#)
+            .expect("static regex")
+    });
     re.replace_all(url, "$1:****@").into_owned()
 }
 
@@ -53,6 +56,26 @@ mod tests {
         assert_eq!(
             mask_url("connect via redis://u:pw@h:1 please"),
             "connect via redis://u:****@h:1 please"
+        );
+    }
+
+    #[test]
+    fn mask_url_masks_unknown_schemes() {
+        assert_eq!(
+            mask_url("redisx://default:secret@host:6379"),
+            "redisx://default:****@host:6379"
+        );
+        assert_eq!(
+            mask_url("https://user:token@example.com/path"),
+            "https://user:****@example.com/path"
+        );
+    }
+
+    #[test]
+    fn mask_url_masks_bare_userinfo_without_a_scheme() {
+        assert_eq!(
+            mask_url("default:secret@host:6379"),
+            "default:****@host:6379"
         );
     }
 }
