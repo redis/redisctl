@@ -173,10 +173,23 @@ pub type Result<T> = std::result::Result<T, RedisCtlError>;
 
 impl From<redisctl_init::InitError> for RedisCtlError {
     fn from(err: redisctl_init::InitError) -> Self {
-        match err {
-            redisctl_init::InitError::NoUrlInInput { .. } => RedisCtlError::InvalidInput {
+        use redisctl_init::InitError;
+        match &err {
+            InitError::NoUrlInInput { .. } => RedisCtlError::InvalidInput {
                 message: err.to_string(),
             },
+            InitError::NotReady { .. } => RedisCtlError::ConnectionError {
+                message: err.to_string(),
+            },
+            InitError::UnreadableFile { rel } | InitError::WriteFailed { rel, .. } => {
+                RedisCtlError::FileError {
+                    path: rel.clone(),
+                    message: err.to_string(),
+                }
+            }
+            InitError::DockerUnavailable
+            | InitError::DockerCommand { .. }
+            | InitError::NoFreePort => RedisCtlError::Other(err.to_string()),
         }
     }
 }
@@ -219,6 +232,14 @@ impl RedisCtlError {
                 suggestions
                     .push("Test connectivity: redisctl profile validate --connect".to_string());
                 suggestions
+            }
+            // `redisctl init` connection failures carry their remedy inline; the
+            // profile-oriented tips below do not apply (no profile is involved).
+            RedisCtlError::ConnectionError { message }
+                if message.contains("remove REDIS_URL from .env")
+                    || message.contains("did not become ready") =>
+            {
+                vec![]
             }
             RedisCtlError::ConnectionError { message }
                 if message.contains("certificate")

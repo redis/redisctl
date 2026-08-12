@@ -11,9 +11,12 @@ description = "Onboarding engine for redisctl init (internal, not published)"
 publish = false
 
 [dependencies]
+chrono = { workspace = true }
+redis = { workspace = true }
 regex = "1.12.2"
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
 which = "7"
 
 [dev-dependencies]
