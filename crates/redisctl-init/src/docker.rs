@@ -64,6 +64,14 @@ impl DatabaseAction {
 
     pub(crate) fn preview(&self) -> Option<Change> {
         match self {
+            DatabaseAction::ExistingEnv {
+                restart: Some(name),
+                ..
+            } => Some(Change::new(
+                format!("docker:{name}"),
+                Status::Planned,
+                "would start existing container",
+            )),
             DatabaseAction::Provided { .. } | DatabaseAction::ExistingEnv { .. } => None,
             DatabaseAction::StartExisting { name, .. } => Some(Change::new(
                 format!("docker:{name}"),
@@ -80,7 +88,7 @@ impl DatabaseAction {
             } => Some(Change::new(
                 format!("docker:{name}"),
                 Status::Planned,
-                format!("would run: docker run -d --name {name} -p {port}:6379 {image}"),
+                format!("would run: docker run -d --name {name} -p 127.0.0.1:{port}:6379 {image}"),
             )),
         }
     }
@@ -135,8 +143,19 @@ fn resolve_image() -> (String, bool) {
     }
 }
 
+/// Probed on loopback and both wildcard families: Docker publishes ports via a
+/// dual-stack [::] listener an IPv4-only probe does not see, while SO_REUSEADDR
+/// (which the std listener sets) lets a wildcard probe succeed over a
+/// loopback-only listener.
+fn port_is_free(port: u16) -> bool {
+    let in_use = |result: std::io::Result<std::net::TcpListener>| matches!(result, Err(e) if e.kind() == std::io::ErrorKind::AddrInUse);
+    !in_use(std::net::TcpListener::bind(("127.0.0.1", port)))
+        && !in_use(std::net::TcpListener::bind(("0.0.0.0", port)))
+        && !in_use(std::net::TcpListener::bind(("::", port)))
+}
+
 fn free_port(start: u16) -> Option<u16> {
-    (start..start + 100).find(|p| std::net::TcpListener::bind(("127.0.0.1", *p)).is_ok())
+    (start..start + 100).find(|p| port_is_free(*p))
 }
 
 /// Probe (read-only) how this project gets its local database.
@@ -192,8 +211,10 @@ pub(crate) async fn apply_database(
             let Some(name) = restart else {
                 return Ok(None);
             };
-            sh("docker", &["start", name]);
-            // Errors are validated (and reported) later.
+            // A failed start must not read as updated; validation reports the truth.
+            if sh("docker", &["start", name]).status != 0 {
+                return Ok(None);
+            }
             let _ = wait_for_ping(url, Duration::from_secs(30)).await;
             Ok(Some(Change::new(
                 format!("docker:{name}"),
@@ -244,7 +265,9 @@ pub(crate) async fn apply_database(
                     "--name",
                     name,
                     "-p",
-                    &format!("{port}:6379"),
+                    // Loopback only: the image runs without authentication, and a
+                    // wildcard bind would expose a writable Redis to the local network.
+                    &format!("127.0.0.1:{port}:6379"),
                     image,
                 ],
             );
@@ -372,6 +395,51 @@ mod tests {
             container_name(Path::new("/tmp/My Demo App")),
             "redis-init-my-demo-app"
         );
+    }
+
+    #[test]
+    fn existing_env_restart_is_previewed() {
+        let action = DatabaseAction::ExistingEnv {
+            url: "redis://localhost:6379".into(),
+            restart: Some("redis-init-x".into()),
+        };
+        let change = action.preview().unwrap();
+        assert_eq!(change.status, Status::Planned);
+        assert!(change.note.contains("would start"), "{}", change.note);
+
+        let no_restart = DatabaseAction::ExistingEnv {
+            url: "redis://h:1".into(),
+            restart: None,
+        };
+        assert!(no_restart.preview().is_none());
+    }
+
+    #[test]
+    fn new_container_preview_binds_loopback() {
+        let action = DatabaseAction::RunNew {
+            name: "redis-init-x".into(),
+            image: "redis:8-alpine".into(),
+            image_local: true,
+            port: 6379,
+            url: "redis://localhost:6379".into(),
+        };
+        let change = action.preview().unwrap();
+        assert!(
+            change.note.contains("-p 127.0.0.1:6379:6379"),
+            "{}",
+            change.note
+        );
+    }
+
+    #[test]
+    fn free_port_sees_a_dual_stack_ipv6_holder() {
+        // Docker Desktop publishes ports on a dual-stack [::] listener; an
+        // IPv4-only probe reads such a port as free and docker run then fails
+        // with "port is already allocated".
+        let listener = std::net::TcpListener::bind(("::", 0)).unwrap();
+        let taken = listener.local_addr().unwrap().port();
+        let free = free_port(taken).unwrap();
+        assert!(free > taken, "picked the ipv6-held port {taken}");
     }
 
     #[test]
