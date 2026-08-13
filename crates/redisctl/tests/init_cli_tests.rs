@@ -22,12 +22,12 @@ fn skills_fixture() -> tempfile::TempDir {
 }
 
 #[test]
-fn init_is_hidden_from_top_level_help() {
+fn init_is_listed_in_top_level_help() {
     redisctl()
         .arg("--help")
         .assert()
         .success()
-        .stdout(predicate::str::contains("init").not());
+        .stdout(predicate::str::contains("init"));
 }
 
 #[test]
@@ -71,6 +71,7 @@ fn dry_run_detects_a_node_project_and_plans_the_env_wiring() {
         .stdout(predicate::str::contains(
             ".agents/skills/redis-project-setup/SKILL.md",
         ))
+        .stdout(predicate::str::contains(".mcp.json"))
         .stdout(predicate::str::contains("Dry run complete"));
     // Nothing written: the manifest is still the only file.
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
@@ -391,6 +392,9 @@ fn an_explicit_checkout_installs_skills_offline() {
     // Absent agent docs stay absent - the skill is the only artifact.
     assert!(!dir.path().join("AGENTS.md").exists());
     assert!(!dir.path().join("CLAUDE.md").exists());
+    let mcp = std::fs::read_to_string(dir.path().join(".mcp.json")).unwrap();
+    assert!(mcp.contains("$REDIS_URL"), "{mcp}");
+    assert!(!mcp.contains("redis://"), "credential-free: {mcp}");
 }
 
 #[test]
