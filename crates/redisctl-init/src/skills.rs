@@ -624,7 +624,7 @@ mod tests {
             global: false,
             repo: Some(repo.path().to_path_buf()),
         };
-        let changes = solo.perform(project.path(), &mut |_| {}).unwrap();
+        let changes = solo.perform(project.path(), &mut |_| {}).unwrap().changes;
         assert_eq!(changes[0].subject, ".claude/skills/redis-basics/");
         assert!(
             project
@@ -633,7 +633,7 @@ mod tests {
                 .exists()
         );
         let rerun = solo.perform(project.path(), &mut |_| {}).unwrap();
-        assert!(rerun.iter().all(|c| c.status == Status::Unchanged));
+        assert!(rerun.changes.iter().all(|c| c.status == Status::Unchanged));
     }
 
     #[test]

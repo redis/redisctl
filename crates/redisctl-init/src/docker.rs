@@ -76,7 +76,8 @@ impl DatabaseAction {
     pub(crate) fn preview(&self) -> Option<Change> {
         match self {
             DatabaseAction::ExistingEnv {
-                restart: Some(name),
+                restart: true,
+                container: Some(name),
                 ..
             } => Some(Change::new(
                 format!("docker:{name}"),
@@ -175,13 +176,14 @@ pub(crate) fn plan_local_database(cwd: &Path) -> Result<DatabaseAction, InitErro
 
     if let Some(url) = read_env_key(cwd, ".env", "REDIS_URL") {
         // Second run typically lands here: revive our container if it is just stopped.
+        // A leftover container only counts when .env still points at it - after a
+        // move to a remote database it must not poison the skill or get restarted.
+        let local = url.contains("localhost") || url.contains("127.0.0.1");
         let info = container_info(&name);
-        let restart = info.as_ref().is_some_and(|info| {
-            !info.running && (url.contains("localhost") || url.contains("127.0.0.1"))
-        });
+        let restart = info.as_ref().is_some_and(|info| !info.running && local);
         return Ok(DatabaseAction::ExistingEnv {
             url,
-            container: info.map(|_| name),
+            container: info.filter(|_| local).map(|_| name),
             restart,
         });
     }
@@ -419,7 +421,8 @@ mod tests {
     fn existing_env_restart_is_previewed() {
         let action = DatabaseAction::ExistingEnv {
             url: "redis://localhost:6379".into(),
-            restart: Some("redis-init-x".into()),
+            container: Some("redis-init-x".into()),
+            restart: true,
         };
         let change = action.preview().unwrap();
         assert_eq!(change.status, Status::Planned);
@@ -427,9 +430,28 @@ mod tests {
 
         let no_restart = DatabaseAction::ExistingEnv {
             url: "redis://h:1".into(),
-            restart: None,
+            container: Some("redis-init-x".into()),
+            restart: false,
         };
         assert!(no_restart.preview().is_none());
+    }
+
+    #[test]
+    fn leftover_container_is_ignored_when_env_points_elsewhere() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".env"),
+            "REDIS_URL=\"rediss://default:x@cloud.example:12000\"\n",
+        )
+        .unwrap();
+        // Whatever containers exist on this machine, a remote URL means none of
+        // them belong to this database.
+        let action = plan_local_database(dir.path()).unwrap();
+        assert_eq!(action.container(), None);
+        assert!(matches!(
+            action,
+            DatabaseAction::ExistingEnv { restart: false, .. }
+        ));
     }
 
     #[test]
