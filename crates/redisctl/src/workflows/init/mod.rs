@@ -135,6 +135,7 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
         for change in plan.changes() {
             println!("{}", output::change_line(&change));
         }
+        uvx_note(&plan);
         println!(
             "{}",
             dim("\nDry run complete. Run again without --dry-run to apply.\n")
@@ -163,6 +164,7 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
     for change in &report.changes {
         println!("{}", output::change_line(change));
     }
+    uvx_note(&plan);
 
     print!("\n{}  ", bold("Validate"));
     let _ = std::io::Write::flush(&mut std::io::stdout());
@@ -194,10 +196,21 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
         _ => "Cache the most expensive read path in Redis with a 60-second TTL.".to_string(),
     };
     println!(
-        "\n{}\n  1. Start your coding agent here ({names}) - it picks up the skills in {}.\n  2. Try asking it: {}\n",
+        "\n{}\n  1. Start your coding agent here ({names}) - it picks up the redis MCP server and the skills in {}.\n  2. Try asking it: {}\n",
         bold("Next steps"),
         report.skills_dir,
         bold(&format!("\"{suggestion}\""))
     );
     Ok(())
+}
+
+fn uvx_note(plan: &engine::Plan) {
+    if plan.mcp_runner_missing() {
+        println!(
+            "{}",
+            yellow(
+                "\n  note: neither uvx nor Docker found - .mcp.json is written for uvx; install uv (https://docs.astral.sh/uv/) to use it."
+            )
+        );
+    }
 }

@@ -9,6 +9,7 @@ mod change;
 mod docker;
 mod env;
 mod install;
+mod mcp;
 mod project;
 mod project_skill;
 mod skills;
@@ -101,6 +102,7 @@ pub struct Plan {
     client: install::InstallAction,
     cli: install::InstallAction,
     skills: skills::SkillsAction,
+    mcp: mcp::McpPlan,
     cwd: PathBuf,
 }
 
@@ -116,6 +118,12 @@ impl Plan {
         self.database.source(applied)
     }
 
+    /// Neither uvx nor Docker can run the MCP server; the configs are still written
+    /// for uvx and the caller should say so.
+    pub fn mcp_runner_missing(&self) -> bool {
+        self.mcp.uvx_missing
+    }
+
     /// The change report this plan predicts, in the order a run reports it.
     pub fn changes(&self) -> Vec<Change> {
         self.database
@@ -128,6 +136,7 @@ impl Plan {
                 self.skills.preview(),
                 project_skill::preview(&self.cwd),
             ])
+            .chain(self.mcp.actions.iter().map(|action| action.preview()))
             .collect()
     }
 }
@@ -169,6 +178,7 @@ pub fn plan(options: &Options) -> Result<Plan, InitError> {
         global: options.skills_global,
         repo: options.skills_repo.clone(),
     };
+    let mcp = mcp::plan_mcp(&options.cwd, &agents)?;
     Ok(Plan {
         project,
         agents,
@@ -178,6 +188,7 @@ pub fn plan(options: &Options) -> Result<Plan, InitError> {
         client,
         cli,
         skills,
+        mcp,
         cwd: options.cwd.clone(),
     })
 }
@@ -228,6 +239,9 @@ pub async fn apply(plan: &Plan, on_event: &mut dyn FnMut(Event)) -> Result<Repor
         plan.agents.contains(&Agent::Claude),
         also_link,
     )?);
+    for action in &plan.mcp.actions {
+        changes.push(action.perform(&plan.cwd)?);
+    }
     Ok(Report {
         changes,
         skills_dir,
