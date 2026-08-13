@@ -5,7 +5,7 @@
 //! rendering. The decisions live in the `redisctl-init` engine crate.
 
 mod output;
-mod wizard;
+pub(crate) mod wizard;
 
 use redisctl_init as engine;
 

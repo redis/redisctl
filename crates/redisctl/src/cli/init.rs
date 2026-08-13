@@ -75,6 +75,7 @@ impl std::fmt::Debug for InitArgs {
             .field("url", &self.url.as_ref().map(|_| "<redacted>"))
             .field("name", &self.name)
             .field("agents", &self.agents)
+            .field("defaults", &self.defaults)
             .field("no_install_cli", &self.no_install_cli)
             .field("skills_repo", &self.skills_repo)
             .field("skills_global", &self.skills_global)
@@ -94,6 +95,7 @@ mod tests {
             url: Some("redis://default:s3cret@h:1".into()),
             name: Some("db".into()),
             agents: vec![AgentArg::Claude],
+            defaults: false,
             no_install_cli: false,
             skills_repo: None,
             skills_global: false,
