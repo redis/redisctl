@@ -7,7 +7,7 @@ use std::path::Path;
 use crate::change::{Change, Status};
 use crate::env::FileAction;
 use crate::project::{Project, Runtime};
-use crate::util::{ending_with_newline, exists, has_bin, read_if, sh};
+use crate::util::{ending_with_newline, exists, has_bin, read_if, sh, sh_in};
 use crate::{Event, InitError};
 
 const CLI_INSTALLER: &str = "https://packages.redis.io/redis-cli/install.sh";
@@ -68,7 +68,7 @@ impl InstallAction {
                     "installing client package ({shown})"
                 )));
                 let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-                let r = sh(cmd, &arg_refs);
+                let r = sh_in(cwd, cmd, &arg_refs);
                 if r.status != 0 {
                     on_event(Event::ProgressDone(" failed".to_string()));
                     return Ok(Change::new(
@@ -273,10 +273,22 @@ fn decide_client(cwd: &Path, project: &Project, has: &dyn Fn(&str) -> bool) -> I
 }
 
 pub(crate) fn plan_redis_cli(install: bool) -> InstallAction {
-    decide_redis_cli(install, &has_bin)
+    let local_bin = std::env::home_dir()
+        .map(|home| home.join(".local/bin/redis-cli").exists())
+        .unwrap_or(false);
+    decide_redis_cli(install, &has_bin, local_bin)
 }
 
-fn decide_redis_cli(install: bool, has: &dyn Fn(&str) -> bool) -> InstallAction {
+fn decide_redis_cli(install: bool, has: &dyn Fn(&str) -> bool, local_bin: bool) -> InstallAction {
+    // The official installer falls back to ~/.local/bin, which is often not on
+    // PATH: without this check every run would re-run curl | sh.
+    if local_bin && !has("redis-cli") {
+        return InstallAction::Report(Change::new(
+            "redis-cli",
+            Status::Unchanged,
+            "already installed to ~/.local/bin - add it to PATH to use it",
+        ));
+    }
     if has("redis-cli") {
         let version = sh("redis-cli", &["--version"])
             .stdout
@@ -474,23 +486,48 @@ mod tests {
         assert_eq!(change.subject, "package.json");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn install_commands_run_in_the_plans_directory_not_the_process_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        let action = InstallAction::Command {
+            cmd: "touch".to_string(),
+            args: vec!["sub/marker".to_string()],
+            file: "package.json",
+            note: "n".to_string(),
+        };
+        // `sub/` exists only inside the plan's cwd: the command succeeds there and
+        // nowhere else.
+        let change = action.perform(dir.path(), &mut |_| {}).unwrap();
+        assert_eq!(change.status, Status::Updated, "{}", change.note);
+        assert!(dir.path().join("sub/marker").exists());
+    }
+
+    #[test]
+    fn local_bin_redis_cli_counts_as_installed() {
+        let change = decide_redis_cli(true, &|_| false, true).preview();
+        assert_eq!(change.status, Status::Unchanged);
+        assert!(change.note.contains("~/.local/bin"), "{}", change.note);
+    }
+
     #[test]
     fn redis_cli_present_reads_unchanged() {
-        let change = decide_redis_cli(true, &|_| true).preview();
+        let change = decide_redis_cli(true, &|_| true, false).preview();
         assert_eq!(change.status, Status::Unchanged);
         assert!(change.note.contains("already on PATH"), "{}", change.note);
     }
 
     #[test]
     fn redis_cli_opt_out_reads_skipped() {
-        let change = decide_redis_cli(false, &|_| false).preview();
+        let change = decide_redis_cli(false, &|_| false, false).preview();
         assert_eq!(change.status, Status::Skipped);
         assert!(change.note.contains("--no-install-cli"), "{}", change.note);
     }
 
     #[test]
     fn redis_cli_missing_plans_the_installer() {
-        let change = decide_redis_cli(true, &|_| false).preview();
+        let change = decide_redis_cli(true, &|_| false, false).preview();
         assert_eq!(change.status, Status::Planned);
         assert!(change.note.contains("packages.redis.io"), "{}", change.note);
     }
