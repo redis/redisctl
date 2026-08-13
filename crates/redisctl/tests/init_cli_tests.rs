@@ -210,12 +210,19 @@ fn a_different_existing_redis_url_is_kept_not_clobbered() {
     std::fs::write(dir.path().join(".env"), "REDIS_URL=\"redis://keep-me:1\"\n").unwrap();
     redisctl()
         .current_dir(dir.path())
-        .args(["init", "--dry-run", "--url", "redis://default:pw@other:2"])
+        .args([
+            "init",
+            "--dry-run",
+            "--url",
+            "redis://default:s3cret@other:2",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("kept"))
         .stdout(predicate::str::contains("left untouched"))
-        .stdout(predicate::str::contains("pw").not());
+        // A short token here once collided with a random tempdir name printed in the
+        // Project line; whole-output negative assertions need collision-proof tokens.
+        .stdout(predicate::str::contains("s3cret").not());
     assert_eq!(
         std::fs::read_to_string(dir.path().join(".env")).unwrap(),
         "REDIS_URL=\"redis://keep-me:1\"\n"
