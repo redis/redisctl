@@ -19,7 +19,8 @@ pub(crate) enum DatabaseAction {
     /// best-effort restart (validation reports the truth either way).
     ExistingEnv {
         url: String,
-        restart: Option<String>,
+        container: Option<String>,
+        restart: bool,
     },
     /// A container from an earlier run exists but is stopped.
     StartExisting { name: String, url: String },
@@ -40,6 +41,16 @@ pub(crate) enum DatabaseAction {
 }
 
 impl DatabaseAction {
+    pub(crate) fn container(&self) -> Option<&str> {
+        match self {
+            DatabaseAction::Provided { .. } => None,
+            DatabaseAction::ExistingEnv { container, .. } => container.as_deref(),
+            DatabaseAction::StartExisting { name, .. }
+            | DatabaseAction::AlreadyRunning { name, .. }
+            | DatabaseAction::RunNew { name, .. } => Some(name),
+        }
+    }
+
     pub(crate) fn url(&self) -> &str {
         match self {
             DatabaseAction::Provided { url }
@@ -94,7 +105,7 @@ impl DatabaseAction {
     }
 }
 
-fn docker_ok() -> bool {
+pub(crate) fn docker_ok() -> bool {
     sh("docker", &["info", "--format", "{{.ServerVersion}}"]).status == 0
 }
 
@@ -164,12 +175,15 @@ pub(crate) fn plan_local_database(cwd: &Path) -> Result<DatabaseAction, InitErro
 
     if let Some(url) = read_env_key(cwd, ".env", "REDIS_URL") {
         // Second run typically lands here: revive our container if it is just stopped.
-        let restart = container_info(&name)
-            .filter(|info| {
-                !info.running && (url.contains("localhost") || url.contains("127.0.0.1"))
-            })
-            .map(|_| name);
-        return Ok(DatabaseAction::ExistingEnv { url, restart });
+        let info = container_info(&name);
+        let restart = info.as_ref().is_some_and(|info| {
+            !info.running && (url.contains("localhost") || url.contains("127.0.0.1"))
+        });
+        return Ok(DatabaseAction::ExistingEnv {
+            url,
+            container: info.map(|_| name),
+            restart,
+        });
     }
 
     if !docker_ok() {
@@ -207,8 +221,12 @@ pub(crate) async fn apply_database(
 ) -> Result<Option<Change>, InitError> {
     match action {
         DatabaseAction::Provided { .. } => Ok(None),
-        DatabaseAction::ExistingEnv { url, restart } => {
-            let Some(name) = restart else {
+        DatabaseAction::ExistingEnv {
+            url,
+            container,
+            restart,
+        } => {
+            let (true, Some(name)) = (*restart, container.as_deref()) else {
                 return Ok(None);
             };
             // A failed start must not read as updated; validation reports the truth.
@@ -460,7 +478,7 @@ mod tests {
         // No local container matches, so nothing restarts.
         assert!(matches!(
             action,
-            DatabaseAction::ExistingEnv { restart: None, .. }
+            DatabaseAction::ExistingEnv { restart: false, .. }
         ));
     }
 }

@@ -10,10 +10,13 @@ mod docker;
 mod env;
 mod install;
 mod project;
+mod project_skill;
 mod skills;
 mod util;
 
 pub use change::{Change, Status};
+
+pub(crate) const SKILLS_DIR: &str = ".agents/skills";
 pub use docker::validate;
 pub use project::{Agent, KNOWN_AGENTS, Project, Runtime};
 pub use util::mask_url;
@@ -68,6 +71,8 @@ pub enum Event {
 #[derive(Debug)]
 pub struct Options {
     pub cwd: PathBuf,
+    /// Database name, recorded in the generated project skill.
+    pub name: Option<String>,
     /// Raw connection input: a URL, or a pasted `redis-cli -u <url>` command.
     /// `None` means no input was given (not blank input).
     pub url_input: Option<String>,
@@ -87,6 +92,7 @@ pub struct Options {
 pub struct Plan {
     pub project: Project,
     pub agents: Vec<Agent>,
+    name: Option<String>,
     database: docker::DatabaseAction,
     file_actions: Vec<env::FileAction>,
     client: install::InstallAction,
@@ -117,6 +123,7 @@ impl Plan {
                 self.client.preview(),
                 self.cli.preview(),
                 self.skills.preview(),
+                project_skill::preview(&self.cwd),
             ])
             .collect()
     }
@@ -126,6 +133,8 @@ impl Plan {
 #[derive(Debug)]
 pub struct Report {
     pub changes: Vec<Change>,
+    /// Where the skills actually landed, for the caller's next-steps epilogue.
+    pub skills_dir: String,
 }
 
 pub fn plan(options: &Options) -> Result<Plan, InitError> {
@@ -160,6 +169,7 @@ pub fn plan(options: &Options) -> Result<Plan, InitError> {
     Ok(Plan {
         project,
         agents,
+        name: options.name.clone(),
         database,
         file_actions,
         client,
@@ -180,10 +190,45 @@ pub async fn apply(plan: &Plan, on_event: &mut dyn FnMut(Event)) -> Result<Repor
     for action in &plan.file_actions {
         changes.push(action.perform(&plan.cwd)?);
     }
-    changes.push(plan.client.perform(&plan.cwd, on_event)?);
+    let client_change = plan.client.perform(&plan.cwd, on_event)?;
+    let client_installed = matches!(client_change.status, Status::Updated | Status::Unchanged);
+    changes.push(client_change);
     changes.push(plan.cli.perform(&plan.cwd, on_event)?);
-    changes.extend(plan.skills.perform(&plan.cwd, on_event)?);
-    Ok(Report { changes })
+
+    let skills = plan.skills.perform(&plan.cwd, on_event)?;
+    let skills_dir = skills
+        .installed_dir
+        .as_ref()
+        .map(|dir| format!("{}/", dir.strip_prefix(&plan.cwd).unwrap_or(dir).display()))
+        .unwrap_or_else(|| skills::describe_target(plan.skills.global));
+    changes.extend(skills.changes);
+
+    let facts = project_skill::SkillFacts {
+        runtime: plan.project.runtime,
+        name: plan.name.as_deref(),
+        container: plan.database.container(),
+        skills: &skills.installed,
+        client_installed,
+        cli_available: util::has_bin("redis-cli"),
+        docker: docker::docker_ok(),
+    };
+    // Checkout-copied skills need links too; a global install lives under $HOME,
+    // where Claude Code's own discovery already reads it.
+    let also_link: &[String] = if !skills.via_npx && !plan.skills.global {
+        &skills.installed
+    } else {
+        &[]
+    };
+    changes.extend(project_skill::generate(
+        &plan.cwd,
+        &facts,
+        plan.agents.contains(&Agent::Claude),
+        also_link,
+    )?);
+    Ok(Report {
+        changes,
+        skills_dir,
+    })
 }
 
 /// What counts as a connection string, wherever one arrives: a flag, a bare
@@ -254,6 +299,7 @@ mod tests {
         std::fs::write(dir.path().join("go.mod"), "module demo\n").unwrap();
         let plan = plan(&Options {
             cwd: dir.path().to_path_buf(),
+            name: None,
             url_input: Some("redis-cli -u redis://h:1".into()),
             agents: Some(vec![Agent::Claude]),
             install_cli: false,
@@ -272,6 +318,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let plan = plan(&Options {
             cwd: dir.path().to_path_buf(),
+            name: None,
             url_input: Some("redis://h:1".into()),
             agents: Some(vec![Agent::Codex]),
             install_cli: false,
@@ -301,7 +348,8 @@ mod tests {
         std::fs::write(skill.join("SKILL.md"), "# basics\n").unwrap();
         let options = |cwd: &std::path::Path| Options {
             cwd: cwd.to_path_buf(),
-            url_input: Some("redis://h:1".into()),
+            name: None,
+            url_input: Some("redis-cli -u redis://h:1".into()),
             agents: Some(vec![Agent::Codex]),
             install_cli: false,
             skills_repo: Some(repo.path().to_path_buf()),
