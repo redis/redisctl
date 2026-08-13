@@ -170,22 +170,28 @@ fn free_port(start: u16) -> Option<u16> {
     (start..start + 100).find(|p| port_is_free(*p))
 }
 
+/// Decide the action for a `.env` that already carries a URL. A leftover container
+/// only counts when the URL still points at it - after a move to a remote database
+/// it must not poison the skill or get restarted. Split from the probe so that gate
+/// is testable without Docker.
+fn decide_existing_env(url: String, name: String, info: Option<ContainerInfo>) -> DatabaseAction {
+    let local = url.contains("localhost") || url.contains("127.0.0.1");
+    let restart = info.as_ref().is_some_and(|info| !info.running && local);
+    DatabaseAction::ExistingEnv {
+        url,
+        container: info.filter(|_| local).map(|_| name),
+        restart,
+    }
+}
+
 /// Probe (read-only) how this project gets its local database.
 pub(crate) fn plan_local_database(cwd: &Path) -> Result<DatabaseAction, InitError> {
     let name = container_name(cwd);
 
     if let Some(url) = read_env_key(cwd, ".env", "REDIS_URL") {
         // Second run typically lands here: revive our container if it is just stopped.
-        // A leftover container only counts when .env still points at it - after a
-        // move to a remote database it must not poison the skill or get restarted.
-        let local = url.contains("localhost") || url.contains("127.0.0.1");
         let info = container_info(&name);
-        let restart = info.as_ref().is_some_and(|info| !info.running && local);
-        return Ok(DatabaseAction::ExistingEnv {
-            url,
-            container: info.filter(|_| local).map(|_| name),
-            restart,
-        });
+        return Ok(decide_existing_env(url, name, info));
     }
 
     if !docker_ok() {
@@ -434,6 +440,38 @@ mod tests {
             restart: false,
         };
         assert!(no_restart.preview().is_none());
+    }
+
+    #[test]
+    fn leftover_container_only_counts_for_a_local_url() {
+        let stopped = || {
+            Some(ContainerInfo {
+                running: false,
+                port: 6379,
+            })
+        };
+
+        let remote = decide_existing_env(
+            "rediss://default:s3cret@cloud.example:12000".into(),
+            "redis-init-x".into(),
+            stopped(),
+        );
+        assert_eq!(remote.container(), None);
+        assert!(matches!(
+            remote,
+            DatabaseAction::ExistingEnv { restart: false, .. }
+        ));
+
+        let local = decide_existing_env(
+            "redis://localhost:6379".into(),
+            "redis-init-x".into(),
+            stopped(),
+        );
+        assert_eq!(local.container(), Some("redis-init-x"));
+        assert!(matches!(
+            local,
+            DatabaseAction::ExistingEnv { restart: true, .. }
+        ));
     }
 
     #[test]
