@@ -58,7 +58,7 @@ impl FileAction {
 /// Read the file for mutation planning. A file that exists but cannot be read
 /// (permissions, non-UTF-8) must not be mistaken for a missing one: overwriting it
 /// would destroy user content.
-fn read_for_planning(dir: &Path, rel: &str) -> Result<Option<String>, InitError> {
+pub(crate) fn read_for_planning(dir: &Path, rel: &str) -> Result<Option<String>, InitError> {
     match read_if(dir, rel) {
         Some(content) => Ok(Some(content)),
         None if dir.join(rel).exists() => Err(InitError::UnreadableFile {
