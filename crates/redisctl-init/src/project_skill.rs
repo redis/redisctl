@@ -292,6 +292,9 @@ mod tests {
         let skills = vec!["redis-core".to_string(), "redis-search".to_string()];
         let text = content(&facts(Some("redis-init-demo"), &skills));
         assert!(text.contains("docker start redis-init-demo"), "{text}");
+        // The connection string lives in .env only; the committed skill never
+        // carries a URL.
+        assert!(!text.contains("redis://"), "{text}");
         assert!(text.contains("redis-core, redis-search"), "{text}");
         assert!(text.contains("createClient({ url: process.env.REDIS_URL })"));
         assert!(text.contains("redis-cli -u \"$REDIS_URL\" PING"));
