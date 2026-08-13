@@ -16,7 +16,7 @@ pub enum AgentArg {
 }
 
 /// Onboard this project to Redis services + set up your AI coding agent.
-#[derive(Args, Debug)]
+#[derive(Args)]
 pub struct InitArgs {
     /// Use an existing redis:// or rediss:// database (default: provision a local
     /// Docker container). Also accepts a pasted Redis Cloud connect command:
@@ -47,4 +47,41 @@ pub struct InitArgs {
         allow_hyphen_values = true
     )]
     pub pasted: Vec<String>,
+}
+
+// Manual, because `{:?}` reaches trace logs: a URL or paste can carry a real
+// password and must never survive into them.
+impl std::fmt::Debug for InitArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InitArgs")
+            .field("url", &self.url.as_ref().map(|_| "<redacted>"))
+            .field("name", &self.name)
+            .field("agents", &self.agents)
+            .field("dry_run", &self.dry_run)
+            .field("pasted", &(!self.pasted.is_empty()).then_some("<redacted>"))
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_never_prints_url_or_paste_content() {
+        let args = InitArgs {
+            url: Some("redis://default:s3cret@h:1".into()),
+            name: Some("db".into()),
+            agents: vec![AgentArg::Claude],
+            dry_run: false,
+            pasted: vec![
+                "redis-cli".into(),
+                "-u".into(),
+                "redis://default:s3cret@h:2".into(),
+            ],
+        };
+        let debug = format!("{args:?}");
+        assert!(!debug.contains("s3cret"), "{debug}");
+        assert!(debug.contains("<redacted>"), "{debug}");
+    }
 }
