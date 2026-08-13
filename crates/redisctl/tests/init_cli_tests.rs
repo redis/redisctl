@@ -458,3 +458,25 @@ fn npx_path_installs_the_official_skills_with_a_lock() {
         .code(10)
         .stdout(predicate::str::contains("unchanged .agents/skills/"));
 }
+
+#[test]
+fn defaults_flag_parses_and_stays_non_interactive() {
+    let dir = tempfile::tempdir().unwrap();
+    redisctl()
+        .current_dir(dir.path())
+        .args([
+            "init",
+            "--defaults",
+            "--dry-run",
+            "--url",
+            "redis://localhost:6379",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Dry run complete"));
+    redisctl()
+        .args(["init", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--defaults"));
+}
