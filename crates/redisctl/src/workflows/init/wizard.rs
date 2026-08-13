@@ -133,8 +133,24 @@ impl Theme for RedisTheme {
         prompt: &str,
         sel: &str,
     ) -> std::fmt::Result {
-        self.format_select_prompt_selection(f, prompt, sel)
+        // The pasted connection string carries a password; the confirmation line
+        // must not reprint it.
+        self.format_select_prompt_selection(f, prompt, &engine::mask_url(sel))
     }
+}
+
+const DATABASE_PROMPT: &str = "Where should the database come from?";
+const AGENTS_PROMPT: &str = "Which agent(s) should be configured?";
+const SKILLS_PROMPT: &str = "Where should the Redis skills be installed?";
+const INTERRUPTED: &str = "interrupted";
+
+/// Cancel tips are picked by prompt (see `error.rs`): the wizard's questions get
+/// `--defaults` guidance, while confirmation prompts elsewhere keep `--force`.
+pub(crate) fn is_wizard_prompt(prompt: &str) -> bool {
+    matches!(
+        prompt,
+        DATABASE_PROMPT | AGENTS_PROMPT | SKILLS_PROMPT | INTERRUPTED
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,7 +197,7 @@ fn prompt_failed(e: dialoguer::Error) -> RedisCtlError {
     let dialoguer::Error::IO(io) = e;
     if io.kind() == std::io::ErrorKind::Interrupted {
         RedisCtlError::Cancelled {
-            prompt: "interrupted".to_string(),
+            prompt: INTERRUPTED.to_string(),
         }
     } else {
         RedisCtlError::Other(format!("prompt failed: {io}"))
@@ -206,7 +222,7 @@ pub fn run(
 
 /// `Ok(None)` means the local Docker default; a paste comes back as the URL.
 fn ask_database(docker: bool) -> Result<Option<String>, RedisCtlError> {
-    const PROMPT: &str = "Where should the database come from?";
+    const PROMPT: &str = DATABASE_PROMPT;
     // An option that cannot work stays on the list carrying the reason - the same
     // information the error would deliver after the run, shown before it instead.
     let docker_item = if docker {
@@ -246,7 +262,7 @@ fn ask_database(docker: bool) -> Result<Option<String>, RedisCtlError> {
 /// Detection preselects, it does not decide: having Cursor installed is not consent
 /// to write .cursor/mcp.json into this repo.
 fn ask_agents(detected: &[engine::Agent]) -> Result<Vec<engine::Agent>, RedisCtlError> {
-    const PROMPT: &str = "Which agent(s) should be configured?";
+    const PROMPT: &str = AGENTS_PROMPT;
     const LABELS: [&str; 4] = ["Claude Code", "Cursor", "VS Code", "Codex"];
     let preselected: Vec<bool> = engine::KNOWN_AGENTS
         .iter()
@@ -273,7 +289,7 @@ fn ask_agents(detected: &[engine::Agent]) -> Result<Vec<engine::Agent>, RedisCtl
 }
 
 fn ask_skills_scope() -> Result<bool, RedisCtlError> {
-    const PROMPT: &str = "Where should the Redis skills be installed?";
+    const PROMPT: &str = SKILLS_PROMPT;
     let selection = Select::with_theme(&RedisTheme)
         .with_prompt(PROMPT)
         .items(&[
@@ -345,9 +361,58 @@ mod tests {
     }
 
     #[test]
-    fn piped_stdin_never_prompts() {
-        // Tests run with piped stdin, so this exercises the real guard.
-        let pending = pending_questions(&args(), false);
-        assert!(!applies(&args(), &pending));
+    fn wizard_cancel_tips_never_hijack_destructive_confirmations() {
+        use crate::error::RedisCtlError;
+        let wizard = RedisCtlError::Cancelled {
+            prompt: DATABASE_PROMPT.to_string(),
+        };
+        assert!(
+            wizard
+                .suggestions()
+                .iter()
+                .any(|t| t.contains("--defaults"))
+        );
+
+        let destructive = RedisCtlError::Cancelled {
+            prompt: "Delete user 5?".to_string(),
+        };
+        assert!(
+            destructive
+                .suggestions()
+                .iter()
+                .any(|t| t.contains("--force")),
+            "{:?}",
+            destructive.suggestions()
+        );
+    }
+
+    #[test]
+    fn defaults_flag_disables_the_wizard() {
+        let mut a = args();
+        a.defaults = true;
+        let pending = pending_questions(&a, false);
+        assert!(!applies(&a, &pending));
+    }
+
+    #[test]
+    fn nothing_pending_disables_the_wizard() {
+        assert!(!applies(&args(), &[]));
+    }
+
+    #[test]
+    fn pasted_url_confirmation_is_masked() {
+        let mut rendered = String::new();
+        RedisTheme
+            .format_input_prompt_selection(
+                &mut rendered,
+                "Paste the connection string",
+                "redis://default:s3cret@host:6379",
+            )
+            .unwrap();
+        assert!(
+            rendered.contains("redis://default:****@host:6379"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("s3cret"), "{rendered}");
     }
 }

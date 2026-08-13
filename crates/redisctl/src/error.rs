@@ -321,6 +321,16 @@ impl RedisCtlError {
                 "Verify file permissions are correct".to_string(),
                 "Ensure file path is correct (use absolute path if needed)".to_string(),
             ],
+            // The init wizard has no --force; the wizard itself decides which
+            // prompts are its own, so destructive confirmations keep their tip.
+            RedisCtlError::Cancelled { prompt }
+                if crate::workflows::init::wizard::is_wizard_prompt(prompt) =>
+            {
+                vec![
+                    "Re-run with --defaults to take the defaults without prompts".to_string(),
+                    "Flags answer questions up front: --url, --agent, --skills-global".to_string(),
+                ]
+            }
             RedisCtlError::Cancelled { .. } => vec![
                 "Re-run with --force to skip the confirmation prompt".to_string(),
                 "Confirmation prompts require an interactive terminal".to_string(),
