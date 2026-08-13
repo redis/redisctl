@@ -5,6 +5,7 @@
 //! rendering. The decisions live in the `redisctl-init` engine crate.
 
 mod output;
+mod wizard;
 
 use redisctl_init as engine;
 
@@ -39,19 +40,24 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
         .chain(args.pasted.iter().cloned())
         .collect::<Vec<_>>()
         .join(" ");
-    let options = engine::Options {
-        cwd: std::env::current_dir().map_err(|e| RedisCtlError::FileError {
-            path: ".".into(),
-            message: e.to_string(),
-        })?,
+    // Validated before the banner: a rejected --url should not decorate first.
+    let url_input = match pasted.trim().is_empty() {
+        true => None,
+        false => Some(engine::extract_url(&pasted)?),
+    };
+    let cwd = std::env::current_dir().map_err(|e| RedisCtlError::FileError {
+        path: ".".into(),
+        message: e.to_string(),
+    })?;
+    let mut options = engine::Options {
+        cwd: cwd.clone(),
         name: args.name.clone(),
-        url_input: (!pasted.trim().is_empty()).then_some(pasted),
+        url_input,
         agents: requested_agents(&args.agents),
         install_cli: !args.no_install_cli,
         skills_repo: args.skills_repo.clone(),
         skills_global: args.skills_global,
     };
-    let plan = engine::plan(&options)?;
 
     output::banner();
     let dry = args.dry_run;
@@ -67,21 +73,43 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
         ))
     );
 
-    let proj = &plan.project;
-    let mut descriptor = proj.runtime.as_str().to_string();
-    if let Some(pm) = proj.pm {
+    let project = engine::detect_project(&cwd);
+    let mut descriptor = project.runtime.as_str().to_string();
+    if let Some(pm) = project.pm {
         descriptor.push_str(&format!(", {pm}"));
     }
-    if let Some(framework) = &proj.framework {
+    if let Some(framework) = &project.framework {
         descriptor.push_str(&format!(", {framework}"));
     }
     println!(
         "{}   {} {}",
         bold("Project"),
-        proj.name,
+        project.name,
         dim(&format!("({descriptor})"))
     );
 
+    let pending = wizard::pending_questions(args, options.url_input.is_some());
+    let mut asked_agents = false;
+    if wizard::applies(args, &pending) {
+        let answers = wizard::run(
+            &pending,
+            &engine::detect_agents(&cwd),
+            engine::docker_available(),
+        )?;
+        if let Some(url) = answers.url {
+            options.url_input = Some(url);
+        }
+        if let Some(agents) = answers.agents {
+            options.agents = Some(agents);
+            asked_agents = true;
+        }
+        if let Some(global) = answers.skills_global {
+            options.skills_global = global;
+        }
+    }
+    let plan = engine::plan(&options)?;
+
+    let proj = &plan.project;
     let agent_bits = proj
         .agent_markers
         .iter()
@@ -98,7 +126,7 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
         "{}    {}{}   {}\n",
         bold("Agents"),
         names,
-        if args.agents.is_empty() {
+        if args.agents.is_empty() && !asked_agents {
             dim(" (detected)")
         } else {
             String::new()
