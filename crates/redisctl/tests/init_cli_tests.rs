@@ -68,6 +68,9 @@ fn dry_run_detects_a_node_project_and_plans_the_env_wiring() {
         .stdout(predicate::str::contains("Plan"))
         .stdout(predicate::str::contains("created   .env"))
         .stdout(predicate::str::contains(".gitignore"))
+        .stdout(predicate::str::contains(
+            ".agents/skills/redis-project-setup/SKILL.md",
+        ))
         .stdout(predicate::str::contains("Dry run complete"));
     // Nothing written: the manifest is still the only file.
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
@@ -353,16 +356,70 @@ fn an_explicit_checkout_installs_skills_offline() {
             "init",
             "--url",
             "redis://127.0.0.1:9",
+            "--agent",
+            "claude,codex",
             "--skills-repo",
             repo.path().to_str().unwrap(),
         ])
         .assert()
         .code(10)
-        .stdout(predicate::str::contains(".agents/skills/redis-basics/"));
+        .stdout(predicate::str::contains(".agents/skills/redis-basics/"))
+        .stdout(predicate::str::contains(
+            ".agents/skills/redis-project-setup/SKILL.md",
+        ))
+        .stdout(predicate::str::contains(
+            ".claude/skills/redis-project-setup",
+        ))
+        // Checkout copies place no symlinks themselves, so the copied skill gets one.
+        .stdout(predicate::str::contains(".claude/skills/redis-basics"));
     assert!(
         dir.path()
             .join(".agents/skills/redis-basics/SKILL.md")
             .exists()
+    );
+    let skill = std::fs::read_to_string(
+        dir.path()
+            .join(".agents/skills/redis-project-setup/SKILL.md"),
+    )
+    .unwrap();
+    assert!(skill.contains("redis-basics"), "{skill}");
+    assert!(
+        skill.contains("(external, e.g. Redis Cloud)") || skill.contains("external (not managed"),
+        "{skill}"
+    );
+}
+
+#[test]
+fn preexisting_agents_and_claude_md_stay_byte_identical() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = skills_fixture();
+    std::fs::write(
+        dir.path().join("CLAUDE.md"),
+        "mine
+",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("AGENTS.md"),
+        "also mine
+",
+    )
+    .unwrap();
+    redisctl()
+        .current_dir(dir.path())
+        .env("REDISCTL_INIT_SKILLS_REPO", repo.path())
+        .args(["init", "--url", "redis://127.0.0.1:9", "--no-install-cli"])
+        .assert()
+        .code(10);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(),
+        "mine
+"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap(),
+        "also mine
+"
     );
 }
 
