@@ -60,7 +60,14 @@ fn dry_run_detects_a_node_project_and_plans_the_env_wiring() {
     .unwrap();
     redisctl()
         .current_dir(dir.path())
-        .args(["init", "--dry-run", "--url", "redis://localhost:6379"])
+        .args([
+            "init",
+            "--dry-run",
+            "--url",
+            "redis://localhost:6379",
+            "--agent",
+            "claude",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("demo-shop"))

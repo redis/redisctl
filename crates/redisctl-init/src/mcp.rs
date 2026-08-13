@@ -22,9 +22,12 @@ enum Runner {
 
 fn server_entry(runner: &Runner) -> serde_json::Value {
     let inner = match runner {
-        // Inside the container, localhost is the container itself.
+        // Inside the container, localhost is the container itself. The add-host
+        // mapping defines host.docker.internal on Linux Engine (Docker Desktop has
+        // it built in), and the rewrites anchor on :// so a password or a
+        // foo.localhost host can never be rewritten.
         Runner::Docker => {
-            r#"exec docker run --rm -i mcp/redis --url "$(printf %s "$REDIS_URL" | sed -e 's/localhost/host.docker.internal/' -e 's/127\.0\.0\.1/host.docker.internal/')""#
+            r#"exec docker run --rm -i --add-host=host.docker.internal:host-gateway mcp/redis --url "$(printf %s "$REDIS_URL" | sed -e 's|://localhost|://host.docker.internal|' -e 's|://127\.0\.0\.1|://host.docker.internal|')""#
         }
         _ => r#"exec uvx --from redis-mcp-server@latest redis-mcp-server --url "$REDIS_URL""#,
     };
@@ -210,6 +213,18 @@ mod tests {
         )
         .unwrap();
         assert_eq!(vscode["servers"]["redis"]["type"], "stdio");
+    }
+
+    #[test]
+    fn docker_launcher_defines_the_host_alias_and_anchors_rewrites() {
+        let entry = server_entry(&Runner::Docker);
+        let launcher = entry["args"][1].as_str().unwrap();
+        assert!(
+            launcher.contains("--add-host=host.docker.internal:host-gateway"),
+            "{launcher}"
+        );
+        assert!(launcher.contains("://localhost"), "{launcher}");
+        assert!(!launcher.contains("s/localhost/"), "{launcher}");
     }
 
     #[test]

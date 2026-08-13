@@ -27,8 +27,12 @@ redisctl init              # apply it
    per agent config.
 5. **Proves it works**: a live PING and SET/GET round trip.
 
-Re-running is safe: every line reports `unchanged` the second time, and nothing is
-ever overwritten - existing values are reported `kept`.
+Re-running is safe: every line reports `unchanged` the second time. Env values,
+`.gitignore` entries, and skill files are never overwritten - existing values are
+reported `kept`. The one deliberate exception: a `redis` entry in an agent's MCP
+config that differs from the generated launcher is replaced (reported `updated`,
+with the old command masked in the note); other MCP servers in the file survive
+untouched.
 
 ## Options
 
