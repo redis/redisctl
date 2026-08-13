@@ -215,7 +215,7 @@ pub(crate) async fn apply_database(
             if sh("docker", &["start", name]).status != 0 {
                 return Ok(None);
             }
-            let _ = wait_for_ping(url, Duration::from_secs(30)).await;
+            wait_for_ping(url, Duration::from_secs(30)).await?;
             Ok(Some(Change::new(
                 format!("docker:{name}"),
                 Status::Updated,
