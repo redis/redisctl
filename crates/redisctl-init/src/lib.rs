@@ -10,6 +10,7 @@ mod docker;
 mod env;
 mod install;
 mod project;
+mod skills;
 mod util;
 
 pub use change::{Change, Status};
@@ -59,6 +60,8 @@ pub enum Event {
     ProgressDone(String),
     /// A one-off informational line.
     Note(String),
+    /// A caution the caller should make visually distinct.
+    Warning(String),
 }
 
 /// What the caller asked for, resolved from its own surface (flags, prompts, tools).
@@ -72,6 +75,10 @@ pub struct Options {
     pub agents: Option<Vec<Agent>>,
     /// Install redis-cli when it is missing (`--no-install-cli` turns this off).
     pub install_cli: bool,
+    /// A local redis/agent-skills checkout to copy from instead of the skills CLI.
+    pub skills_repo: Option<PathBuf>,
+    /// Install the official skills for the user instead of into this project.
+    pub skills_global: bool,
 }
 
 /// What a run works with: the facts detected, the database it targets, and the
@@ -84,6 +91,7 @@ pub struct Plan {
     file_actions: Vec<env::FileAction>,
     client: install::InstallAction,
     cli: install::InstallAction,
+    skills: skills::SkillsAction,
     cwd: PathBuf,
 }
 
@@ -105,7 +113,11 @@ impl Plan {
             .preview()
             .into_iter()
             .chain(self.file_actions.iter().map(|action| action.preview()))
-            .chain([self.client.preview(), self.cli.preview()])
+            .chain([
+                self.client.preview(),
+                self.cli.preview(),
+                self.skills.preview(),
+            ])
             .collect()
     }
 }
@@ -140,6 +152,11 @@ pub fn plan(options: &Options) -> Result<Plan, InitError> {
     ];
     let client = install::plan_client_install(&options.cwd, &project);
     let cli = install::plan_redis_cli(options.install_cli);
+    let skills = skills::SkillsAction {
+        agents: agents.clone(),
+        global: options.skills_global,
+        repo: options.skills_repo.clone(),
+    };
     Ok(Plan {
         project,
         agents,
@@ -147,6 +164,7 @@ pub fn plan(options: &Options) -> Result<Plan, InitError> {
         file_actions,
         client,
         cli,
+        skills,
         cwd: options.cwd.clone(),
     })
 }
@@ -164,6 +182,7 @@ pub async fn apply(plan: &Plan, on_event: &mut dyn FnMut(Event)) -> Result<Repor
     }
     changes.push(plan.client.perform(&plan.cwd, on_event)?);
     changes.push(plan.cli.perform(&plan.cwd, on_event)?);
+    changes.extend(plan.skills.perform(&plan.cwd, on_event)?);
     Ok(Report { changes })
 }
 
@@ -238,6 +257,8 @@ mod tests {
             url_input: Some("redis-cli -u redis://h:1".into()),
             agents: Some(vec![Agent::Claude]),
             install_cli: false,
+            skills_repo: None,
+            skills_global: false,
         })
         .unwrap();
         assert_eq!(plan.project.runtime, Runtime::Go);
@@ -254,6 +275,8 @@ mod tests {
             url_input: Some("redis://h:1".into()),
             agents: Some(vec![Agent::Codex]),
             install_cli: false,
+            skills_repo: None,
+            skills_global: false,
         })
         .unwrap();
         let changes = plan.changes();
@@ -271,13 +294,20 @@ mod tests {
     #[tokio::test]
     async fn apply_writes_what_the_plan_predicted() {
         let dir = tempfile::tempdir().unwrap();
-        let plan = plan(&Options {
-            cwd: dir.path().to_path_buf(),
+        // A fixture checkout keeps the skills step offline.
+        let repo = tempfile::tempdir().unwrap();
+        let skill = repo.path().join("skills/redis-basics");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(skill.join("SKILL.md"), "# basics\n").unwrap();
+        let options = |cwd: &std::path::Path| Options {
+            cwd: cwd.to_path_buf(),
             url_input: Some("redis://h:1".into()),
             agents: Some(vec![Agent::Codex]),
             install_cli: false,
-        })
-        .unwrap();
+            skills_repo: Some(repo.path().to_path_buf()),
+            skills_global: false,
+        };
+        let plan = plan(&options(dir.path())).unwrap();
         let report = apply(&plan, &mut |_| {}).await.unwrap();
         let env = std::fs::read_to_string(dir.path().join(".env")).unwrap();
         assert!(env.contains("REDIS_URL=\"redis://h:1\""), "{env}");
@@ -291,25 +321,24 @@ mod tests {
                 .unwrap()
                 .contains(".env")
         );
-        assert!(report.changes.len() >= 5, "{:?}", report.changes);
+        assert!(
+            dir.path()
+                .join(".agents/skills/redis-basics/SKILL.md")
+                .exists()
+        );
+        assert!(report.changes.len() >= 6, "{:?}", report.changes);
 
         // A second plan over the applied state reads the file contract back as
-        // all-unchanged (install lines depend on the machine, files must not).
-        let replan = super::plan(&Options {
-            cwd: dir.path().to_path_buf(),
-            url_input: Some("redis://h:1".into()),
-            agents: Some(vec![Agent::Codex]),
-            install_cli: false,
-        })
-        .unwrap();
-        assert!(
-            replan
+        // all-unchanged (install and skills lines depend on machine state, the
+        // files must not).
+        let replan = super::plan(&options(dir.path())).unwrap();
+        for subject in [".env", ".env.example", ".gitignore"] {
+            let change = replan
                 .changes()
-                .iter()
-                .filter(|c| c.subject.starts_with('.'))
-                .all(|c| c.status == Status::Unchanged),
-            "{:?}",
-            replan.changes()
-        );
+                .into_iter()
+                .find(|c| c.subject == subject)
+                .unwrap();
+            assert_eq!(change.status, Status::Unchanged, "{subject}");
+        }
     }
 }
