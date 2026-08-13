@@ -70,11 +70,12 @@ fn full_run_provisions_validates_and_rerun_is_unchanged() {
     redisctl()
         .current_dir(&dir)
         .env("REDISCTL_INIT_SKILLS_REPO", repo.path())
-        .args(["init", "--no-install-cli"])
+        .args(["init", "--no-install-cli", "--agent", "claude"])
         .assert()
         .success()
         .stdout(predicate::str::contains(&container))
-        .stdout(predicate::str::contains(".agents/skills/redis-basics/"))
+        // Solo-Claude checkout copies land in Claude's own skills dir.
+        .stdout(predicate::str::contains(".claude/skills/redis-basics/"))
         .stdout(predicate::str::contains(
             ".agents/skills/redis-project-setup/SKILL.md",
         ))
@@ -92,7 +93,7 @@ fn full_run_provisions_validates_and_rerun_is_unchanged() {
     redisctl()
         .current_dir(&dir)
         .env("REDISCTL_INIT_SKILLS_REPO", repo.path())
-        .args(["init", "--no-install-cli"])
+        .args(["init", "--no-install-cli", "--agent", "claude"])
         .assert()
         .success()
         .stdout(predicate::str::contains("unchanged .env"))
