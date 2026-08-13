@@ -387,6 +387,10 @@ fn an_explicit_checkout_installs_skills_offline() {
         skill.contains("(external, e.g. Redis Cloud)") || skill.contains("external (not managed"),
         "{skill}"
     );
+    assert!(!skill.contains("redis://"), "no URL in the skill: {skill}");
+    // Absent agent docs stay absent - the skill is the only artifact.
+    assert!(!dir.path().join("AGENTS.md").exists());
+    assert!(!dir.path().join("CLAUDE.md").exists());
 }
 
 #[test]
