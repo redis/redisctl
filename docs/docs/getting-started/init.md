@@ -44,6 +44,7 @@ untouched.
 | `--no-install-cli` | skip installing redis-cli when it is missing |
 | `--skills-repo <dir>` | copy skills from a local redis/agent-skills checkout (offline-safe) |
 | `--skills-global` | install the official skills for your user instead of this project |
+| `--defaults` | take the defaults instead of asking; piped stdin never prompts either |
 | `--dry-run` | print the full plan, write nothing |
 
 ## Credentials
