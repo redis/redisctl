@@ -107,6 +107,55 @@ fn stopped_container_is_restarted() {
 #[test]
 #[ignore = "requires Docker"]
 #[serial]
+fn restart_that_never_serves_redis_fails_instead_of_reporting_updated() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (dir, container, _cleanup) = project_dir(tmp.path(), "dead");
+
+    // A stopped container that starts fine but never serves Redis: the image's
+    // entrypoint runs `sleep` instead of redis-server.
+    let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let out = std::process::Command::new("docker")
+        .args([
+            "create",
+            "--name",
+            &container,
+            "-p",
+            &format!("127.0.0.1:{port}:6379"),
+            "redis:8-alpine",
+            "sleep",
+            "300",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::fs::write(
+        dir.join(".env"),
+        format!("REDIS_URL=\"redis://localhost:{port}\"\n"),
+    )
+    .unwrap();
+
+    redisctl()
+        .current_dir(&dir)
+        .arg("init")
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("restarted stopped container").not())
+        .stderr(predicate::str::contains("did not become ready"));
+    // The start itself succeeded; the failure is Redis never answering.
+    assert_eq!(container_running(&container), Some(true));
+}
+
+#[test]
+#[ignore = "requires Docker"]
+#[serial]
 fn dry_run_plans_the_container_and_writes_nothing() {
     let tmp = tempfile::tempdir().unwrap();
     let (dir, container, _cleanup) = project_dir(tmp.path(), "dry");
