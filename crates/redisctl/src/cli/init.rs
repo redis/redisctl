@@ -33,6 +33,11 @@ pub struct InitArgs {
     #[arg(long = "agent", value_enum, value_delimiter = ',', value_name = "NAME")]
     pub agents: Vec<AgentArg>,
 
+    /// Take the defaults instead of asking; the wizard only runs on a terminal,
+    /// so piped stdin never prompts either
+    #[arg(long)]
+    pub defaults: bool,
+
     /// Skip installing redis-cli when it is missing
     #[arg(long = "no-install-cli")]
     pub no_install_cli: bool,
