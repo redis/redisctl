@@ -4,11 +4,138 @@
 
 use std::io::IsTerminal;
 
+use dialoguer::console::Style;
+use dialoguer::theme::Theme;
 use dialoguer::{Input, MultiSelect, Select};
 use redisctl_init as engine;
 
 use crate::cli::InitArgs;
 use crate::error::RedisCtlError;
+
+/// A clack-style rail in brand red: `│` down the side, `◆` while a question is
+/// live, `◇` once answered. The colour index matches the banner's 256-colour
+/// fallback tone.
+struct RedisTheme;
+
+fn brand() -> Style {
+    Style::new().color256(203)
+}
+
+impl Theme for RedisTheme {
+    fn format_prompt(&self, f: &mut dyn std::fmt::Write, prompt: &str) -> std::fmt::Result {
+        write!(
+            f,
+            "{}  {}",
+            brand().apply_to('◆'),
+            Style::new().bold().apply_to(prompt)
+        )
+    }
+
+    fn format_error(&self, f: &mut dyn std::fmt::Write, err: &str) -> std::fmt::Result {
+        write!(
+            f,
+            "{}  {}",
+            brand().apply_to('└'),
+            Style::new().red().apply_to(err)
+        )
+    }
+
+    fn format_select_prompt_item(
+        &self,
+        f: &mut dyn std::fmt::Write,
+        text: &str,
+        active: bool,
+    ) -> std::fmt::Result {
+        let mark = if active {
+            brand().apply_to('●').to_string()
+        } else {
+            Style::new().dim().apply_to('○').to_string()
+        };
+        let label = if active {
+            text.to_string()
+        } else {
+            Style::new().dim().apply_to(text).to_string()
+        };
+        write!(f, "{}  {mark} {label}", brand().apply_to('│'))
+    }
+
+    fn format_multi_select_prompt_item(
+        &self,
+        f: &mut dyn std::fmt::Write,
+        text: &str,
+        checked: bool,
+        active: bool,
+    ) -> std::fmt::Result {
+        let mark = if checked {
+            brand().apply_to('■').to_string()
+        } else {
+            Style::new().dim().apply_to('□').to_string()
+        };
+        let label = if active {
+            text.to_string()
+        } else {
+            Style::new().dim().apply_to(text).to_string()
+        };
+        write!(f, "{}  {mark} {label}", brand().apply_to('│'))
+    }
+
+    fn format_select_prompt_selection(
+        &self,
+        f: &mut dyn std::fmt::Write,
+        prompt: &str,
+        sel: &str,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "{}  {}\n{}  {}",
+            brand().apply_to('◇'),
+            Style::new().bold().apply_to(prompt),
+            brand().apply_to('│'),
+            Style::new().dim().apply_to(sel)
+        )
+    }
+
+    fn format_multi_select_prompt_selection(
+        &self,
+        f: &mut dyn std::fmt::Write,
+        prompt: &str,
+        selections: &[&str],
+    ) -> std::fmt::Result {
+        self.format_select_prompt_selection(f, prompt, &selections.join(", "))
+    }
+
+    fn format_input_prompt(
+        &self,
+        f: &mut dyn std::fmt::Write,
+        prompt: &str,
+        default: Option<&str>,
+    ) -> std::fmt::Result {
+        match default {
+            Some(default) => write!(
+                f,
+                "{}  {} {}",
+                brand().apply_to('◆'),
+                Style::new().bold().apply_to(prompt),
+                Style::new().dim().apply_to(format!("[{default}]"))
+            ),
+            None => write!(
+                f,
+                "{}  {}",
+                brand().apply_to('◆'),
+                Style::new().bold().apply_to(prompt)
+            ),
+        }
+    }
+
+    fn format_input_prompt_selection(
+        &self,
+        f: &mut dyn std::fmt::Write,
+        prompt: &str,
+        sel: &str,
+    ) -> std::fmt::Result {
+        self.format_select_prompt_selection(f, prompt, sel)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Question {
@@ -89,7 +216,7 @@ fn ask_database(docker: bool) -> Result<Option<String>, RedisCtlError> {
     };
     let items = [docker_item, "Paste a connection string"];
     loop {
-        let selection = Select::new()
+        let selection = Select::with_theme(&RedisTheme)
             .with_prompt(PROMPT)
             .items(&items)
             .default(if docker { 0 } else { 1 })
@@ -104,7 +231,7 @@ fn ask_database(docker: bool) -> Result<Option<String>, RedisCtlError> {
             _ => break,
         }
     }
-    let pasted: String = Input::new()
+    let pasted: String = Input::with_theme(&RedisTheme)
         .with_prompt("Paste the connection string")
         .validate_with(|input: &String| {
             engine::extract_url(input)
@@ -126,7 +253,7 @@ fn ask_agents(detected: &[engine::Agent]) -> Result<Vec<engine::Agent>, RedisCtl
         .map(|agent| detected.contains(agent))
         .collect();
     loop {
-        let picks = MultiSelect::new()
+        let picks = MultiSelect::with_theme(&RedisTheme)
             .with_prompt(format!("{PROMPT} (space toggles, enter confirms)"))
             .items(&LABELS)
             .defaults(&preselected)
@@ -147,7 +274,7 @@ fn ask_agents(detected: &[engine::Agent]) -> Result<Vec<engine::Agent>, RedisCtl
 
 fn ask_skills_scope() -> Result<bool, RedisCtlError> {
     const PROMPT: &str = "Where should the Redis skills be installed?";
-    let selection = Select::new()
+    let selection = Select::with_theme(&RedisTheme)
         .with_prompt(PROMPT)
         .items(&[
             "This project only (.agents/skills)",
