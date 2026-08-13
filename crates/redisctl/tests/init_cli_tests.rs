@@ -11,6 +11,16 @@ fn redisctl() -> Command {
     Command::cargo_bin("redisctl").unwrap()
 }
 
+/// A fake redis/agent-skills checkout, so non-dry runs never reach npx or the
+/// network for the skills step.
+fn skills_fixture() -> tempfile::TempDir {
+    let repo = tempfile::tempdir().unwrap();
+    let skill = repo.path().join("skills/redis-basics");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(skill.join("SKILL.md"), "# basics\n").unwrap();
+    repo
+}
+
 #[test]
 fn init_is_hidden_from_top_level_help() {
     redisctl()
@@ -144,11 +154,13 @@ fn rejected_url_input_is_credential_masked_in_the_json_envelope() {
 #[test]
 fn verbatim_unquoted_console_paste_is_accepted() {
     let dir = tempfile::tempdir().unwrap();
+    let repo = skills_fixture();
     // The shell-split form of an unquoted paste: -u must not parse as a redisctl
     // flag. The URL points at a refused loopback port, so the run proceeds past
     // parsing, writes the contract, and fails at validation - proving both halves.
     redisctl()
         .current_dir(dir.path())
+        .env("REDISCTL_INIT_SKILLS_REPO", repo.path())
         .args([
             "init",
             "redis-cli",
@@ -167,8 +179,10 @@ fn verbatim_unquoted_console_paste_is_accepted() {
 #[test]
 fn dead_url_writes_env_then_fails_validation_with_the_stale_hint() {
     let dir = tempfile::tempdir().unwrap();
+    let repo = skills_fixture();
     redisctl()
         .current_dir(dir.path())
+        .env("REDISCTL_INIT_SKILLS_REPO", repo.path())
         .args(["init", "--url", "redis://127.0.0.1:9"])
         .assert()
         .code(10)
@@ -267,4 +281,69 @@ fn no_install_cli_is_respected() {
         // installer under --no-install-cli.
         .stdout(predicate::str::contains("would install via").not())
         .stdout(predicate::str::contains("redis-cli"));
+}
+
+#[test]
+fn dry_run_plans_the_standard_skills_install() {
+    let dir = tempfile::tempdir().unwrap();
+    redisctl()
+        .current_dir(dir.path())
+        .args([
+            "init",
+            "--dry-run",
+            "--url",
+            "redis://localhost:6379",
+            "--agent",
+            "claude,codex",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "would run: npx -y skills add redis/agent-skills -s * -a claude-code -a codex -y",
+        ));
+}
+
+#[test]
+fn an_explicit_checkout_installs_skills_offline() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = skills_fixture();
+    // Validation fails (refused port) but the apply half has already landed.
+    redisctl()
+        .current_dir(dir.path())
+        .args([
+            "init",
+            "--url",
+            "redis://127.0.0.1:9",
+            "--skills-repo",
+            repo.path().to_str().unwrap(),
+        ])
+        .assert()
+        .code(10)
+        .stdout(predicate::str::contains(".agents/skills/redis-basics/"));
+    assert!(
+        dir.path()
+            .join(".agents/skills/redis-basics/SKILL.md")
+            .exists()
+    );
+}
+
+#[test]
+#[ignore = "requires npx + network (real skills CLI against redis/agent-skills)"]
+fn npx_path_installs_the_official_skills_with_a_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    redisctl()
+        .current_dir(dir.path())
+        .args(["init", "--url", "redis://127.0.0.1:9", "--no-install-cli"])
+        .assert()
+        .code(10)
+        .stdout(predicate::str::contains("npx skills add"))
+        .stdout(predicate::str::contains("skills-lock.json"));
+    assert!(dir.path().join("skills-lock.json").exists());
+    // Re-run: the lock diff reads everything back as unchanged.
+    redisctl()
+        .current_dir(dir.path())
+        .args(["init", "--url", "redis://127.0.0.1:9", "--no-install-cli"])
+        .assert()
+        .code(10)
+        .stdout(predicate::str::contains("unchanged .agents/skills/"));
 }
