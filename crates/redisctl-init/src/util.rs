@@ -27,7 +27,17 @@ pub(crate) struct ShOutput {
 
 /// Run a command and capture its output; a spawn failure reads as status -1.
 pub(crate) fn sh(cmd: &str, args: &[&str]) -> ShOutput {
-    match std::process::Command::new(cmd).args(args).output() {
+    run(std::process::Command::new(cmd).args(args))
+}
+
+/// Like [`sh`], but in `dir` - commands that act on the project must not depend on
+/// the caller's process cwd.
+pub(crate) fn sh_in(dir: &Path, cmd: &str, args: &[&str]) -> ShOutput {
+    run(std::process::Command::new(cmd).args(args).current_dir(dir))
+}
+
+fn run(command: &mut std::process::Command) -> ShOutput {
+    match command.output() {
         Ok(out) => ShOutput {
             status: out.status.code().unwrap_or(-1),
             stdout: String::from_utf8_lossy(&out.stdout).into_owned(),

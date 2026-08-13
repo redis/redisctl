@@ -58,7 +58,7 @@ fn full_run_provisions_validates_and_rerun_is_unchanged() {
 
     redisctl()
         .current_dir(&dir)
-        .arg("init")
+        .args(["init", "--no-install-cli"])
         .assert()
         .success()
         .stdout(predicate::str::contains(&container))
@@ -72,7 +72,7 @@ fn full_run_provisions_validates_and_rerun_is_unchanged() {
     // Idempotent re-run: nothing changes, validation still green.
     redisctl()
         .current_dir(&dir)
-        .arg("init")
+        .args(["init", "--no-install-cli"])
         .assert()
         .success()
         .stdout(predicate::str::contains("unchanged .env"))
@@ -88,7 +88,11 @@ fn stopped_container_is_restarted() {
     let tmp = tempfile::tempdir().unwrap();
     let (dir, container, _cleanup) = project_dir(tmp.path(), "stop");
 
-    redisctl().current_dir(&dir).arg("init").assert().success();
+    redisctl()
+        .current_dir(&dir)
+        .args(["init", "--no-install-cli"])
+        .assert()
+        .success();
     let out = std::process::Command::new("docker")
         .args(["stop", &container])
         .output()
@@ -97,7 +101,7 @@ fn stopped_container_is_restarted() {
 
     redisctl()
         .current_dir(&dir)
-        .arg("init")
+        .args(["init", "--no-install-cli"])
         .assert()
         .success()
         .stdout(predicate::str::contains("restarted stopped container"))
@@ -145,7 +149,7 @@ fn restart_that_never_serves_redis_fails_instead_of_reporting_updated() {
 
     redisctl()
         .current_dir(&dir)
-        .arg("init")
+        .args(["init", "--no-install-cli"])
         .assert()
         .failure()
         .stdout(predicate::str::contains("restarted stopped container").not())
