@@ -153,18 +153,21 @@ fn skill_dirs(root: &Path) -> Vec<String> {
 
 /// Skill dirs not tracked in the lock are the user's own; the standard installer
 /// decides what happens to colliding names, so surface them and report disk truth.
+/// Both layouts are scanned - a solo-Claude install lives in .claude/skills.
 fn unmanaged_collisions(cwd: &Path) -> BTreeMap<String, String> {
     let managed = read_lock_hashes(cwd);
-    let dir = cwd.join(SKILLS_DIR);
-    skill_dirs(&dir)
-        .into_iter()
-        .filter(|name| name != GENERATED_SKILL && !managed.contains_key(name))
-        .filter_map(|name| {
-            std::fs::read_to_string(dir.join(&name).join("SKILL.md"))
-                .ok()
-                .map(|content| (name, content))
-        })
-        .collect()
+    let mut collisions = BTreeMap::new();
+    for dir in target_dirs(cwd, false) {
+        for name in skill_dirs(&dir) {
+            if name == GENERATED_SKILL || managed.contains_key(&name) {
+                continue;
+            }
+            if let Ok(content) = std::fs::read_to_string(dir.join(&name).join("SKILL.md")) {
+                collisions.entry(name).or_insert(content);
+            }
+        }
+    }
+    collisions
 }
 
 fn walk_files(dir: &Path, base: &Path, out: &mut Vec<PathBuf>) {
@@ -256,11 +259,11 @@ impl SkillsAction {
     }
 
     pub(crate) fn preview(&self) -> Change {
-        Change::new(
-            describe_target(self.global),
-            Status::Planned,
-            format!("would run: npx {}", self.npx_args().join(" ")),
-        )
+        let note = match &self.repo {
+            Some(repo) => format!("would copy skills from {}", repo.display()),
+            None => format!("would run: npx {}", self.npx_args().join(" ")),
+        };
+        Change::new(describe_target(self.global), Status::Planned, note)
     }
 
     pub(crate) fn perform(
@@ -349,7 +352,8 @@ impl SkillsAction {
                 .map(|p| format!("{}/", display_relative(cwd, &p)))
                 .unwrap_or_else(|| name.clone());
             if let Some(previous_md) = collisions.get(name) {
-                let now = read_if(cwd, &format!("{SKILLS_DIR}/{name}/SKILL.md"));
+                let now = installed_skill_path(cwd, false, name)
+                    .and_then(|p| std::fs::read_to_string(p.join("SKILL.md")).ok());
                 let (status, note) = if now.as_deref() == Some(previous_md.as_str()) {
                     (
                         Status::Kept,
@@ -424,7 +428,7 @@ impl SkillsAction {
             let subject = if self.global {
                 format!("{}/", dst.display())
             } else {
-                format!("{SKILLS_DIR}/{name}/")
+                format!("{}/", display_relative(cwd, &dst))
             };
             if dirs_equal(&src, &dst) {
                 changes.push(Change::new(subject, Status::Unchanged, ""));
@@ -496,6 +500,43 @@ mod tests {
             change.note,
             "would run: npx -y skills add redis/agent-skills -s * -a claude-code -a github-copilot -g -y"
         );
+    }
+
+    #[test]
+    fn preview_names_the_checkout_when_one_is_given() {
+        let a = action(Path::new("/tmp/checkout"));
+        assert_eq!(a.preview().note, "would copy skills from /tmp/checkout");
+    }
+
+    #[test]
+    fn solo_claude_checkout_reports_the_real_destination() {
+        let repo = fake_checkout(&["redis-basics"]);
+        let project = tempfile::tempdir().unwrap();
+        let solo = SkillsAction {
+            agents: vec![Agent::Claude],
+            global: false,
+            repo: Some(repo.path().to_path_buf()),
+        };
+        let changes = solo.perform(project.path(), &mut |_| {}).unwrap();
+        assert_eq!(changes[0].subject, ".claude/skills/redis-basics/");
+        assert!(
+            project
+                .path()
+                .join(".claude/skills/redis-basics/SKILL.md")
+                .exists()
+        );
+        let rerun = solo.perform(project.path(), &mut |_| {}).unwrap();
+        assert!(rerun.iter().all(|c| c.status == Status::Unchanged));
+    }
+
+    #[test]
+    fn unmanaged_collisions_see_the_claude_layout_too() {
+        let project = tempfile::tempdir().unwrap();
+        let dir = project.path().join(".claude/skills/mine");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), "x").unwrap();
+        let collisions = unmanaged_collisions(project.path());
+        assert_eq!(collisions.keys().collect::<Vec<_>>(), vec!["mine"]);
     }
 
     #[test]
