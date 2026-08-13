@@ -80,6 +80,8 @@ fn full_run_provisions_validates_and_rerun_is_unchanged() {
         ))
         .stdout(predicate::str::contains("✓ PING  ✓ SET/GET"))
         .stdout(predicate::str::contains("Next steps"));
+    let mcp = std::fs::read_to_string(dir.join(".mcp.json")).unwrap();
+    assert!(!mcp.contains("redis://"), "credential-free: {mcp}");
     let env = std::fs::read_to_string(dir.join(".env")).unwrap();
     assert!(env.contains("REDIS_URL=\"redis://localhost:"), "{env}");
     let gitignore = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
