@@ -106,7 +106,7 @@ impl DatabaseAction {
     }
 }
 
-pub(crate) fn docker_ok() -> bool {
+pub fn docker_ok() -> bool {
     sh("docker", &["info", "--format", "{{.ServerVersion}}"]).status == 0
 }
 
