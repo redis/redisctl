@@ -160,6 +160,12 @@ pub enum RedisCtlError {
 
     #[error("Output formatting error: {message}")]
     OutputError { message: String },
+
+    /// Agent-native surface error carrying a stable code + exit code (see
+    /// [`crate::structured_error`]). Handled specially in `main` (JSON envelope to stdout,
+    /// mapped exit code) rather than the generic 0/1 path.
+    #[error("{0}")]
+    Structured(Box<crate::structured_error::StructuredError>),
 }
 
 /// Result type for redisctl operations
@@ -310,6 +316,8 @@ impl RedisCtlError {
             RedisCtlError::ConnectionError { .. } => "connection_error",
             RedisCtlError::Timeout { .. } => "timeout",
             RedisCtlError::OutputError { .. } => "output_error",
+            // Agent-native surface errors carry their own stable code.
+            RedisCtlError::Structured(se) => se.code,
         }
     }
 
@@ -357,6 +365,8 @@ impl RedisCtlError {
 
             RedisCtlError::ConnectionError { .. } => exit_code::NETWORK,
             RedisCtlError::Timeout { .. } => exit_code::TIMEOUT,
+
+            RedisCtlError::Structured(se) => i32::from(se.exit_code),
 
             // `Other` is the anyhow catch-all and `OutputError` covers
             // serialization and IO; neither is classified yet.
@@ -492,6 +502,20 @@ impl From<anyhow::Error> for RedisCtlError {
         // mislabeling every anyhow-wrapped API, IO, or JSON error as a
         // "Configuration error".
         RedisCtlError::Other(format!("{:#}", err))
+    }
+}
+
+impl From<redisctl_core::AuthError> for RedisCtlError {
+    fn from(err: redisctl_core::AuthError) -> Self {
+        match err {
+            redisctl_core::AuthError::Network(e) => RedisCtlError::ConnectionError {
+                message: e.to_string(),
+            },
+            other => RedisCtlError::AuthenticationFailed {
+                message: other.to_string(),
+                profile_name: "<login>".to_string(),
+            },
+        }
     }
 }
 

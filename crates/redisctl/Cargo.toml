@@ -36,6 +36,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 rpassword = { workspace = true }
+url = { workspace = true }
 urlencoding = { workspace = true }
 dialoguer = "0.11"
 colored = "2.1"

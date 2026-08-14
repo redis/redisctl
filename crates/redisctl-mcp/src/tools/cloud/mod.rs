@@ -3,6 +3,7 @@
 mod account;
 mod fixed;
 mod networking;
+mod provisioning;
 mod raw;
 mod subscriptions;
 
@@ -12,6 +13,8 @@ pub use account::*;
 pub use fixed::*;
 #[allow(unused_imports)]
 pub use networking::*;
+#[allow(unused_imports)]
+pub use provisioning::*;
 #[allow(unused_imports)]
 pub use raw::*;
 #[allow(unused_imports)]
@@ -46,6 +49,10 @@ pub const SUB_MODULES: &[SubModule] = &[
         name: "raw",
         tool_names: raw::TOOL_NAMES,
     },
+    SubModule {
+        name: "provisioning",
+        tool_names: provisioning::TOOL_NAMES,
+    },
 ];
 
 /// Get all Cloud tool names as owned strings.
@@ -72,6 +79,7 @@ pub fn sub_router(name: &str, state: Arc<AppState>) -> Option<McpRouter> {
         "networking" => Some(networking::router(state)),
         "fixed" => Some(fixed::router(state)),
         "raw" => Some(raw::router(state)),
+        "provisioning" => Some(provisioning::router(state)),
         _ => None,
     }
 }
@@ -83,5 +91,6 @@ pub fn router(state: Arc<AppState>) -> McpRouter {
         .merge(account::router(state.clone()))
         .merge(networking::router(state.clone()))
         .merge(fixed::router(state.clone()))
-        .merge(raw::router(state))
+        .merge(raw::router(state.clone()))
+        .merge(provisioning::router(state))
 }

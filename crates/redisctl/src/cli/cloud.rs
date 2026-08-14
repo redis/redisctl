@@ -1590,6 +1590,11 @@ COMMAND GROUPS:
 
 Aliases shown in parentheses (e.g. 'cloud db list' instead of 'cloud database list').")]
 pub enum CloudCommands {
+    // -- Authentication --
+    /// Log in to Redis Cloud and manage the session (browser or device flow)
+    #[command(subcommand, display_order = 0)]
+    Auth(CloudAuthCommands),
+
     // -- Core --
     /// Database operations
     #[command(subcommand, display_order = 1, visible_alias = "db")]
@@ -1657,6 +1662,39 @@ pub enum CloudCommands {
     #[command(subcommand, display_order = 41)]
     Workflow(CloudWorkflowCommands),
 }
+/// Authentication subcommands for Redis Cloud.
+#[derive(Debug, Subcommand)]
+pub enum CloudAuthCommands {
+    /// Log in to Redis Cloud and store credentials (mints a CAPI key).
+    ///
+    /// Opens a browser by default; use --device for a headless URL + code flow.
+    Login {
+        /// Use the device-authorization flow (print a URL + code) instead of opening a browser.
+        #[arg(long)]
+        device: bool,
+        /// Store credentials as plaintext in the config file when no OS keyring is available.
+        #[arg(long)]
+        allow_plaintext: bool,
+        /// Block until the device flow is approved (one-shot). Without this, the device flow
+        /// returns the code immediately and `auth status --wait` completes the login — the
+        /// agent-friendly split. The browser (loopback) flow always blocks.
+        #[arg(long)]
+        wait: bool,
+    },
+    /// Report whether the profile is authenticated to Redis Cloud.
+    Status {
+        /// Block until a pending device-authorization login completes (or times out / is
+        /// denied), then run the exchange and persist credentials.
+        #[arg(long)]
+        wait: bool,
+        /// Max seconds to wait when --wait is set.
+        #[arg(long, default_value = "600")]
+        timeout: u64,
+    },
+    /// Remove the locally stored Redis Cloud credentials for the profile.
+    Logout,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum CloudWorkflowCommands {
     /// List available workflows
@@ -1664,6 +1702,12 @@ pub enum CloudWorkflowCommands {
     /// Complete subscription setup with optional database
     #[command(name = "subscription-setup")]
     SubscriptionSetup(crate::workflows::cloud::subscription_setup::SubscriptionSetupArgs),
+    /// Create or reuse a free database and write its connection string to a file
+    #[command(name = "quick-database")]
+    QuickDatabase(crate::workflows::cloud::quick_database::QuickDatabaseArgs),
+    /// Write an existing database's connection string to a file (no provisioning)
+    #[command(name = "database-credentials")]
+    DatabaseCredentials(crate::workflows::cloud::quick_database::DatabaseCredentialsArgs),
 }
 
 /// Cloud Cost Report Commands (Beta)

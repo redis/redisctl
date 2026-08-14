@@ -4943,3 +4943,130 @@ async fn test_wait_for_cloud_task_timeout() {
         "Expected timeout response from wait_for_cloud_task, got: {result}"
     );
 }
+
+// ============================================================================
+// Provisioning tools (cloud_auth_status, cloud_quick_database): the tool
+// RESPONSE must never carry the password or connection URL — those go only to
+// the credentials file.
+// ============================================================================
+
+const PROV_PASSWORD: &str = "s3cr3t-mock-pw";
+const PROV_ENDPOINT: &str = "mock-host.example.com:12000";
+
+#[tokio::test]
+async fn cloud_auth_status_reports_authenticated_without_secrets() {
+    let server = MockCloudServer::start().await;
+    // An injected client means credentials resolve → authenticated: true (offline check).
+    let state = Arc::new(AppState::with_cloud_client(server.client()));
+    let tool = cloud::cloud_auth_status(state);
+
+    let text = call_tool_text(&tool, json!({})).await;
+    let value: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
+    assert_eq!(value["authenticated"], true);
+    // No tokens/secrets of any shape in the response.
+    assert!(!text.contains("secret"), "response leaked 'secret': {text}");
+    assert!(!text.to_lowercase().contains("bearer"));
+    assert!(!text.contains("api_secret"));
+}
+
+#[tokio::test]
+async fn cloud_quick_database_response_carries_no_secret() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, ResponseTemplate};
+
+    let server = MockCloudServer::start().await;
+    let m = server.inner();
+
+    let db_body = json!({
+        "databaseId": 9001,
+        "name": "prov-test",
+        "region": "us-east-1",
+        "publicEndpoint": PROV_ENDPOINT,
+        "security": { "enableTls": true, "password": PROV_PASSWORD }
+    });
+
+    // Fresh-create flow: no existing sub → plan → create sub (task) → create db (task) → get db.
+    Mock::given(method("GET"))
+        .and(path("/fixed/subscriptions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "subscriptions": [] })))
+        .mount(m)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/fixed/plans"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "plans": [ { "id": 12, "name": "Free", "price": 0, "provider": "AWS", "region": "us-east-1" } ]
+        })))
+        .mount(m)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/fixed/subscriptions"))
+        .respond_with(
+            ResponseTemplate::new(202)
+                .set_body_json(json!({ "taskId": "task-sub", "status": "received" })),
+        )
+        .mount(m)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/tasks/task-sub"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "taskId": "task-sub", "status": "processing-completed", "response": { "resourceId": 501 }
+        })))
+        .mount(m)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/fixed/subscriptions/501/databases"))
+        .respond_with(
+            ResponseTemplate::new(202)
+                .set_body_json(json!({ "taskId": "task-db", "status": "received" })),
+        )
+        .mount(m)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/tasks/task-db"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "taskId": "task-db", "status": "processing-completed", "response": { "resourceId": 9001 }
+        })))
+        .mount(m)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/fixed/subscriptions/501/databases/9001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(db_body))
+        .mount(m)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let env_path = dir.path().join(".env");
+
+    // write-tier tool → full-policy state so the write guard passes.
+    let state = full_policy_state(server.client());
+    let tool = cloud::cloud_quick_database(state);
+
+    let text = call_tool_text(
+        &tool,
+        json!({
+            "name": "prov-test",
+            "output_credentials": env_path.to_str().unwrap(),
+            "wait_timeout": 30,
+            "wait_interval": 1
+        }),
+    )
+    .await;
+
+    // The report is returned; secrets are NOT in the response.
+    let report: serde_json::Value = serde_json::from_str(&text).expect("valid JSON response");
+    assert_eq!(report["status"], "ok");
+    assert_eq!(report["database"]["id"], "9001");
+    assert!(
+        !text.contains(PROV_PASSWORD),
+        "password leaked into tool response: {text}"
+    );
+    assert!(
+        !text.contains("rediss://"),
+        "connection URL leaked into tool response: {text}"
+    );
+
+    // …but they DID land in the credentials file (so the guard above is meaningful).
+    let env_body = std::fs::read_to_string(&env_path).unwrap();
+    assert!(env_body.contains(PROV_PASSWORD));
+    assert!(env_body.contains(&format!("rediss://default:{PROV_PASSWORD}@{PROV_ENDPOINT}")));
+}

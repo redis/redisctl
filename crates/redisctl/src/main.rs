@@ -23,6 +23,7 @@ mod commands;
 mod connection;
 mod error;
 mod output;
+mod structured_error;
 mod workflows;
 
 use cli::{Cli, Commands};
@@ -416,11 +417,28 @@ async fn main() -> Result<()> {
 
     // Execute command
     if let Err(e) = execute_command(&cli, &conn_mgr).await {
+        // The agent-native surface carries a stable code + exit code: emit the JSON error
+        // envelope to stdout in machine mode (agents parse stdout), the styled diagnostic to
+        // stderr otherwise, and exit with the mapped code. All other errors keep the default
+        // envelope-to-stderr + exit-1 behaviour.
+        if let RedisCtlError::Structured(se) = &e {
+            emit_structured_error(se, cli.output);
+            std::process::exit(se.exit_code as i32);
+        }
         e.print_diagnostic(cli.output);
         std::process::exit(e.exit_code());
     }
 
     Ok(())
+}
+
+fn emit_structured_error(se: &structured_error::StructuredError, output: cli::OutputFormat) {
+    match output {
+        cli::OutputFormat::Json | cli::OutputFormat::Yaml => {
+            let _ = crate::output::print_output(se.envelope(), output, None);
+        }
+        _ => error::CliDiagnostic::error(&se.message).print(),
+    }
 }
 
 fn init_tracing(verbose: u8) {
@@ -994,7 +1012,11 @@ async fn handle_cloud_workflow_command(
             // Filter to show only cloud workflows
             let cloud_workflows: Vec<_> = workflows
                 .into_iter()
-                .filter(|(name, _)| name.contains("subscription") || name.contains("cloud"))
+                .filter(|(name, _)| {
+                    name.contains("subscription")
+                        || name.contains("cloud")
+                        || name.contains("database")
+                })
                 .collect();
 
             match output {
@@ -1064,6 +1086,110 @@ async fn handle_cloud_workflow_command(
                 _ => {
                     // Human output
                     println!("{}", result.message);
+                }
+            }
+
+            Ok(())
+        }
+        QuickDatabase(args) => {
+            use crate::structured_error::StructuredError;
+            use redisctl_core::cloud::quick_database::QuickDatabaseError;
+
+            let mut workflow_args = WorkflowArgs::new();
+            workflow_args.insert("args", args);
+
+            let context = WorkflowContext {
+                conn_mgr: conn_mgr.clone(),
+                profile_name: profile.map(String::from),
+                output_format: output,
+            };
+
+            let registry = WorkflowRegistry::new();
+            let workflow =
+                registry
+                    .get("quick-database")
+                    .ok_or_else(|| RedisCtlError::ApiError {
+                        message: "Workflow not found".to_string(),
+                    })?;
+
+            let result = workflow
+                .execute(context, workflow_args)
+                .await
+                .map_err(|e| {
+                    // Recover the typed error to build the structured exit contract.
+                    let se = match e.downcast::<QuickDatabaseError>() {
+                        Ok(qde) => StructuredError::from(qde),
+                        Err(other) => StructuredError::unknown(other.to_string()),
+                    };
+                    RedisCtlError::Structured(Box::new(se))
+                })?;
+
+            if !result.success {
+                return Err(RedisCtlError::Structured(Box::new(
+                    StructuredError::unknown(result.message),
+                )));
+            }
+
+            // The typed report is the agent contract: emit it verbatim (not wrapped in the
+            // generic workflow envelope) so callers can branch on a stable schema.
+            let report = result
+                .outputs
+                .get(crate::workflows::cloud::quick_database::REPORT_KEY);
+            match output {
+                cli::OutputFormat::Json | cli::OutputFormat::Yaml => {
+                    if let Some(report) = report {
+                        crate::output::print_output(report, output, None)?;
+                    }
+                }
+                _ => {
+                    println!("{}", result.message);
+                }
+            }
+
+            Ok(())
+        }
+        DatabaseCredentials(args) => {
+            use crate::structured_error::StructuredError;
+            use redisctl_core::cloud::quick_database::{
+                QuickDatabaseError, existing_database_report,
+            };
+
+            // Build a cloud client; a missing/bad credential is a not_authenticated precondition.
+            let client = conn_mgr
+                .create_cloud_client(profile)
+                .await
+                .map_err(|e| match e {
+                    RedisCtlError::MissingCredentials { .. }
+                    | RedisCtlError::NoProfileConfigured { .. }
+                    | RedisCtlError::ProfileNotFound { .. }
+                    | RedisCtlError::AuthenticationFailed { .. } => {
+                        RedisCtlError::Structured(Box::new(StructuredError::not_authenticated(
+                            format!("{e}. Run `redisctl cloud auth login` first."),
+                        )))
+                    }
+                    other => other,
+                })?;
+
+            let params = args.to_params();
+            let report =
+                existing_database_report(&client, args.subscription_id, args.database_id, &params)
+                    .await
+                    .map_err(|e: QuickDatabaseError| {
+                        RedisCtlError::Structured(Box::new(StructuredError::from(e)))
+                    })?;
+
+            match output {
+                cli::OutputFormat::Json | cli::OutputFormat::Yaml => {
+                    crate::output::print_output(serde_json::to_value(&report)?, output, None)?;
+                }
+                _ => {
+                    println!(
+                        "Wrote credentials for database '{}' (id {}) to {} as {}.",
+                        report.database.name,
+                        report.database.id,
+                        report.credentials_written_to,
+                        report.credentials_variable,
+                    );
                 }
             }
 
@@ -1260,6 +1386,16 @@ async fn execute_cloud_command(
     use cli::CloudCommands::*;
 
     match cloud_cmd {
+        Auth(auth_cmd) => {
+            commands::cloud::auth::handle_auth_command(
+                conn_mgr,
+                cli.profile.as_deref(),
+                auth_cmd,
+                cli.output,
+            )
+            .await
+        }
+
         Account(account_cmd) => {
             commands::cloud::handle_account_command(
                 conn_mgr,

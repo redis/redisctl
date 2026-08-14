@@ -68,6 +68,7 @@
 //! ).await?;
 //! ```
 
+pub mod auth;
 pub mod clients;
 pub mod config;
 pub mod error;
@@ -77,6 +78,10 @@ pub mod cloud;
 pub mod enterprise;
 
 // Re-export commonly used items
+pub use auth::{
+    AuthError, CapiKey, CloudAuthenticator, DeviceAuthorization, DeviceFlowClient,
+    LoopbackFlowClient, MintedCredentials, SmAccount, SmApiClient, SmUser, TokenSet,
+};
 pub use error::{CoreError, Result};
 pub use progress::{ProgressCallback, ProgressEvent, poll_task};
 
@@ -85,8 +90,8 @@ pub use clients::{
     ClientResolutionError, ClientResolver, ResolvedCloudConnection, ResolvedEnterpriseConnection,
 };
 pub use config::{
-    Config, ConfigError, CredentialStorage, CredentialStore, DeploymentType, EnvironmentOverrides,
-    Profile, ProfileCredentials,
+    CloudAuthConfig, Config, ConfigError, CredentialStorage, CredentialStore, DeploymentType,
+    EnvironmentOverrides, Profile, ProfileCredentials,
 };
 
 // Re-export Layer 1 for convenience (but consumers can also import directly)

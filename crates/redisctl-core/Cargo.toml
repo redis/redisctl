@@ -24,6 +24,16 @@ thiserror = { workspace = true }
 # Async runtime
 tokio = { workspace = true }
 
+# OAuth2/OIDC for the Okta login flows (device authorization / auth-code loopback), via the
+# maintained oauth2 crate. reqwest is the async HTTP backend it uses.
+oauth2 = { workspace = true }
+reqwest = { workspace = true }
+url = { workspace = true }
+
+# Free-tier provisioning + dotenv delivery (cloud::quick_database / cloud::env_delivery)
+chrono = { workspace = true }
+urlencoding = { workspace = true }
+
 # Logging
 tracing = { workspace = true }
 
