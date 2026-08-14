@@ -110,30 +110,74 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
         );
     }
 
-    let subject = plan.database.as_ref().map(|db| {
+    let subject = |applied: bool| {
         format!(
             "database: {}{} via {}",
-            engine::mask_url(&db.url),
+            engine::mask_url(plan.database_url()),
             args.name
                 .as_deref()
                 .map(|n| format!(" [{n}]"))
                 .unwrap_or_default(),
-            db.source
+            plan.database_source(applied)
         )
-    });
-    println!(
-        "{}{}",
-        bold(if dry { "Plan" } else { "Changes" }),
-        subject
-            .map(|s| format!("  {}", dim(&format!("({s})"))))
-            .unwrap_or_default()
-    );
+    };
 
     if dry {
+        println!(
+            "{}  {}",
+            bold("Plan"),
+            dim(&format!("({})", subject(false)))
+        );
+        for change in plan.changes() {
+            println!("{}", output::change_line(&change));
+        }
         println!(
             "{}",
             dim("\nDry run complete. Run again without --dry-run to apply.\n")
         );
+        return Ok(());
     }
+
+    let mut progress: Option<output::Progress> = None;
+    let report = engine::apply(&plan, &mut |event| match event {
+        engine::Event::ProgressStart(label) => progress = Some(output::progress(&label)),
+        engine::Event::ProgressDone(outcome) => {
+            if let Some(p) = progress.as_mut() {
+                p.done(&outcome);
+            }
+        }
+        engine::Event::Note(text) => println!("{}", dim(&text)),
+    })
+    .await?;
+
+    println!(
+        "{}  {}",
+        bold("Changes"),
+        dim(&format!("({})", subject(true)))
+    );
+    for change in &report.changes {
+        println!("{}", output::change_line(change));
+    }
+
+    print!("\n{}  ", bold("Validate"));
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    match engine::validate(plan.database_url()).await {
+        Ok(()) => println!(
+            "{} PING  {} SET/GET  {}",
+            ok("✓"),
+            ok("✓"),
+            dim(&format!("({})", engine::mask_url(plan.database_url())))
+        ),
+        Err(e) => {
+            println!("{} {e}", output::red("✗"));
+            return Err(RedisCtlError::ConnectionError {
+                message: format!(
+                    "could not talk to Redis at {}\n  If this URL is stale, remove REDIS_URL from .env and re-run, or pass --url.",
+                    engine::mask_url(plan.database_url())
+                ),
+            });
+        }
+    }
+    println!();
     Ok(())
 }

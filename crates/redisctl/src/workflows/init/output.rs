@@ -34,6 +34,64 @@ pub fn ok(s: &str) -> String {
     paint("97;1", s)
 }
 
+pub fn red(s: &str) -> String {
+    paint("31", s)
+}
+
+fn icon(status: redisctl_init::Status) -> String {
+    use redisctl_init::Status;
+    match status {
+        Status::Created => brand_red("+"),
+        Status::Updated => yellow("~"),
+        Status::Unchanged => dim("="),
+        Status::Kept => yellow("!"),
+        Status::Planned => yellow("»"),
+    }
+}
+
+/// One summary line: icon, status, subject, note.
+pub fn change_line(change: &redisctl_init::Change) -> String {
+    let note = if change.note.is_empty() {
+        String::new()
+    } else {
+        dim(&format!("  {}", change.note))
+    };
+    format!(
+        "  {} {:<9} {}{}",
+        icon(change.status),
+        change.status.label(),
+        change.subject,
+        note
+    )
+}
+
+/// A "doing X..." line that stays open until it is closed exactly once - with
+/// " ready", " done", or nothing when an error message follows on its own line.
+pub struct Progress {
+    open: bool,
+}
+
+pub fn progress(label: &str) -> Progress {
+    use std::io::Write;
+    print!("{}", dim(&format!("  {label}...")));
+    let _ = std::io::stdout().flush();
+    Progress { open: true }
+}
+
+impl Progress {
+    pub fn done(&mut self, outcome: &str) {
+        if !self.open {
+            return;
+        }
+        self.open = false;
+        if outcome.is_empty() {
+            println!();
+        } else {
+            println!("{}", dim(outcome));
+        }
+    }
+}
+
 fn truecolor() -> bool {
     std::env::var("COLORTERM")
         .map(|v| v.contains("truecolor") || v.contains("24bit"))
@@ -132,6 +190,27 @@ mod tests {
                 (RunKind::Block, "██".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn change_line_pads_the_status_and_appends_the_note() {
+        let change = redisctl_init::Change {
+            subject: ".env".into(),
+            status: redisctl_init::Status::Created,
+            note: "REDIS_URL".into(),
+        };
+        // Piped output (tests are not a tty), so no colour codes.
+        assert_eq!(change_line(&change), "  + created   .env  REDIS_URL");
+    }
+
+    #[test]
+    fn change_line_without_a_note_has_no_trailing_spaces() {
+        let change = redisctl_init::Change {
+            subject: ".gitignore".into(),
+            status: redisctl_init::Status::Unchanged,
+            note: String::new(),
+        };
+        assert_eq!(change_line(&change), "  = unchanged .gitignore");
     }
 
     #[test]
