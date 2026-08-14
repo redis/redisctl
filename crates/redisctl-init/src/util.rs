@@ -52,7 +52,7 @@ fn run(command: &mut std::process::Command) -> ShOutput {
 }
 
 /// Lowercase, runs of anything non-alphanumeric collapsed to one dash, edges trimmed.
-pub(crate) fn slug(s: &str) -> String {
+pub fn slug(s: &str) -> String {
     let mut out = String::new();
     for c in s.to_lowercase().chars() {
         if c.is_ascii_alphanumeric() {
