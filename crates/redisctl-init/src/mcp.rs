@@ -66,7 +66,21 @@ pub(crate) struct McpPlan {
     pub(crate) uvx_missing: bool,
 }
 
-pub(crate) fn plan_mcp(cwd: &Path, agents: &[Agent]) -> Result<McpPlan, InitError> {
+/// The control-plane server: credentials stay in the redisctl profile, so the
+/// committed config carries only the launch command.
+fn control_plane_entry(cloud: &crate::CloudFacts) -> serde_json::Value {
+    let args: Vec<String> = match &cloud.profile {
+        Some(profile) => vec!["--profile".into(), profile.clone()],
+        None => vec![],
+    };
+    serde_json::json!({ "command": "redisctl-mcp", "args": args })
+}
+
+pub(crate) fn plan_mcp(
+    cwd: &Path,
+    agents: &[Agent],
+    cloud: Option<(&crate::CloudFacts, bool)>,
+) -> Result<McpPlan, InitError> {
     let runner = if has_bin("uvx") {
         Runner::Uvx
     } else if docker_ok() {
@@ -74,19 +88,37 @@ pub(crate) fn plan_mcp(cwd: &Path, agents: &[Agent]) -> Result<McpPlan, InitErro
     } else {
         Runner::UvxMissing
     };
-    let entry = server_entry(&runner);
+    let mut servers = vec![(
+        "redis",
+        server_entry(&runner),
+        "redis: reads REDIS_URL from .env at launch".to_string(),
+    )];
+    if let Some((cloud, true)) = cloud {
+        servers.push((
+            "redisctl",
+            control_plane_entry(cloud),
+            "redisctl: control plane, credentials stay in the redisctl profile".to_string(),
+        ));
+    }
     let mut actions = Vec::new();
     for agent in agents {
         actions.push(match agent {
-            Agent::Claude => upsert(cwd, ".mcp.json", "mcpServers", &entry, false)?,
-            Agent::Cursor => upsert(cwd, ".cursor/mcp.json", "mcpServers", &entry, false)?,
-            Agent::Vscode => upsert(cwd, ".vscode/mcp.json", "servers", &entry, true)?,
+            Agent::Claude => upsert(cwd, ".mcp.json", "mcpServers", &servers, false)?,
+            Agent::Cursor => upsert(cwd, ".cursor/mcp.json", "mcpServers", &servers, false)?,
+            Agent::Vscode => upsert(cwd, ".vscode/mcp.json", "servers", &servers, true)?,
             Agent::Codex => McpAction::Report(Change::new(
                 "mcp (codex)",
                 Status::Skipped,
                 "codex MCP config is user-scoped (~/.codex/config.toml); the skills cover it",
             )),
         });
+    }
+    if let Some((_, false)) = cloud {
+        actions.push(McpAction::Report(Change::new(
+            "mcp (redisctl)",
+            Status::Skipped,
+            "redisctl-mcp not on PATH (cargo install redisctl-mcp) - the CLI still works",
+        )));
     }
     Ok(McpPlan {
         actions,
@@ -106,13 +138,9 @@ fn upsert(
     cwd: &Path,
     rel: &str,
     top_key: &str,
-    entry: &serde_json::Value,
+    servers: &[(&str, serde_json::Value, String)],
     stdio: bool,
 ) -> Result<McpAction, InitError> {
-    let mut server = entry.clone();
-    if stdio {
-        server["type"] = "stdio".into();
-    }
     let existing = read_for_planning(cwd, rel)?;
     let mut cfg = match &existing {
         None => serde_json::json!({}),
@@ -124,33 +152,45 @@ fn upsert(
     let Some(root) = cfg.as_object_mut() else {
         return Ok(kept_invalid(rel));
     };
-    let servers = root.entry(top_key).or_insert_with(|| serde_json::json!({}));
-    let Some(map) = servers.as_object_mut() else {
+    let entries = root.entry(top_key).or_insert_with(|| serde_json::json!({}));
+    let Some(map) = entries.as_object_mut() else {
         return Ok(kept_invalid(rel));
     };
-    let note = match map.get("redis") {
-        Some(previous) if *previous == server => {
-            return Ok(McpAction::Report(Change::new(rel, Status::Unchanged, "")));
+    let mut notes = Vec::new();
+    for (name, entry, fresh_note) in servers {
+        let mut server = entry.clone();
+        if stdio {
+            server["type"] = "stdio".into();
         }
-        Some(previous) => {
-            let command = previous["command"].as_str().unwrap_or_default();
-            let args = previous["args"]
-                .as_array()
-                .map(|args| {
-                    args.iter()
-                        .filter_map(|a| a.as_str())
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                })
-                .unwrap_or_default();
-            format!(
-                "replaced existing redis server (was: {})",
-                mask_url(format!("{command} {args}").trim())
-            )
+        match map.get(*name) {
+            Some(previous) if *previous == server => {}
+            Some(previous) => {
+                let command = previous["command"].as_str().unwrap_or_default();
+                let args = previous["args"]
+                    .as_array()
+                    .map(|args| {
+                        args.iter()
+                            .filter_map(|a| a.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    })
+                    .unwrap_or_default();
+                notes.push(format!(
+                    "replaced existing {name} server (was: {})",
+                    mask_url(format!("{command} {args}").trim())
+                ));
+                map.insert((*name).to_string(), server);
+            }
+            None => {
+                notes.push(fresh_note.clone());
+                map.insert((*name).to_string(), server);
+            }
         }
-        None => "redis: reads REDIS_URL from .env at launch".to_string(),
-    };
-    map.insert("redis".to_string(), server);
+    }
+    if notes.is_empty() {
+        return Ok(McpAction::Report(Change::new(rel, Status::Unchanged, "")));
+    }
+    let note = notes.join("; ");
     let status = if existing.is_some() {
         Status::Updated
     } else {
@@ -176,7 +216,69 @@ mod tests {
     use super::*;
 
     fn plan_for(dir: &Path, agents: &[Agent]) -> McpPlan {
-        plan_mcp(dir, agents).unwrap()
+        plan_mcp(dir, agents, None).unwrap()
+    }
+
+    fn cloud_facts(profile: Option<&str>) -> crate::CloudFacts {
+        crate::CloudFacts {
+            name: "cloud-db".to_string(),
+            subscription_id: "1".to_string(),
+            database_id: "9".to_string(),
+            tier: crate::CloudTier::Essentials,
+            profile: profile.map(str::to_string),
+            created: false,
+        }
+    }
+
+    #[test]
+    fn cloud_registers_the_control_plane_server_alongside_redis() {
+        let dir = tempfile::tempdir().unwrap();
+        let cloud = cloud_facts(Some("qa"));
+        let plan = plan_mcp(
+            dir.path(),
+            &[Agent::Claude, Agent::Vscode],
+            Some((&cloud, true)),
+        )
+        .unwrap();
+        apply_all(dir.path(), &plan);
+
+        let claude: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.path().join(".mcp.json")).unwrap())
+                .unwrap();
+        assert_eq!(claude["mcpServers"]["redisctl"]["command"], "redisctl-mcp");
+        assert_eq!(claude["mcpServers"]["redisctl"]["args"][1], "qa");
+        assert!(claude["mcpServers"]["redis"].is_object());
+        // Credentials stay in the redisctl profile; the committed file has none.
+        let raw = std::fs::read_to_string(dir.path().join(".mcp.json")).unwrap();
+        assert!(
+            !raw.contains("api-key") && !raw.contains("api_secret"),
+            "{raw}"
+        );
+
+        let vscode: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join(".vscode/mcp.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(vscode["servers"]["redisctl"]["type"], "stdio");
+    }
+
+    #[test]
+    fn cloud_without_the_mcp_binary_reports_a_skip() {
+        let dir = tempfile::tempdir().unwrap();
+        let cloud = cloud_facts(None);
+        let plan = plan_mcp(dir.path(), &[Agent::Claude], Some((&cloud, false))).unwrap();
+        let last = plan.actions.last().unwrap().preview();
+        assert_eq!(last.status, Status::Skipped);
+        assert_eq!(last.subject, "mcp (redisctl)");
+        assert!(
+            last.note.contains("cargo install redisctl-mcp"),
+            "{}",
+            last.note
+        );
+        // And the data-plane entry alone lands in the config.
+        apply_all(dir.path(), &plan);
+        let raw = std::fs::read_to_string(dir.path().join(".mcp.json")).unwrap();
+        assert!(!raw.contains("redisctl-mcp"), "{raw}");
     }
 
     fn apply_all(dir: &Path, plan: &McpPlan) -> Vec<Change> {

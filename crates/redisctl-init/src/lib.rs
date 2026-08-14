@@ -21,8 +21,9 @@ pub use project::{detect as detect_project, detect_agents};
 
 pub(crate) const SKILLS_DIR: &str = ".agents/skills";
 pub use docker::validate;
+pub use env::read_env_key;
 pub use project::{Agent, KNOWN_AGENTS, Project, Runtime};
-pub use util::mask_url;
+pub use util::{mask_url, slug};
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -79,6 +80,9 @@ pub struct Options {
     /// Raw connection input: a URL, or a pasted `redis-cli -u <url>` command.
     /// `None` means no input was given (not blank input).
     pub url_input: Option<String>,
+    /// The Redis Cloud database behind `url_input`, when the caller provisioned or
+    /// picked one. Plain data - the engine makes no cloud calls.
+    pub cloud: Option<CloudFacts>,
     /// `None` detects installed tools; detecting none still configures all agents.
     pub agents: Option<Vec<Agent>>,
     /// Install redis-cli when it is missing (`--no-install-cli` turns this off).
@@ -89,6 +93,43 @@ pub struct Options {
     pub skills_global: bool,
 }
 
+/// A Redis Cloud database the caller resolved before planning; flows into the
+/// generated skill's facts and the control-plane MCP entry.
+#[derive(Debug, Clone)]
+pub struct CloudFacts {
+    pub name: String,
+    pub subscription_id: String,
+    pub database_id: String,
+    pub tier: CloudTier,
+    /// The redisctl profile the control-plane hints should name, when not the default.
+    pub profile: Option<String>,
+    /// Freshly created this run (as opposed to reusing an existing database).
+    pub created: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloudTier {
+    Essentials,
+    Flexible,
+}
+
+impl CloudTier {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CloudTier::Essentials => "Essentials",
+            CloudTier::Flexible => "Flexible",
+        }
+    }
+
+    /// The CAPI path family this tier's databases live under.
+    pub fn api_base(self) -> &'static str {
+        match self {
+            CloudTier::Essentials => "/fixed/subscriptions",
+            CloudTier::Flexible => "/subscriptions",
+        }
+    }
+}
+
 /// What a run works with: the facts detected, the database it targets, and the
 /// mutations decided. Rendering a plan is the dry run; [`apply`] performs it.
 #[derive(Debug)]
@@ -96,6 +137,7 @@ pub struct Plan {
     pub project: Project,
     pub agents: Vec<Agent>,
     name: Option<String>,
+    cloud: Option<CloudFacts>,
     database: docker::DatabaseAction,
     file_actions: Vec<env::FileAction>,
     client: install::InstallAction,
@@ -114,7 +156,12 @@ impl Plan {
     /// for a real run over the planned one ("new Docker container" vs
     /// "Docker (planned)").
     pub fn database_source(&self, applied: bool) -> &'static str {
-        self.database.source(applied)
+        match &self.cloud {
+            Some(cloud) if cloud.created && applied => "Redis Cloud (new database)",
+            Some(cloud) if cloud.created => "Redis Cloud (planned)",
+            Some(_) => "Redis Cloud (existing database)",
+            None => self.database.source(applied),
+        }
     }
 
     /// Neither uvx nor Docker can run the MCP server; the configs are still written
@@ -177,11 +224,19 @@ pub fn plan(options: &Options) -> Result<Plan, InitError> {
         global: options.skills_global,
         repo: options.skills_repo.clone(),
     };
-    let mcp = mcp::plan_mcp(&options.cwd, &agents)?;
+    let mcp = mcp::plan_mcp(
+        &options.cwd,
+        &agents,
+        options
+            .cloud
+            .as_ref()
+            .map(|cloud| (cloud, util::has_bin("redisctl-mcp"))),
+    )?;
     Ok(Plan {
         project,
         agents,
         name: options.name.clone(),
+        cloud: options.cloud.clone(),
         database,
         file_actions,
         client,
@@ -219,6 +274,7 @@ pub async fn apply(plan: &Plan, on_event: &mut dyn FnMut(Event)) -> Result<Repor
     let facts = project_skill::SkillFacts {
         runtime: plan.project.runtime,
         name: plan.name.as_deref(),
+        cloud: plan.cloud.as_ref(),
         container: plan.database.container(),
         skills: &skills.installed,
         client_installed,
@@ -319,6 +375,7 @@ mod tests {
             cwd: dir.path().to_path_buf(),
             name: None,
             url_input: Some("redis-cli -u redis://h:1".into()),
+            cloud: None,
             agents: Some(vec![Agent::Claude]),
             install_cli: false,
             skills_repo: None,
@@ -338,6 +395,7 @@ mod tests {
             cwd: dir.path().to_path_buf(),
             name: None,
             url_input: Some("redis://h:1".into()),
+            cloud: None,
             agents: Some(vec![Agent::Codex]),
             install_cli: false,
             skills_repo: None,
@@ -368,6 +426,7 @@ mod tests {
             cwd: cwd.to_path_buf(),
             name: None,
             url_input: Some("redis-cli -u redis://h:1".into()),
+            cloud: None,
             agents: Some(vec![Agent::Codex]),
             install_cli: false,
             skills_repo: Some(repo.path().to_path_buf()),
