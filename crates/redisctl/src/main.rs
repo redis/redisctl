@@ -43,6 +43,7 @@ const PASSTHROUGH_COMMANDS: &[&str] = &[
     "pr",   // profile alias
     "api",
     "db",
+    "init",
     "version",
     "ver", // version alias
     "v",   // version alias
@@ -562,6 +563,8 @@ async fn execute_command(cli: &Cli, conn_mgr: &ConnectionManager) -> Result<(), 
         }
 
         Commands::Db(db_cmd) => commands::db::handle_db_command(db_cmd, conn_mgr, cli.output).await,
+
+        Commands::Init(init_args) => workflows::init::run(init_args).await,
     };
 
     let duration = start.elapsed();
@@ -660,6 +663,8 @@ fn format_command(command: &Commands) -> String {
                 Open { profile, .. } => format!("db open --profile {}", profile),
             }
         }
+        // The --url value can carry a database password, so it never reaches the log.
+        Commands::Init(_) => "init [args redacted]".to_string(),
     }
 }
 
