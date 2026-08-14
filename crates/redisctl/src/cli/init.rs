@@ -33,6 +33,10 @@ pub struct InitArgs {
     #[arg(long = "agent", value_enum, value_delimiter = ',', value_name = "NAME")]
     pub agents: Vec<AgentArg>,
 
+    /// Skip installing redis-cli when it is missing
+    #[arg(long = "no-install-cli")]
+    pub no_install_cli: bool,
+
     /// Print the plan without changing anything
     #[arg(long)]
     pub dry_run: bool,
@@ -57,6 +61,7 @@ impl std::fmt::Debug for InitArgs {
             .field("url", &self.url.as_ref().map(|_| "<redacted>"))
             .field("name", &self.name)
             .field("agents", &self.agents)
+            .field("no_install_cli", &self.no_install_cli)
             .field("dry_run", &self.dry_run)
             .field("pasted", &(!self.pasted.is_empty()).then_some("<redacted>"))
             .finish()
@@ -73,6 +78,7 @@ mod tests {
             url: Some("redis://default:s3cret@h:1".into()),
             name: Some("db".into()),
             agents: vec![AgentArg::Claude],
+            no_install_cli: false,
             dry_run: false,
             pasted: vec![
                 "redis-cli".into(),

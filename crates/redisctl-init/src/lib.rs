@@ -8,6 +8,7 @@
 mod change;
 mod docker;
 mod env;
+mod install;
 mod project;
 mod util;
 
@@ -69,6 +70,8 @@ pub struct Options {
     pub url_input: Option<String>,
     /// `None` detects installed tools; detecting none still configures all agents.
     pub agents: Option<Vec<Agent>>,
+    /// Install redis-cli when it is missing (`--no-install-cli` turns this off).
+    pub install_cli: bool,
 }
 
 /// What a run works with: the facts detected, the database it targets, and the
@@ -79,6 +82,8 @@ pub struct Plan {
     pub agents: Vec<Agent>,
     database: docker::DatabaseAction,
     file_actions: Vec<env::FileAction>,
+    client: install::InstallAction,
+    cli: install::InstallAction,
     cwd: PathBuf,
 }
 
@@ -100,6 +105,7 @@ impl Plan {
             .preview()
             .into_iter()
             .chain(self.file_actions.iter().map(|action| action.preview()))
+            .chain([self.client.preview(), self.cli.preview()])
             .collect()
     }
 }
@@ -124,13 +130,23 @@ pub fn plan(options: &Options) -> Result<Plan, InitError> {
     );
     let file_actions = vec![
         env::plan_env_set(&options.cwd, ".env", "REDIS_URL", database.url())?,
+        env::plan_env_set(
+            &options.cwd,
+            ".env.example",
+            "REDIS_URL",
+            "redis://localhost:6379",
+        )?,
         env::plan_gitignore_env(&options.cwd)?,
     ];
+    let client = install::plan_client_install(&options.cwd, &project);
+    let cli = install::plan_redis_cli(options.install_cli);
     Ok(Plan {
         project,
         agents,
         database,
         file_actions,
+        client,
+        cli,
         cwd: options.cwd.clone(),
     })
 }
@@ -146,6 +162,8 @@ pub async fn apply(plan: &Plan, on_event: &mut dyn FnMut(Event)) -> Result<Repor
     for action in &plan.file_actions {
         changes.push(action.perform(&plan.cwd)?);
     }
+    changes.push(plan.client.perform(&plan.cwd, on_event)?);
+    changes.push(plan.cli.perform(&plan.cwd, on_event)?);
     Ok(Report { changes })
 }
 
@@ -219,6 +237,7 @@ mod tests {
             cwd: dir.path().to_path_buf(),
             url_input: Some("redis-cli -u redis://h:1".into()),
             agents: Some(vec![Agent::Claude]),
+            install_cli: false,
         })
         .unwrap();
         assert_eq!(plan.project.runtime, Runtime::Go);
@@ -234,12 +253,17 @@ mod tests {
             cwd: dir.path().to_path_buf(),
             url_input: Some("redis://h:1".into()),
             agents: Some(vec![Agent::Codex]),
+            install_cli: false,
         })
         .unwrap();
         let changes = plan.changes();
         let subjects: Vec<_> = changes.iter().map(|c| c.subject.as_str()).collect();
-        assert_eq!(subjects, vec![".env", ".gitignore"]);
-        assert!(changes.iter().all(|c| c.status == Status::Created));
+        assert_eq!(
+            subjects[..3],
+            [".env", ".env.example", ".gitignore"],
+            "env wiring leads the report"
+        );
+        assert!(changes[..3].iter().all(|c| c.status == Status::Created));
         // Planning writes nothing.
         assert!(!dir.path().join(".env").exists());
     }
@@ -251,30 +275,41 @@ mod tests {
             cwd: dir.path().to_path_buf(),
             url_input: Some("redis://h:1".into()),
             agents: Some(vec![Agent::Codex]),
+            install_cli: false,
         })
         .unwrap();
         let report = apply(&plan, &mut |_| {}).await.unwrap();
-        assert_eq!(report.changes.len(), 2);
         let env = std::fs::read_to_string(dir.path().join(".env")).unwrap();
         assert!(env.contains("REDIS_URL=\"redis://h:1\""), "{env}");
+        assert!(
+            std::fs::read_to_string(dir.path().join(".env.example"))
+                .unwrap()
+                .contains("REDIS_URL=\"redis://localhost:6379\"")
+        );
         assert!(
             std::fs::read_to_string(dir.path().join(".gitignore"))
                 .unwrap()
                 .contains(".env")
         );
+        assert!(report.changes.len() >= 5, "{:?}", report.changes);
 
-        // A second plan over the applied state reads back all-unchanged.
+        // A second plan over the applied state reads the file contract back as
+        // all-unchanged (install lines depend on the machine, files must not).
         let replan = super::plan(&Options {
             cwd: dir.path().to_path_buf(),
             url_input: Some("redis://h:1".into()),
             agents: Some(vec![Agent::Codex]),
+            install_cli: false,
         })
         .unwrap();
         assert!(
             replan
                 .changes()
                 .iter()
-                .all(|c| c.status == Status::Unchanged)
+                .filter(|c| c.subject.starts_with('.'))
+                .all(|c| c.status == Status::Unchanged),
+            "{:?}",
+            replan.changes()
         );
     }
 }
