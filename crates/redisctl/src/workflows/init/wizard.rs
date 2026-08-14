@@ -15,7 +15,7 @@ use crate::error::RedisCtlError;
 /// A clack-style rail in brand red: `│` down the side, `◆` while a question is
 /// live, `◇` once answered. The colour index matches the banner's 256-colour
 /// fallback tone.
-struct RedisTheme;
+pub(crate) struct RedisTheme;
 
 fn brand() -> Style {
     Style::new().color256(203)
@@ -150,7 +150,7 @@ pub(crate) fn is_wizard_prompt(prompt: &str) -> bool {
     matches!(
         prompt,
         DATABASE_PROMPT | AGENTS_PROMPT | SKILLS_PROMPT | INTERRUPTED
-    )
+    ) || prompt == super::cloud::PICKER_PROMPT
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,7 +163,7 @@ pub enum Question {
 /// A question is worth asking only when no flag has already answered it.
 pub fn pending_questions(args: &InitArgs, url_given: bool) -> Vec<Question> {
     let mut pending = Vec::new();
-    if !url_given {
+    if !url_given && !args.cloud {
         pending.push(Question::Database);
     }
     if args.agents.is_empty() {
@@ -183,6 +183,7 @@ pub fn applies(args: &InitArgs, pending: &[Question]) -> bool {
 #[derive(Default)]
 pub struct Answers {
     pub url: Option<String>,
+    pub cloud: bool,
     pub agents: Option<Vec<engine::Agent>>,
     pub skills_global: Option<bool>,
 }
@@ -212,7 +213,11 @@ pub fn run(
     let mut answers = Answers::default();
     for question in pending {
         match question {
-            Question::Database => answers.url = ask_database(docker)?,
+            Question::Database => match ask_database(docker)? {
+                DatabaseChoice::Docker => {}
+                DatabaseChoice::Cloud => answers.cloud = true,
+                DatabaseChoice::Url(url) => answers.url = Some(url),
+            },
             Question::Agents => answers.agents = Some(ask_agents(detected)?),
             Question::Skills => answers.skills_global = Some(ask_skills_scope()?),
         }
@@ -220,8 +225,15 @@ pub fn run(
     Ok(answers)
 }
 
-/// `Ok(None)` means the local Docker default; a paste comes back as the URL.
-fn ask_database(docker: bool) -> Result<Option<String>, RedisCtlError> {
+enum DatabaseChoice {
+    Docker,
+    Cloud,
+    Url(String),
+}
+
+/// Docker is the default; Redis Cloud routes into the cloud flow; a paste comes
+/// back as the URL.
+fn ask_database(docker: bool) -> Result<DatabaseChoice, RedisCtlError> {
     const PROMPT: &str = DATABASE_PROMPT;
     // An option that cannot work stays on the list carrying the reason - the same
     // information the error would deliver after the run, shown before it instead.
@@ -230,12 +242,14 @@ fn ask_database(docker: bool) -> Result<Option<String>, RedisCtlError> {
     } else {
         "Local Docker container  (Docker is not running)"
     };
-    let items = [docker_item, "Paste a connection string"];
+    // No tier qualifier: the cloud flow connects to existing databases on any
+    // plan; only creating a new one defaults to the free Essentials plan.
+    let items = [docker_item, "Redis Cloud", "Paste a connection string"];
     loop {
         let selection = Select::with_theme(&RedisTheme)
             .with_prompt(PROMPT)
             .items(&items)
-            .default(if docker { 0 } else { 1 })
+            .default(if docker { 0 } else { 2 })
             .interact_opt()
             .map_err(prompt_failed)?;
         match selection {
@@ -243,7 +257,8 @@ fn ask_database(docker: bool) -> Result<Option<String>, RedisCtlError> {
             Some(0) if !docker => {
                 eprintln!("  Docker is not running - start it, or paste a connection string.");
             }
-            Some(0) => return Ok(None),
+            Some(0) => return Ok(DatabaseChoice::Docker),
+            Some(1) => return Ok(DatabaseChoice::Cloud),
             _ => break,
         }
     }
@@ -256,7 +271,7 @@ fn ask_database(docker: bool) -> Result<Option<String>, RedisCtlError> {
         })
         .interact_text()
         .map_err(prompt_failed)?;
-    Ok(Some(engine::extract_url(&pasted)?))
+    Ok(DatabaseChoice::Url(engine::extract_url(&pasted)?))
 }
 
 /// Detection preselects, it does not decide: having Cursor installed is not consent
@@ -313,6 +328,8 @@ mod tests {
     fn args() -> InitArgs {
         InitArgs {
             url: None,
+            cloud: false,
+            cloud_subscription: None,
             name: None,
             agents: Vec::new(),
             defaults: false,
@@ -322,6 +339,22 @@ mod tests {
             dry_run: false,
             pasted: Vec::new(),
         }
+    }
+
+    #[test]
+    fn the_cloud_picker_cancel_gets_wizard_tips() {
+        assert!(is_wizard_prompt(super::super::cloud::PICKER_PROMPT));
+        assert!(!is_wizard_prompt("Delete user 5?"));
+    }
+
+    #[test]
+    fn cloud_answers_the_database_question() {
+        let mut a = args();
+        a.cloud = true;
+        assert_eq!(
+            pending_questions(&a, false),
+            vec![Question::Agents, Question::Skills]
+        );
     }
 
     #[test]

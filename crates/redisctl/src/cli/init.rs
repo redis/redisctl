@@ -24,7 +24,17 @@ pub struct InitArgs {
     #[arg(long, value_name = "REDIS_URL")]
     pub url: Option<String>,
 
-    /// Database name, recorded in the generated project skill
+    /// Take the database from Redis Cloud instead of local Docker: reuse the
+    /// database named by --name, or create one on the free Essentials plan
+    #[arg(long, conflicts_with = "url")]
+    pub cloud: bool,
+
+    /// Create in this Essentials subscription instead of the free plan
+    #[arg(long, value_name = "ID", requires = "cloud")]
+    pub cloud_subscription: Option<i32>,
+
+    /// Database name, recorded in the generated project skill; with --cloud it is
+    /// also the reuse key: a database already carrying it is connected, not created
     #[arg(long, value_name = "LABEL")]
     pub name: Option<String>,
 
@@ -73,6 +83,8 @@ impl std::fmt::Debug for InitArgs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("InitArgs")
             .field("url", &self.url.as_ref().map(|_| "<redacted>"))
+            .field("cloud", &self.cloud)
+            .field("cloud_subscription", &self.cloud_subscription)
             .field("name", &self.name)
             .field("agents", &self.agents)
             .field("defaults", &self.defaults)
@@ -93,6 +105,8 @@ mod tests {
     fn debug_never_prints_url_or_paste_content() {
         let args = InitArgs {
             url: Some("redis://default:s3cret@h:1".into()),
+            cloud: false,
+            cloud_subscription: None,
             name: Some("db".into()),
             agents: vec![AgentArg::Claude],
             defaults: false,
