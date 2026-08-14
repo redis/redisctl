@@ -16,6 +16,7 @@ const NOTE: &str = "project-specific facts, loaded only for Redis-related prompt
 pub(crate) struct SkillFacts<'a> {
     pub(crate) runtime: Runtime,
     pub(crate) name: Option<&'a str>,
+    pub(crate) cloud: Option<&'a crate::CloudFacts>,
     pub(crate) container: Option<&'a str>,
     pub(crate) skills: &'a [String],
     pub(crate) client_installed: bool,
@@ -98,6 +99,15 @@ fn client_hint(facts: &SkillFacts) -> &'static str {
 }
 
 fn db_hint(facts: &SkillFacts) -> String {
+    if let (Some(cloud), None) = (facts.cloud, facts.container) {
+        return format!(
+            "- The database is `{name}` on Redis Cloud: {tier} subscription `{sub}`, database `{db}`; credentials live only in `.env`.",
+            name = cloud.name,
+            tier = cloud.tier.as_str(),
+            sub = cloud.subscription_id,
+            db = cloud.database_id,
+        );
+    }
     match (facts.container, facts.name) {
         (Some(container), _) => format!(
             "- Local database in Docker container `{container}` - `docker start {container}` if it is down; `docker exec -it {container} redis-cli` for a REPL."
@@ -107,6 +117,24 @@ fn db_hint(facts: &SkillFacts) -> String {
         ),
         (None, None) => "- The database is external (not managed by this project); credentials live only in `.env`.".to_string(),
     }
+}
+
+/// The control-plane bullet under Tooling; empty for non-cloud databases.
+fn control_plane_hint(facts: &SkillFacts) -> String {
+    let Some(cloud) = facts.cloud else {
+        return String::new();
+    };
+    let profile = cloud
+        .profile
+        .as_deref()
+        .map(|p| format!(" -p {p}"))
+        .unwrap_or_default();
+    format!(
+        "\n- Control plane (subscription, plan, memory use, modules): `redisctl api cloud get {base}/{sub}/databases/{db}{profile}`. That response contains the database password - never copy it into a file, a log, or chat; `.env` already has it.",
+        base = cloud.tier.api_base(),
+        sub = cloud.subscription_id,
+        db = cloud.database_id,
+    )
 }
 
 fn skills_hint(facts: &SkillFacts) -> String {
@@ -143,7 +171,7 @@ file.
 {db}
 
 ## Tooling
-- An MCP server named `redis` is registered in the project's agent configs (it reads `REDIS_URL` from `.env` at launch). Prefer its tools to inspect keys, search, and manipulate data instead of shelling out.
+- An MCP server named `redis` is registered in the project's agent configs (it reads `REDIS_URL` from `.env` at launch). Prefer its tools to inspect keys, search, and manipulate data instead of shelling out.{control_plane}
 {skills}
 
 ## Conventions
@@ -156,6 +184,7 @@ file.
 "#,
         client = client_hint(facts),
         db = db_hint(facts),
+        control_plane = control_plane_hint(facts),
         skills = skills_hint(facts),
         handy = handy_commands(facts),
     )
@@ -280,12 +309,56 @@ mod tests {
         SkillFacts {
             runtime: Runtime::Node,
             name: None,
+            cloud: None,
             container,
             skills,
             client_installed: true,
             cli_available: true,
             docker: true,
         }
+    }
+
+    fn cloud_facts(tier: crate::CloudTier, profile: Option<&str>) -> crate::CloudFacts {
+        crate::CloudFacts {
+            name: "cloud-db".to_string(),
+            subscription_id: "1".to_string(),
+            database_id: "9".to_string(),
+            tier,
+            profile: profile.map(str::to_string),
+            created: false,
+        }
+    }
+
+    #[test]
+    fn cloud_facts_carry_ids_and_the_control_plane_command() {
+        let cloud = cloud_facts(crate::CloudTier::Essentials, None);
+        let mut f = facts(None, &[]);
+        f.cloud = Some(&cloud);
+        let text = content(&f);
+        assert!(
+            text.contains("`cloud-db` on Redis Cloud: Essentials subscription `1`, database `9`"),
+            "{text}"
+        );
+        assert!(
+            text.contains("redisctl api cloud get /fixed/subscriptions/1/databases/9`"),
+            "{text}"
+        );
+        assert!(text.contains("never copy it into a file"), "{text}");
+        // Credential-free invariant holds on the cloud path too.
+        assert!(!text.contains("redis://"), "{text}");
+    }
+
+    #[test]
+    fn flexible_databases_use_the_pro_api_path_and_name_the_profile() {
+        let cloud = cloud_facts(crate::CloudTier::Flexible, Some("qa"));
+        let mut f = facts(None, &[]);
+        f.cloud = Some(&cloud);
+        let text = content(&f);
+        assert!(text.contains("Flexible subscription `1`"), "{text}");
+        assert!(
+            text.contains("redisctl api cloud get /subscriptions/1/databases/9 -p qa`"),
+            "{text}"
+        );
     }
 
     #[test]

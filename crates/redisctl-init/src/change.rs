@@ -33,7 +33,7 @@ pub struct Change {
 }
 
 impl Change {
-    pub(crate) fn new(subject: impl Into<String>, status: Status, note: impl Into<String>) -> Self {
+    pub fn new(subject: impl Into<String>, status: Status, note: impl Into<String>) -> Self {
         Self {
             subject: subject.into(),
             status,

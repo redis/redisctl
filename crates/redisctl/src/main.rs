@@ -564,7 +564,9 @@ async fn execute_command(cli: &Cli, conn_mgr: &ConnectionManager) -> Result<(), 
 
         Commands::Db(db_cmd) => commands::db::handle_db_command(db_cmd, conn_mgr, cli.output).await,
 
-        Commands::Init(init_args) => workflows::init::run(init_args).await,
+        Commands::Init(init_args) => {
+            workflows::init::run(init_args, conn_mgr, cli.profile.as_deref()).await
+        }
     };
 
     let duration = start.elapsed();
