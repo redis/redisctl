@@ -1,4 +1,4 @@
-//! Small shared helpers for `redisctl init`: masking, binary lookup, project file reads.
+//! Small shared helpers: credential masking, binary lookup, project file reads.
 
 use std::path::Path;
 use std::sync::OnceLock;

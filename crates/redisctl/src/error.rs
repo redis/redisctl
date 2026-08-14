@@ -171,6 +171,16 @@ pub enum RedisCtlError {
 /// Result type for redisctl operations
 pub type Result<T> = std::result::Result<T, RedisCtlError>;
 
+impl From<redisctl_init::InitError> for RedisCtlError {
+    fn from(err: redisctl_init::InitError) -> Self {
+        match err {
+            redisctl_init::InitError::NoUrlInInput { .. } => RedisCtlError::InvalidInput {
+                message: err.to_string(),
+            },
+        }
+    }
+}
+
 impl RedisCtlError {
     /// Get helpful suggestions for resolving this error
     pub fn suggestions(&self) -> Vec<String> {
@@ -274,6 +284,13 @@ impl RedisCtlError {
                 "Check the command documentation: redisctl <command> --help".to_string(),
                 "Use the appropriate command for your deployment type".to_string(),
             ],
+            // `redisctl init` input errors name the fix themselves; the file-format
+            // tips below would mislead.
+            RedisCtlError::InvalidInput { message }
+                if message.contains("no redis:// or rediss:// URL found") =>
+            {
+                vec![]
+            }
             RedisCtlError::InvalidInput { .. } => vec![
                 "Check the command syntax: redisctl <command> --help".to_string(),
                 "Verify input file format is correct (JSON/YAML)".to_string(),

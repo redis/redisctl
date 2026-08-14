@@ -1,0 +1,20 @@
+[package]
+name = "redisctl-init"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Onboarding engine for redisctl init (internal, not published)"
+publish = false
+
+[dependencies]
+regex = "1.12.2"
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+which = "7"
+
+[dev-dependencies]
+tempfile = { workspace = true }
