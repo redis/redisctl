@@ -17,12 +17,14 @@ const CLI_INSTALLER: &str = "https://packages.redis.io/redis-cli/install.sh";
 pub(crate) enum InstallAction {
     /// Nothing to run: the decision (unchanged/kept/skipped) is the report.
     Report(Change),
-    /// Run a package-manager command that installs the client package.
+    /// Run a package-manager command that installs a package.
     Command {
         cmd: String,
         args: Vec<String>,
         file: &'static str,
         note: String,
+        /// The ledger subject when the command itself is the story (planned, failed).
+        label: String,
     },
     /// Append to a requirements-style manifest.
     Append(FileAction),
@@ -35,8 +37,10 @@ impl InstallAction {
     pub(crate) fn preview(&self) -> Change {
         match self {
             InstallAction::Report(change) => change.clone(),
-            InstallAction::Command { cmd, args, .. } => Change::new(
-                "client package",
+            InstallAction::Command {
+                cmd, args, label, ..
+            } => Change::new(
+                label.clone(),
                 Status::Planned,
                 format!("would run: {cmd} {}", args.join(" ")),
             ),
@@ -62,17 +66,18 @@ impl InstallAction {
                 args,
                 file,
                 note,
+                label,
             } => {
                 let shown = format!("{cmd} {}", args.join(" "));
                 on_event(Event::ProgressStart(format!(
-                    "installing client package ({shown})"
+                    "installing {label} ({shown})"
                 )));
                 let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
                 let r = sh_in(cwd, cmd, &arg_refs);
                 if r.status != 0 {
                     on_event(Event::ProgressDone(" failed".to_string()));
                     return Ok(Change::new(
-                        "client package",
+                        label.clone(),
                         Status::Skipped,
                         format!("{shown} failed - install manually"),
                     ));
@@ -125,12 +130,13 @@ fn command(
     args: &[&str],
     file: &'static str,
     note: String,
+    label: &str,
 ) -> InstallAction {
     if !has(cmd) {
         return InstallAction::Report(Change::new(
-            "client package",
+            label,
             Status::Skipped,
-            format!("{cmd} not found - install client package manually"),
+            format!("{cmd} not found - install {label} manually"),
         ));
     }
     InstallAction::Command {
@@ -138,6 +144,7 @@ fn command(
         args: args.iter().map(|s| s.to_string()).collect(),
         file,
         note,
+        label: label.to_string(),
     }
 }
 
@@ -178,6 +185,7 @@ fn decide_client(cwd: &Path, project: &Project, has: &dyn Fn(&str) -> bool) -> I
                 args,
                 "package.json",
                 format!("redis client installed via {pm}"),
+                "client package",
             )
         }
         Runtime::Python => {
@@ -198,6 +206,7 @@ fn decide_client(cwd: &Path, project: &Project, has: &dyn Fn(&str) -> bool) -> I
                     &["add", "redis"],
                     "pyproject.toml",
                     "redis-py installed via uv".to_string(),
+                    "client package",
                 );
             }
             if exists(cwd, "poetry.lock") {
@@ -207,6 +216,7 @@ fn decide_client(cwd: &Path, project: &Project, has: &dyn Fn(&str) -> bool) -> I
                     &["add", "redis"],
                     "pyproject.toml",
                     "redis-py installed via poetry".to_string(),
+                    "client package",
                 );
             }
             if let Some(reqs) = requirements {
@@ -232,6 +242,7 @@ fn decide_client(cwd: &Path, project: &Project, has: &dyn Fn(&str) -> bool) -> I
                 &["get", "github.com/redis/go-redis/v9"],
                 "go.mod",
                 "go-redis installed".to_string(),
+                "client package",
             )
         }
         Runtime::Rust => {
@@ -247,6 +258,7 @@ fn decide_client(cwd: &Path, project: &Project, has: &dyn Fn(&str) -> bool) -> I
                 &["add", "redis"],
                 "Cargo.toml",
                 "redis crate installed".to_string(),
+                "client package",
             )
         }
         Runtime::Java => {
@@ -269,6 +281,137 @@ fn decide_client(cwd: &Path, project: &Project, has: &dyn Fn(&str) -> bool) -> I
         Runtime::Unknown => {
             skipped("no package manifest detected - install the Redis client for your language")
         }
+    }
+}
+
+/// The product SDK per runtime; everything else talks REST (or MCP) directly.
+pub(crate) fn product_package(key: crate::ProductKey, runtime: Runtime) -> Option<&'static str> {
+    match (key, runtime) {
+        (crate::ProductKey::AgentMemory, Runtime::Node) => Some("@redis-iris/agent-memory"),
+        (crate::ProductKey::LangCache, Runtime::Node) => Some("@redis-ai/langcache"),
+        (crate::ProductKey::LangCache, Runtime::Python) => Some("langcache"),
+        (crate::ProductKey::ContextRetriever, Runtime::Python) => Some("redis-context-retriever"),
+        _ => None,
+    }
+}
+
+pub(crate) fn plan_product_install(
+    cwd: &Path,
+    project: &Project,
+    product: &crate::products::WiredProduct,
+) -> InstallAction {
+    decide_product(cwd, project, product, &has_bin)
+}
+
+fn decide_product(
+    cwd: &Path,
+    project: &Project,
+    product: &crate::products::WiredProduct,
+    has: &dyn Fn(&str) -> bool,
+) -> InstallAction {
+    let label = format!("{} SDK", product.label());
+    let no_sdk = |note: String| InstallAction::Report(Change::new(&label, Status::Skipped, note));
+    let pkg = match product_package(product.spec.key, project.runtime) {
+        Some(pkg) => pkg,
+        None if product.spec.mcp => {
+            return no_sdk("no SDK needed - the coding agent uses its MCP tools".to_string());
+        }
+        None => {
+            return no_sdk(format!(
+                "no {} SDK - call the REST API at {}",
+                project.runtime.as_str(),
+                product.url()
+            ));
+        }
+    };
+    match project.runtime {
+        Runtime::Node => {
+            let Ok(manifest) = serde_json::from_str::<serde_json::Value>(
+                &read_if(cwd, "package.json").unwrap_or_default(),
+            ) else {
+                return InstallAction::Report(Change::new(
+                    &label,
+                    Status::Kept,
+                    "package.json is unparseable; install it yourself",
+                ));
+            };
+            if !manifest["dependencies"][pkg].is_null()
+                || !manifest["devDependencies"][pkg].is_null()
+            {
+                return InstallAction::Report(Change::new(
+                    &label,
+                    Status::Unchanged,
+                    format!("{pkg} already a dependency"),
+                ));
+            }
+            let pm = project.pm.unwrap_or("npm");
+            let args: &[&str] = if pm == "npm" {
+                &["install", pkg]
+            } else {
+                &["add", pkg]
+            };
+            command(
+                has,
+                pm,
+                args,
+                "package.json",
+                format!("{pkg} installed via {pm}"),
+                &label,
+            )
+        }
+        Runtime::Python => {
+            let requirements = read_if(cwd, "requirements.txt");
+            let has_dep =
+                regex::Regex::new(&format!(r"(?m)^\s*{}([\[\s=<>~!]|$)", regex::escape(pkg)))
+                    .expect("escaped package regex")
+                    .is_match(requirements.as_deref().unwrap_or(""))
+                    || read_if(cwd, "pyproject.toml")
+                        .unwrap_or_default()
+                        .contains(&format!("\"{pkg}"));
+            if has_dep {
+                return InstallAction::Report(Change::new(
+                    &label,
+                    Status::Unchanged,
+                    format!("{pkg} already a dependency"),
+                ));
+            }
+            if exists(cwd, "pyproject.toml") && (exists(cwd, "uv.lock") || has("uv")) {
+                return command(
+                    has,
+                    "uv",
+                    &["add", pkg],
+                    "pyproject.toml",
+                    format!("{pkg} installed via uv"),
+                    &label,
+                );
+            }
+            if exists(cwd, "poetry.lock") {
+                return command(
+                    has,
+                    "poetry",
+                    &["add", pkg],
+                    "pyproject.toml",
+                    format!("{pkg} installed via poetry"),
+                    &label,
+                );
+            }
+            if let Some(reqs) = requirements {
+                return InstallAction::Append(FileAction::Write {
+                    rel: "requirements.txt".to_string(),
+                    content: format!("{}{pkg}\n", ending_with_newline(&reqs)),
+                    status: Status::Updated,
+                    note: format!("{pkg} added - run pip install -r requirements.txt"),
+                });
+            }
+            no_sdk(format!(
+                "install {pkg} for your runtime, or call the REST API directly"
+            ))
+        }
+        // product_package answers None for every other runtime, which the no-SDK
+        // arms above already turned into a report.
+        _ => no_sdk(format!(
+            "install {pkg} for your runtime, or call the REST API directly"
+        )),
     }
 }
 
@@ -465,6 +608,7 @@ mod tests {
             args: vec![],
             file: "package.json",
             note: "never used".to_string(),
+            label: "client package".to_string(),
         };
         let change = action.perform(dir.path(), &mut |_| {}).unwrap();
         assert_eq!(change.status, Status::Skipped);
@@ -480,6 +624,7 @@ mod tests {
             args: vec![],
             file: "package.json",
             note: "redis client installed via true".to_string(),
+            label: "client package".to_string(),
         };
         let change = action.perform(dir.path(), &mut |_| {}).unwrap();
         assert_eq!(change.status, Status::Updated);
@@ -496,6 +641,7 @@ mod tests {
             args: vec!["sub/marker".to_string()],
             file: "package.json",
             note: "n".to_string(),
+            label: "client package".to_string(),
         };
         // `sub/` exists only inside the plan's cwd: the command succeeds there and
         // nowhere else.
