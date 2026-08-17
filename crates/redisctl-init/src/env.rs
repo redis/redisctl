@@ -137,6 +137,80 @@ pub(crate) fn plan_env_set(
     }
 }
 
+/// Set several keys as one provenance block. Never-clobber per key: absent keys are
+/// added, present-and-identical ignored, present-and-different kept (named, never
+/// echoed). `base` is the file content this block plans against - callers planning
+/// several blocks into one file thread each Write's content into the next call, so
+/// later blocks see earlier ones instead of a stale disk read.
+pub(crate) fn plan_env_set_block(
+    dir: &Path,
+    rel: &str,
+    base: Option<String>,
+    entries: &[(String, String)],
+) -> Result<(FileAction, Option<String>), InitError> {
+    let content = match base {
+        Some(content) => Some(content),
+        None => read_for_planning(dir, rel)?,
+    };
+    let existing_value = |key: &str| {
+        content.as_deref().and_then(|text| {
+            text.lines().find_map(|line| {
+                let line = line.trim_start();
+                let line = line.strip_prefix("export ").unwrap_or(line);
+                let (k, v) = line.split_once('=')?;
+                (k.trim() == key).then(|| strip_edge_quotes(v.trim()).to_string())
+            })
+        })
+    };
+    let mut added = Vec::new();
+    let mut kept = Vec::new();
+    let mut lines = Vec::new();
+    for (key, value) in entries {
+        match existing_value(key) {
+            Some(existing) if existing == *value => {}
+            Some(_) => kept.push(key.as_str()),
+            None => {
+                added.push(key.as_str());
+                lines.push(format!("{key}=\"{value}\""));
+            }
+        }
+    }
+    if !added.is_empty() {
+        let block = format!("# Added by redisctl init\n{}\n", lines.join("\n"));
+        let (status, new_content) = match &content {
+            None => (Status::Created, block),
+            Some(existing) => (
+                Status::Updated,
+                format!("{}\n{block}", ending_with_newline(existing).trim_end()),
+            ),
+        };
+        return Ok((
+            FileAction::Write {
+                rel: rel.to_string(),
+                content: new_content.clone(),
+                status,
+                note: added.join(", "),
+            },
+            Some(new_content),
+        ));
+    }
+    if !kept.is_empty() {
+        return Ok((
+            FileAction::Kept {
+                rel: rel.to_string(),
+                note: format!("existing {} left untouched", kept.join(", ")),
+            },
+            content,
+        ));
+    }
+    Ok((
+        FileAction::Unchanged {
+            rel: rel.to_string(),
+        },
+        content,
+    ))
+}
+
 /// Make sure `.gitignore` covers `.env` before credentials land in it.
 pub(crate) fn plan_gitignore_env(dir: &Path) -> Result<FileAction, InitError> {
     let content = read_for_planning(dir, ".gitignore")?;
@@ -291,5 +365,75 @@ mod tests {
             fs::read_to_string(dir.path().join(".gitignore")).unwrap(),
             "\n# Added by redisctl init - never commit credentials\n.env\n"
         );
+    }
+}
+
+#[cfg(test)]
+mod block_tests {
+    use super::*;
+
+    fn write_block(
+        dir: &Path,
+        base: Option<String>,
+        entries: &[(&str, &str)],
+    ) -> (FileAction, Option<String>) {
+        let owned: Vec<(String, String)> = entries
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        plan_env_set_block(dir, ".env", base, &owned).unwrap()
+    }
+
+    #[test]
+    fn blocks_thread_content_so_a_second_product_sees_the_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let (first, carried) = write_block(
+            dir.path(),
+            None,
+            &[
+                ("AGENT_MEMORY_URL", "https://m"),
+                ("AGENT_MEMORY_API_KEY", "<paste-from-redis-cloud>"),
+            ],
+        );
+        let FileAction::Write { note, .. } = &first else {
+            panic!("expected write");
+        };
+        assert_eq!(note, "AGENT_MEMORY_URL, AGENT_MEMORY_API_KEY");
+        let (second, carried) = write_block(
+            dir.path(),
+            carried,
+            &[("LANGCACHE_URL", "https://l"), ("LANGCACHE_API_KEY", "k")],
+        );
+        let FileAction::Write { content, .. } = &second else {
+            panic!("expected write");
+        };
+        // One provenance block per product, both surviving in the final content.
+        assert_eq!(content.matches("# Added by redisctl init").count(), 2);
+        assert!(
+            content.contains("AGENT_MEMORY_URL=\"https://m\""),
+            "{content}"
+        );
+        assert!(content.contains("LANGCACHE_API_KEY=\"k\""), "{content}");
+        assert!(carried.is_some());
+    }
+
+    #[test]
+    fn existing_keys_are_kept_by_name_and_never_echoed() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env"), "LANGCACHE_API_KEY=\"s3cret\"\n").unwrap();
+        let (action, _) = write_block(dir.path(), None, &[("LANGCACHE_API_KEY", "other")]);
+        let FileAction::Kept { note, .. } = &action else {
+            panic!("expected kept, got {action:?}");
+        };
+        assert_eq!(note, "existing LANGCACHE_API_KEY left untouched");
+        assert!(!note.contains("s3cret") && !note.contains("other"));
+    }
+
+    #[test]
+    fn identical_values_read_as_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env"), "A=\"1\"\n").unwrap();
+        let (action, _) = write_block(dir.path(), None, &[("A", "1")]);
+        assert!(matches!(action, FileAction::Unchanged { .. }), "{action:?}");
     }
 }

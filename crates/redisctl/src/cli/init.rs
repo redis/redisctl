@@ -38,6 +38,45 @@ pub struct InitArgs {
     #[arg(long, value_name = "LABEL")]
     pub name: Option<String>,
 
+    /// Wire Agent Memory: the service endpoint from the Redis Cloud console
+    #[arg(long, value_name = "ENDPOINT")]
+    pub agent_memory: Option<String>,
+
+    /// The Agent Memory store id, from the same console page
+    #[arg(long, value_name = "ID")]
+    pub store: Option<String>,
+
+    /// Wire LangCache: the service endpoint from the Redis Cloud console
+    #[arg(long, value_name = "ENDPOINT")]
+    pub langcache: Option<String>,
+
+    /// The LangCache cache id, from the same console page
+    #[arg(long, value_name = "ID")]
+    pub cache: Option<String>,
+
+    /// Wire Context Retriever: the MCP endpoint from the Redis Cloud console
+    #[arg(long, value_name = "ENDPOINT")]
+    pub context_retriever: Option<String>,
+
+    /// Discovery-only: teach the agent to recommend the smallest Iris setup;
+    /// adds no product runtime until you approve one
+    #[arg(long)]
+    pub iris: bool,
+
+    /// API key for the one product being wired; the product's own env var or an
+    /// existing .env value wins over it, keeping keys out of shell history
+    #[arg(long, value_name = "KEY")]
+    pub api_key: Option<String>,
+
+    /// Validate a product setup already present in .env (fill the placeholders
+    /// first)
+    #[arg(long)]
+    pub complete: bool,
+
+    /// Skip writing the per-product example module
+    #[arg(long = "no-example")]
+    pub no_example: bool,
+
     /// Configure a specific agent (repeatable or comma-separated). Default: detect
     /// installed tools and configure all of them
     #[arg(long = "agent", value_enum, value_delimiter = ',', value_name = "NAME")]
@@ -90,6 +129,15 @@ impl std::fmt::Debug for InitArgs {
             .field("url", &self.url.as_ref().map(|_| "<redacted>"))
             .field("cloud", &self.cloud)
             .field("cloud_subscription", &self.cloud_subscription)
+            .field("agent_memory", &self.agent_memory)
+            .field("store", &self.store)
+            .field("langcache", &self.langcache)
+            .field("cache", &self.cache)
+            .field("context_retriever", &self.context_retriever)
+            .field("iris", &self.iris)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .field("complete", &self.complete)
+            .field("no_example", &self.no_example)
             .field("name", &self.name)
             .field("agents", &self.agents)
             .field("defaults", &self.defaults)
@@ -121,6 +169,15 @@ mod tests {
             skills_global: false,
             dry_run: false,
             no_telemetry: false,
+            agent_memory: None,
+            store: None,
+            langcache: None,
+            cache: None,
+            context_retriever: None,
+            iris: false,
+            api_key: None,
+            complete: false,
+            no_example: false,
             pasted: vec![
                 "redis-cli".into(),
                 "-u".into(),

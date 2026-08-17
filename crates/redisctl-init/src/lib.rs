@@ -8,8 +8,10 @@
 mod change;
 mod docker;
 mod env;
+mod example;
 mod install;
 mod mcp;
+mod products;
 mod project;
 mod project_skill;
 mod skills;
@@ -22,6 +24,9 @@ pub use project::{detect as detect_project, detect_agents};
 pub(crate) const SKILLS_DIR: &str = ".agents/skills";
 pub use docker::validate;
 pub use env::read_env_key;
+pub use products::{
+    ProductKey, ProductRequest, SECRET_PLACEHOLDER, WiredProduct, validate_product,
+};
 pub use project::{Agent, KNOWN_AGENTS, Project, Runtime};
 pub use util::{mask_url, slug};
 
@@ -54,6 +59,12 @@ pub enum InitError {
 
     #[error("cannot write '{rel}': {message}")]
     WriteFailed { rel: String, message: String },
+
+    #[error("cannot complete {label}: .env needs {needed}.")]
+    ProductIncomplete { label: String, needed: String },
+
+    #[error("nothing to complete: .env has no Redis database or Redis Iris product setup.")]
+    NothingToComplete,
 }
 
 /// Progress reporting from [`apply`]: the caller renders these however its surface
@@ -72,7 +83,6 @@ pub enum Event {
 }
 
 /// What the caller asked for, resolved from its own surface (flags, prompts, tools).
-#[derive(Debug)]
 pub struct Options {
     pub cwd: PathBuf,
     /// Database name, recorded in the generated project skill.
@@ -83,6 +93,17 @@ pub struct Options {
     /// The Redis Cloud database behind `url_input`, when the caller provisioned or
     /// picked one. Plain data - the engine makes no cloud calls.
     pub cloud: Option<CloudFacts>,
+    /// Iris products to wire (endpoints and ids from the caller's flags).
+    pub products: Vec<ProductRequest>,
+    /// Discovery-only: guidance lands in the skill, no product runtime is added,
+    /// and no database is provisioned unless `url_input` says so.
+    pub iris: bool,
+    /// Rediscover products (and the database) from `.env` and validate them.
+    pub complete: bool,
+    /// The API key for a single requested product; env vars and `.env` win over it.
+    pub api_key: Option<String>,
+    /// Skip writing the per-product example module.
+    pub no_example: bool,
     /// `None` detects installed tools; detecting none still configures all agents.
     pub agents: Option<Vec<Agent>>,
     /// Install redis-cli when it is missing (`--no-install-cli` turns this off).
@@ -91,6 +112,28 @@ pub struct Options {
     pub skills_repo: Option<PathBuf>,
     /// Install the official skills for the user instead of into this project.
     pub skills_global: bool,
+}
+
+// Manual, because `{:?}` reaches logs: `url_input` can carry a password and
+// `api_key` is a credential outright.
+impl std::fmt::Debug for Options {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Options")
+            .field("cwd", &self.cwd)
+            .field("name", &self.name)
+            .field("url_input", &self.url_input.as_ref().map(|_| "<redacted>"))
+            .field("cloud", &self.cloud)
+            .field("products", &self.products)
+            .field("iris", &self.iris)
+            .field("complete", &self.complete)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .field("no_example", &self.no_example)
+            .field("agents", &self.agents)
+            .field("install_cli", &self.install_cli)
+            .field("skills_repo", &self.skills_repo)
+            .field("skills_global", &self.skills_global)
+            .finish()
+    }
 }
 
 /// A Redis Cloud database the caller resolved before planning; flows into the
@@ -138,30 +181,43 @@ pub struct Plan {
     pub agents: Vec<Agent>,
     name: Option<String>,
     cloud: Option<CloudFacts>,
-    database: docker::DatabaseAction,
+    database: Option<docker::DatabaseAction>,
+    products: Vec<WiredProduct>,
+    iris: bool,
     file_actions: Vec<env::FileAction>,
-    client: install::InstallAction,
-    cli: install::InstallAction,
+    client: Option<install::InstallAction>,
+    sdks: Vec<install::InstallAction>,
+    cli: Option<install::InstallAction>,
+    examples: Vec<env::FileAction>,
+    example_note: Option<Change>,
     skills: skills::SkillsAction,
     mcp: mcp::McpPlan,
     cwd: PathBuf,
 }
 
 impl Plan {
-    pub fn database_url(&self) -> &str {
-        self.database.url()
+    /// `None` means this run works without a database (products-only, `--iris`).
+    pub fn database_url(&self) -> Option<&str> {
+        self.database.as_ref().map(|db| db.url())
     }
 
     /// The database's provenance for the summary line. `applied` picks the wording
     /// for a real run over the planned one ("new Docker container" vs
     /// "Docker (planned)").
-    pub fn database_source(&self, applied: bool) -> &'static str {
-        match &self.cloud {
-            Some(cloud) if cloud.created && applied => "Redis Cloud (new database)",
-            Some(cloud) if cloud.created => "Redis Cloud (planned)",
-            Some(_) => "Redis Cloud (existing database)",
-            None => self.database.source(applied),
+    pub fn database_source(&self, applied: bool) -> Option<&'static str> {
+        match (&self.cloud, &self.database) {
+            (Some(cloud), _) if cloud.created && applied => Some("Redis Cloud (new database)"),
+            (Some(cloud), _) if cloud.created => Some("Redis Cloud (planned)"),
+            (Some(_), _) => Some("Redis Cloud (existing database)"),
+            (None, Some(database)) => Some(database.source(applied)),
+            (None, None) => None,
         }
+    }
+
+    /// The products this run works with, for the caller's Validate section,
+    /// Action-required epilogue, and telemetry.
+    pub fn products(&self) -> &[WiredProduct] {
+        &self.products
     }
 
     /// Neither uvx nor Docker can run the MCP server; the configs are still written
@@ -172,19 +228,36 @@ impl Plan {
 
     /// The change report this plan predicts, in the order a run reports it.
     pub fn changes(&self) -> Vec<Change> {
-        self.database
-            .preview()
+        let mut changes: Vec<Change> = self
+            .database
+            .as_ref()
+            .and_then(|database| database.preview())
             .into_iter()
-            .chain(self.file_actions.iter().map(|action| action.preview()))
-            .chain([
-                self.client.preview(),
-                self.cli.preview(),
-                self.skills.preview(),
-                project_skill::preview(&self.cwd),
-            ])
-            .chain(self.mcp.actions.iter().map(|action| action.preview()))
-            .collect()
+            .collect();
+        if self.iris {
+            changes.push(iris_note());
+        }
+        changes.extend(self.file_actions.iter().map(|action| action.preview()));
+        changes.extend(self.client.iter().map(|client| client.preview()));
+        changes.extend(self.sdks.iter().map(|sdk| sdk.preview()));
+        changes.extend(self.cli.iter().map(|cli| cli.preview()));
+        changes.extend(self.examples.iter().map(|example| example.preview()));
+        changes.extend(self.example_note.iter().cloned());
+        changes.push(self.skills.preview());
+        changes.push(project_skill::preview(&self.cwd));
+        changes.extend(self.mcp.actions.iter().map(|action| action.preview()));
+        changes
     }
+}
+
+/// The one thing an --iris run deliberately does not do, stated so no demo script
+/// has to.
+fn iris_note() -> Change {
+    Change::new(
+        "product runtime",
+        Status::Skipped,
+        "no .env, SDK, example, or MCP server until you approve a product",
+    )
 }
 
 /// The change report of an applied plan.
@@ -198,29 +271,90 @@ pub struct Report {
 }
 
 pub fn plan(options: &Options) -> Result<Plan, InitError> {
+    let products = products::wire(
+        &options.cwd,
+        &options.products,
+        options.api_key.as_deref(),
+        options.complete,
+        &|key| std::env::var(key).ok(),
+    )?;
+    // The database is opt-out by absence: a products-only or --iris run adds no
+    // runtime it was not asked for.
+    let wants_database = options.url_input.is_some()
+        || (!options.iris && products.is_empty() && !options.complete)
+        || (options.complete && env::read_env_key(&options.cwd, ".env", "REDIS_URL").is_some());
+    if options.complete && products.is_empty() && !wants_database {
+        return Err(InitError::NothingToComplete);
+    }
     let database = match options.url_input.as_deref() {
-        Some(input) => docker::DatabaseAction::Provided {
+        Some(input) => Some(docker::DatabaseAction::Provided {
             url: extract_url(input)?,
-        },
-        None => docker::plan_local_database(&options.cwd)?,
+        }),
+        None if wants_database => Some(docker::plan_local_database(&options.cwd)?),
+        None => None,
     };
     let project = project::detect(&options.cwd);
     let agents = project::resolve_agents(
         options.agents.as_deref(),
         &project::detect_agents(&options.cwd),
     );
-    let file_actions = vec![
-        env::plan_env_set(&options.cwd, ".env", "REDIS_URL", database.url())?,
-        env::plan_env_set(
+
+    let mut file_actions = Vec::new();
+    // Each Write's content threads into the next block, so later planners see
+    // earlier additions instead of a stale disk read.
+    let mut env_base: Option<String> = None;
+    let mut example_base: Option<String> = None;
+    if let Some(database) = &database {
+        let action = env::plan_env_set(&options.cwd, ".env", "REDIS_URL", database.url())?;
+        if let env::FileAction::Write { content, .. } = &action {
+            env_base = Some(content.clone());
+        }
+        file_actions.push(action);
+        let action = env::plan_env_set(
             &options.cwd,
             ".env.example",
             "REDIS_URL",
             "redis://localhost:6379",
-        )?,
-        env::plan_gitignore_env(&options.cwd)?,
-    ];
-    let client = install::plan_client_install(&options.cwd, &project);
-    let cli = install::plan_redis_cli(options.install_cli);
+        )?;
+        if let env::FileAction::Write { content, .. } = &action {
+            example_base = Some(content.clone());
+        }
+        file_actions.push(action);
+    }
+    for product in &products {
+        let (action, next) = env::plan_env_set_block(
+            &options.cwd,
+            ".env",
+            env_base.take(),
+            &product.env_entries(),
+        )?;
+        env_base = next;
+        file_actions.push(action);
+        let (action, next) = env::plan_env_set_block(
+            &options.cwd,
+            ".env.example",
+            example_base.take(),
+            &product.example_entries(),
+        )?;
+        example_base = next;
+        file_actions.push(action);
+    }
+    if database.is_some() || !products.is_empty() {
+        file_actions.push(env::plan_gitignore_env(&options.cwd)?);
+    }
+
+    let client = database
+        .is_some()
+        .then(|| install::plan_client_install(&options.cwd, &project));
+    let sdks = products
+        .iter()
+        .map(|product| install::plan_product_install(&options.cwd, &project, product))
+        .collect();
+    let cli = database
+        .is_some()
+        .then(|| install::plan_redis_cli(options.install_cli));
+    let (examples, example_note) =
+        example::plan_examples(&options.cwd, project.runtime, &products, options.no_example);
     let skills = skills::SkillsAction {
         agents: agents.clone(),
         global: options.skills_global,
@@ -229,10 +363,17 @@ pub fn plan(options: &Options) -> Result<Plan, InitError> {
     let mcp = mcp::plan_mcp(
         &options.cwd,
         &agents,
-        options
-            .cloud
-            .as_ref()
-            .map(|cloud| (cloud, util::has_bin("redisctl-mcp"))),
+        mcp::McpInputs {
+            database: database.is_some(),
+            cloud: options
+                .cloud
+                .as_ref()
+                .map(|cloud| (cloud, util::has_bin("redisctl-mcp"))),
+            context_retriever: products
+                .iter()
+                .any(|p| matches!(p.spec.key, products::ProductKey::ContextRetriever))
+                .then(|| util::has_bin("npx")),
+        },
     )?;
     Ok(Plan {
         project,
@@ -240,9 +381,14 @@ pub fn plan(options: &Options) -> Result<Plan, InitError> {
         name: options.name.clone(),
         cloud: options.cloud.clone(),
         database,
+        products,
+        iris: options.iris,
         file_actions,
         client,
+        sdks,
         cli,
+        examples,
+        example_note,
         skills,
         mcp,
         cwd: options.cwd.clone(),
@@ -254,16 +400,33 @@ pub fn plan(options: &Options) -> Result<Plan, InitError> {
 /// entries.
 pub async fn apply(plan: &Plan, on_event: &mut dyn FnMut(Event)) -> Result<Report, InitError> {
     let mut changes = Vec::new();
-    if let Some(change) = docker::apply_database(&plan.database, on_event).await? {
+    if let Some(database) = &plan.database
+        && let Some(change) = docker::apply_database(database, on_event).await?
+    {
         changes.push(change);
+    }
+    if plan.iris {
+        changes.push(iris_note());
     }
     for action in &plan.file_actions {
         changes.push(action.perform(&plan.cwd)?);
     }
-    let client_change = plan.client.perform(&plan.cwd, on_event)?;
-    let client_installed = matches!(client_change.status, Status::Updated | Status::Unchanged);
-    changes.push(client_change);
-    changes.push(plan.cli.perform(&plan.cwd, on_event)?);
+    let mut client_installed = false;
+    if let Some(client) = &plan.client {
+        let client_change = client.perform(&plan.cwd, on_event)?;
+        client_installed = matches!(client_change.status, Status::Updated | Status::Unchanged);
+        changes.push(client_change);
+    }
+    for sdk in &plan.sdks {
+        changes.push(sdk.perform(&plan.cwd, on_event)?);
+    }
+    if let Some(cli) = &plan.cli {
+        changes.push(cli.perform(&plan.cwd, on_event)?);
+    }
+    for example in &plan.examples {
+        changes.push(example.perform(&plan.cwd)?);
+    }
+    changes.extend(plan.example_note.iter().cloned());
 
     let skills = plan.skills.perform(&plan.cwd, on_event)?;
     let skills_installed = skills.installed.len();
@@ -278,7 +441,12 @@ pub async fn apply(plan: &Plan, on_event: &mut dyn FnMut(Event)) -> Result<Repor
         runtime: plan.project.runtime,
         name: plan.name.as_deref(),
         cloud: plan.cloud.as_ref(),
-        container: plan.database.container(),
+        database: plan.database.is_some(),
+        container: plan
+            .database
+            .as_ref()
+            .and_then(|database| database.container()),
+        products: &plan.products,
         skills: &skills.installed,
         client_installed,
         cli_available: util::has_bin("redis-cli"),
@@ -380,6 +548,11 @@ mod tests {
             name: None,
             url_input: Some("redis-cli -u redis://h:1".into()),
             cloud: None,
+            products: Vec::new(),
+            iris: false,
+            complete: false,
+            api_key: None,
+            no_example: false,
             agents: Some(vec![Agent::Claude]),
             install_cli: false,
             skills_repo: None,
@@ -388,8 +561,8 @@ mod tests {
         .unwrap();
         assert_eq!(plan.project.runtime, Runtime::Go);
         assert_eq!(plan.agents, vec![Agent::Claude]);
-        assert_eq!(plan.database_url(), "redis://h:1");
-        assert_eq!(plan.database_source(true), "provided URL");
+        assert_eq!(plan.database_url(), Some("redis://h:1"));
+        assert_eq!(plan.database_source(true), Some("provided URL"));
     }
 
     #[test]
@@ -400,6 +573,11 @@ mod tests {
             name: None,
             url_input: Some("redis://h:1".into()),
             cloud: None,
+            products: Vec::new(),
+            iris: false,
+            complete: false,
+            api_key: None,
+            no_example: false,
             agents: Some(vec![Agent::Codex]),
             install_cli: false,
             skills_repo: None,
@@ -431,6 +609,11 @@ mod tests {
             name: None,
             url_input: Some("redis-cli -u redis://h:1".into()),
             cloud: None,
+            products: Vec::new(),
+            iris: false,
+            complete: false,
+            api_key: None,
+            no_example: false,
             agents: Some(vec![Agent::Codex]),
             install_cli: false,
             skills_repo: Some(repo.path().to_path_buf()),
