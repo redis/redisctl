@@ -49,6 +49,13 @@ untouched.
 | `--defaults` | take the defaults instead of asking; piped stdin never prompts either |
 | `--dry-run` | print the full plan, write nothing |
 | `--no-telemetry` | do not send the anonymous usage event for this run |
+| `--agent-memory <endpoint>` | wire Agent Memory (with `--store <id>`); the key stays a human-pasted `.env` placeholder |
+| `--langcache <endpoint>` | wire LangCache (with `--cache <id>`) |
+| `--context-retriever <endpoint>` | wire Context Retriever and bridge its MCP tools into the project agents |
+| `--api-key <key>` | key for the one product being wired; its env var or an existing `.env` value wins over it |
+| `--complete` | validate a product setup already present in `.env` (after filling the placeholders) |
+| `--no-example` | skip the per-product example module |
+| `--iris` | discovery-only: teach the agent to recommend the smallest Iris setup; adds no runtime |
 
 ## Credentials
 
@@ -72,3 +79,15 @@ random UUID in `~/.cache/redisctl/id`, traceable to nothing. A notice prints on
 first send. Opt out with `--no-telemetry`, `REDISCTL_INIT_TELEMETRY=0`, or
 `DO_NOT_TRACK=1`. Dev builds carry no key and send nothing;
 `REDISCTL_INIT_TELEMETRY_DEBUG=1` echoes exactly what would be shared.
+
+## Iris products
+
+Product flags wire Redis Iris services into the project: env blocks in `.env` and
+`.env.example` (never clobbering existing keys), the SDK for the detected runtime,
+an example module nothing imports, product facts in the generated skill, and - for
+Context Retriever - a project MCP bridge that reads the agent key from `.env` at
+launch. The API key crosses the secret boundary by hand: without one the run ends
+successfully with "Action required", you paste the key into `.env` yourself, and
+`redisctl init --complete` validates the full setup live. `--iris` installs only
+the recommendation guidance so an agent can propose the smallest setup, which you
+approve before anything is added.
