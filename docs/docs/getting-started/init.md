@@ -48,6 +48,7 @@ untouched.
 | `--skills-global` | install the official skills for your user instead of this project |
 | `--defaults` | take the defaults instead of asking; piped stdin never prompts either |
 | `--dry-run` | print the full plan, write nothing |
+| `--no-telemetry` | do not send the anonymous usage event for this run |
 
 ## Credentials
 
@@ -62,3 +63,12 @@ Standard `redisctl` [exit codes](../common/troubleshooting.md): 0 on success, 6 
 invalid input, 10 when the database cannot be reached (the message names the stale
 `.env` value to fix), 1 for local environment problems such as Docker being
 unavailable.
+
+## Telemetry
+
+Each run sends one anonymous usage event: which paths get used (flags as booleans,
+outcome, duration) - never paths, names, URLs, or credentials. The device id is a
+random UUID in `~/.cache/redisctl/id`, traceable to nothing. A notice prints on
+first send. Opt out with `--no-telemetry`, `REDISCTL_INIT_TELEMETRY=0`, or
+`DO_NOT_TRACK=1`. Dev builds carry no key and send nothing;
+`REDISCTL_INIT_TELEMETRY_DEBUG=1` echoes exactly what would be shared.

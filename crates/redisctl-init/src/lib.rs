@@ -196,6 +196,8 @@ pub struct Report {
     pub changes: Vec<Change>,
     /// Where the skills actually landed, for the caller's next-steps epilogue.
     pub skills_dir: String,
+    /// How many official skills were installed this run.
+    pub skills_installed: usize,
 }
 
 pub fn plan(options: &Options) -> Result<Plan, InitError> {
@@ -267,6 +269,7 @@ pub async fn apply(plan: &Plan, on_event: &mut dyn FnMut(Event)) -> Result<Repor
     changes.push(plan.cli.perform(&plan.cwd, on_event)?);
 
     let skills = plan.skills.perform(&plan.cwd, on_event)?;
+    let skills_installed = skills.installed.len();
     let skills_dir = skills
         .installed_dir
         .as_ref()
@@ -303,6 +306,7 @@ pub async fn apply(plan: &Plan, on_event: &mut dyn FnMut(Event)) -> Result<Repor
     Ok(Report {
         changes,
         skills_dir,
+        skills_installed,
     })
 }
 

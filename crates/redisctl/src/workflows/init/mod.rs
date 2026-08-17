@@ -7,6 +7,7 @@
 mod cloud;
 mod dns;
 mod output;
+mod telemetry;
 pub(crate) mod wizard;
 
 use redisctl_init as engine;
@@ -40,6 +41,20 @@ pub async fn run(
     args: &InitArgs,
     conn_mgr: &crate::connection::ConnectionManager,
     profile: Option<&str>,
+) -> Result<(), RedisCtlError> {
+    // The wrapper owns the one telemetry event so every exit path - success,
+    // failure, cancel - is counted exactly once, after the outcome exists.
+    let mut telemetry = telemetry::Telemetry::start(args);
+    let result = run_inner(args, conn_mgr, profile, &mut telemetry).await;
+    telemetry.finish(args, &result).await;
+    result
+}
+
+async fn run_inner(
+    args: &InitArgs,
+    conn_mgr: &crate::connection::ConnectionManager,
+    profile: Option<&str>,
+    telemetry: &mut telemetry::Telemetry,
 ) -> Result<(), RedisCtlError> {
     let pasted = [args.url.clone().unwrap_or_default()]
         .into_iter()
@@ -98,7 +113,11 @@ pub async fn run(
     let pending = wizard::pending_questions(args, options.url_input.is_some());
     let mut asked_agents = false;
     let mut wants_cloud = args.cloud;
-    if wizard::applies(args, &pending) {
+    let interactive = wizard::applies(args, &pending);
+    telemetry.props.interactive = interactive;
+    telemetry.props.wizard_questions_asked = if interactive { pending.len() } else { 0 };
+    if interactive {
+        telemetry.step("wizard");
         let answers = wizard::run(
             &pending,
             &engine::detect_agents(&cwd),
@@ -116,6 +135,7 @@ pub async fn run(
             options.skills_global = global;
         }
     }
+    telemetry.step("database");
     // Never-clobber means a freshly provisioned database could never be recorded
     // in .env; keep the existing value instead of creating one the project would
     // not use (and burning the free-plan slot).
@@ -164,6 +184,13 @@ pub async fn run(
         cloud_changes = outcome.changes;
     }
     let plan = engine::plan(&options)?;
+    telemetry.props.database_source = Some(plan.database_source(!dry));
+    telemetry.props.cloud_created = options.cloud.as_ref().is_some_and(|c| c.created);
+    telemetry.props.runtime = Some(plan.project.runtime.as_str());
+    telemetry.props.package_manager = plan.project.pm;
+    telemetry.props.framework = plan.project.framework.clone();
+    telemetry.props.agents = plan.agents.iter().map(|a| a.as_str()).collect();
+    telemetry.props.agent_count = plan.agents.len();
 
     let proj = &plan.project;
     let agent_bits = proj
@@ -227,6 +254,7 @@ pub async fn run(
         return Ok(());
     }
 
+    telemetry.step("apply");
     let mut progress: Option<output::Progress> = None;
     let report = engine::apply(&plan, &mut |event| match event {
         engine::Event::ProgressStart(label) => progress = Some(output::progress(&label)),
@@ -250,6 +278,8 @@ pub async fn run(
     }
     uvx_note(&plan);
 
+    telemetry.props.skills_installed_count = report.skills_installed;
+    telemetry.step("validate");
     print!("\n{}  ", bold("Validate"));
     let _ = std::io::Write::flush(&mut std::io::stdout());
     match engine::validate(plan.database_url()).await {
