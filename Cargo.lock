@@ -3409,6 +3409,7 @@ dependencies = [
  "chrono",
  "redis",
  "regex",
+ "reqwest 0.13.1",
  "serde_json",
  "tempfile",
  "thiserror 2.0.17",
