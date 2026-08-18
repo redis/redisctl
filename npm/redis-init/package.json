@@ -1,0 +1,23 @@
+{
+  "name": "@redis/init",
+  "version": "0.0.0",
+  "description": "Onboard a project to Redis services and make its AI coding agent Redis-fluent. Thin wrapper over `redisctl init`.",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/redis/redisctl",
+    "directory": "npm/redis-init"
+  },
+  "bin": {
+    "redis-init": "bin/redis-init.js"
+  },
+  "files": [
+    "bin"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
