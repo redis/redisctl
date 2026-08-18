@@ -15,7 +15,7 @@ use crate::cli::InitArgs;
 use crate::error::RedisCtlError;
 
 const DEFAULT_ENDPOINT: &str = "https://api2.amplitude.com/2/httpapi";
-const SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+const SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 const NOTICE: &str = "  Anonymous usage data (which paths get used, never paths, names or credentials).\n  Opt out with --no-telemetry, REDISCTL_INIT_TELEMETRY=0, or DO_NOT_TRACK=1.";
 
