@@ -17,15 +17,20 @@ const WRAPPER = path.join(__dirname, '..', 'bin', 'redis-init.js');
 function fakeRedisctl(exitCode) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'redis-init-test-'));
   const argsFile = path.join(dir, 'args.json');
+  const envFile = path.join(dir, 'env.json');
   const recorder = path.join(dir, 'record.js');
   fs.writeFileSync(
     recorder,
-    `require('node:fs').writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2))); process.exit(${exitCode});`
+    `const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+const { npm_config_package, npm_config_call, npm_config_registry } = process.env;
+fs.writeFileSync(${JSON.stringify(envFile)}, JSON.stringify({ npm_config_package, npm_config_call, npm_config_registry }));
+process.exit(${exitCode});`
   );
   const bin = path.join(dir, 'redisctl');
   fs.writeFileSync(bin, `#!/bin/sh\nexec "${process.execPath}" "${recorder}" "$@"\n`);
   fs.chmodSync(bin, 0o755);
-  return { dir, argsFile };
+  return { dir, argsFile, envFile };
 }
 
 function childArgs(argsFile) {
@@ -76,6 +81,29 @@ test('shell metacharacters in a pasted URL stay single argv tokens', () => {
 test('forwards the exit code verbatim', () => {
   const { dir } = fakeRedisctl(12);
   assert.strictEqual(run(['--cloud'], dir).status, 12);
+});
+
+test('npm exec package pinning never reaches redisctl child processes', () => {
+  // Under `npm exec --package=@redis/init`, npm exports npm_config_package to
+  // every descendant; redisctl's own npm/npx calls (client install, skills add)
+  // would then resolve THIS package instead of their real target. User npm
+  // config (registry, proxy) must survive.
+  const { dir, envFile } = fakeRedisctl(0);
+  const result = spawnSync(process.execPath, [WRAPPER, '--dry-run'], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      PATH: dir,
+      npm_config_package: '/tmp/redis-init.tgz',
+      npm_config_call: 'redis-init',
+      npm_config_registry: 'https://registry.example',
+    },
+  });
+  assert.strictEqual(result.status, 0);
+  const env = JSON.parse(fs.readFileSync(envFile, 'utf8'));
+  assert.strictEqual(env.npm_config_package, undefined);
+  assert.strictEqual(env.npm_config_call, undefined);
+  assert.strictEqual(env.npm_config_registry, 'https://registry.example');
 });
 
 test('a missing redisctl gets the branch-install hint, not a stack trace', () => {
