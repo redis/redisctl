@@ -70,16 +70,19 @@ fn full_run_provisions_validates_and_rerun_is_unchanged() {
     redisctl()
         .current_dir(&dir)
         .env("REDISCTL_INIT_SKILLS_REPO", repo.path())
-        .args(["init", "--no-install-cli"])
+        .args(["init", "--no-install-cli", "--agent", "claude"])
         .assert()
         .success()
         .stdout(predicate::str::contains(&container))
-        .stdout(predicate::str::contains(".agents/skills/redis-basics/"))
+        // Solo-Claude checkout copies land in Claude's own skills dir.
+        .stdout(predicate::str::contains(".claude/skills/redis-basics/"))
         .stdout(predicate::str::contains(
             ".agents/skills/redis-project-setup/SKILL.md",
         ))
         .stdout(predicate::str::contains("✓ PING  ✓ SET/GET"))
         .stdout(predicate::str::contains("Next steps"));
+    let mcp = std::fs::read_to_string(dir.join(".mcp.json")).unwrap();
+    assert!(!mcp.contains("redis://"), "credential-free: {mcp}");
     let env = std::fs::read_to_string(dir.join(".env")).unwrap();
     assert!(env.contains("REDIS_URL=\"redis://localhost:"), "{env}");
     let gitignore = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
@@ -90,7 +93,7 @@ fn full_run_provisions_validates_and_rerun_is_unchanged() {
     redisctl()
         .current_dir(&dir)
         .env("REDISCTL_INIT_SKILLS_REPO", repo.path())
-        .args(["init", "--no-install-cli"])
+        .args(["init", "--no-install-cli", "--agent", "claude"])
         .assert()
         .success()
         .stdout(predicate::str::contains("unchanged .env"))
