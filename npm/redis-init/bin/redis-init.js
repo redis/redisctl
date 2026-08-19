@@ -21,7 +21,17 @@ const args = process.argv
 // Never through a shell: a pasted connection URL can carry & | ^ %, which
 // cmd.exe would run as syntax. Windows resolves .exe from PATH without one.
 const command = process.platform === 'win32' ? 'redisctl.exe' : 'redisctl';
-const result = spawnSync(command, ['init', ...args], { stdio: 'inherit' });
+
+// npm exec exports its flags as npm_config_* to every descendant; the package
+// pinning (`--package=@redis/init`) would make redisctl's own npm/npx calls
+// (client install, skills add) resolve THIS package instead of their real
+// target. Drop only the resolution-changing keys - user npm config such as
+// registry and proxy must survive.
+const env = { ...process.env };
+delete env.npm_config_package;
+delete env.npm_config_call;
+
+const result = spawnSync(command, ['init', ...args], { stdio: 'inherit', env });
 
 if (result.error && result.error.code === 'ENOENT') {
   console.error(INSTALL_HINT);
