@@ -16,6 +16,16 @@ fn redisctl() -> Command {
     Command::cargo_bin("redisctl").unwrap()
 }
 
+/// A fake redis/agent-skills checkout keeps the skills step offline; this suite
+/// needs Docker only.
+fn skills_fixture() -> tempfile::TempDir {
+    let repo = tempfile::tempdir().unwrap();
+    let skill = repo.path().join("skills/redis-basics");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(skill.join("SKILL.md"), "# basics\n").unwrap();
+    repo
+}
+
 /// Remove the test's container even when an assertion panics.
 struct RemoveContainer(String);
 
@@ -56,12 +66,15 @@ fn full_run_provisions_validates_and_rerun_is_unchanged() {
     // real npm install, and this suite needs Docker only.
     let (dir, container, _cleanup) = project_dir(tmp.path(), "full");
 
+    let repo = skills_fixture();
     redisctl()
         .current_dir(&dir)
+        .env("REDISCTL_INIT_SKILLS_REPO", repo.path())
         .args(["init", "--no-install-cli"])
         .assert()
         .success()
         .stdout(predicate::str::contains(&container))
+        .stdout(predicate::str::contains(".agents/skills/redis-basics/"))
         .stdout(predicate::str::contains("✓ PING  ✓ SET/GET"));
     let env = std::fs::read_to_string(dir.join(".env")).unwrap();
     assert!(env.contains("REDIS_URL=\"redis://localhost:"), "{env}");
@@ -72,6 +85,7 @@ fn full_run_provisions_validates_and_rerun_is_unchanged() {
     // Idempotent re-run: nothing changes, validation still green.
     redisctl()
         .current_dir(&dir)
+        .env("REDISCTL_INIT_SKILLS_REPO", repo.path())
         .args(["init", "--no-install-cli"])
         .assert()
         .success()
@@ -88,8 +102,10 @@ fn stopped_container_is_restarted() {
     let tmp = tempfile::tempdir().unwrap();
     let (dir, container, _cleanup) = project_dir(tmp.path(), "stop");
 
+    let repo = skills_fixture();
     redisctl()
         .current_dir(&dir)
+        .env("REDISCTL_INIT_SKILLS_REPO", repo.path())
         .args(["init", "--no-install-cli"])
         .assert()
         .success();
@@ -101,6 +117,7 @@ fn stopped_container_is_restarted() {
 
     redisctl()
         .current_dir(&dir)
+        .env("REDISCTL_INIT_SKILLS_REPO", repo.path())
         .args(["init", "--no-install-cli"])
         .assert()
         .success()
@@ -147,8 +164,10 @@ fn restart_that_never_serves_redis_fails_instead_of_reporting_updated() {
     )
     .unwrap();
 
+    let repo = skills_fixture();
     redisctl()
         .current_dir(&dir)
+        .env("REDISCTL_INIT_SKILLS_REPO", repo.path())
         .args(["init", "--no-install-cli"])
         .assert()
         .failure()

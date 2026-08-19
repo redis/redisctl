@@ -37,6 +37,15 @@ pub struct InitArgs {
     #[arg(long = "no-install-cli")]
     pub no_install_cli: bool,
 
+    /// Path to a redis/agent-skills checkout to copy skills from (offline-safe;
+    /// default: install via the standard skills CLI)
+    #[arg(long, value_name = "DIR", env = "REDISCTL_INIT_SKILLS_REPO")]
+    pub skills_repo: Option<std::path::PathBuf>,
+
+    /// Install the official Redis skills for your user instead of into this project
+    #[arg(long)]
+    pub skills_global: bool,
+
     /// Print the plan without changing anything
     #[arg(long)]
     pub dry_run: bool,
@@ -62,6 +71,8 @@ impl std::fmt::Debug for InitArgs {
             .field("name", &self.name)
             .field("agents", &self.agents)
             .field("no_install_cli", &self.no_install_cli)
+            .field("skills_repo", &self.skills_repo)
+            .field("skills_global", &self.skills_global)
             .field("dry_run", &self.dry_run)
             .field("pasted", &(!self.pasted.is_empty()).then_some("<redacted>"))
             .finish()
@@ -79,6 +90,8 @@ mod tests {
             name: Some("db".into()),
             agents: vec![AgentArg::Claude],
             no_install_cli: false,
+            skills_repo: None,
+            skills_global: false,
             dry_run: false,
             pasted: vec![
                 "redis-cli".into(),

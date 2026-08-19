@@ -47,6 +47,8 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
         url_input: (!pasted.trim().is_empty()).then_some(pasted),
         agents: requested_agents(&args.agents),
         install_cli: !args.no_install_cli,
+        skills_repo: args.skills_repo.clone(),
+        skills_global: args.skills_global,
     };
     let plan = engine::plan(&options)?;
 
@@ -148,6 +150,7 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
             }
         }
         engine::Event::Note(text) => println!("{}", dim(&text)),
+        engine::Event::Warning(text) => println!("{}", yellow(&text)),
     })
     .await?;
 
