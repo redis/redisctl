@@ -19,7 +19,8 @@ pub(crate) enum DatabaseAction {
     /// best-effort restart (validation reports the truth either way).
     ExistingEnv {
         url: String,
-        restart: Option<String>,
+        container: Option<String>,
+        restart: bool,
     },
     /// A container from an earlier run exists but is stopped.
     StartExisting { name: String, url: String },
@@ -40,6 +41,16 @@ pub(crate) enum DatabaseAction {
 }
 
 impl DatabaseAction {
+    pub(crate) fn container(&self) -> Option<&str> {
+        match self {
+            DatabaseAction::Provided { .. } => None,
+            DatabaseAction::ExistingEnv { container, .. } => container.as_deref(),
+            DatabaseAction::StartExisting { name, .. }
+            | DatabaseAction::AlreadyRunning { name, .. }
+            | DatabaseAction::RunNew { name, .. } => Some(name),
+        }
+    }
+
     pub(crate) fn url(&self) -> &str {
         match self {
             DatabaseAction::Provided { url }
@@ -65,7 +76,8 @@ impl DatabaseAction {
     pub(crate) fn preview(&self) -> Option<Change> {
         match self {
             DatabaseAction::ExistingEnv {
-                restart: Some(name),
+                restart: true,
+                container: Some(name),
                 ..
             } => Some(Change::new(
                 format!("docker:{name}"),
@@ -94,7 +106,7 @@ impl DatabaseAction {
     }
 }
 
-fn docker_ok() -> bool {
+pub(crate) fn docker_ok() -> bool {
     sh("docker", &["info", "--format", "{{.ServerVersion}}"]).status == 0
 }
 
@@ -158,18 +170,28 @@ fn free_port(start: u16) -> Option<u16> {
     (start..start + 100).find(|p| port_is_free(*p))
 }
 
+/// Decide the action for a `.env` that already carries a URL. A leftover container
+/// only counts when the URL still points at it - after a move to a remote database
+/// it must not poison the skill or get restarted. Split from the probe so that gate
+/// is testable without Docker.
+fn decide_existing_env(url: String, name: String, info: Option<ContainerInfo>) -> DatabaseAction {
+    let local = url.contains("localhost") || url.contains("127.0.0.1");
+    let restart = info.as_ref().is_some_and(|info| !info.running && local);
+    DatabaseAction::ExistingEnv {
+        url,
+        container: info.filter(|_| local).map(|_| name),
+        restart,
+    }
+}
+
 /// Probe (read-only) how this project gets its local database.
 pub(crate) fn plan_local_database(cwd: &Path) -> Result<DatabaseAction, InitError> {
     let name = container_name(cwd);
 
     if let Some(url) = read_env_key(cwd, ".env", "REDIS_URL") {
         // Second run typically lands here: revive our container if it is just stopped.
-        let restart = container_info(&name)
-            .filter(|info| {
-                !info.running && (url.contains("localhost") || url.contains("127.0.0.1"))
-            })
-            .map(|_| name);
-        return Ok(DatabaseAction::ExistingEnv { url, restart });
+        let info = container_info(&name);
+        return Ok(decide_existing_env(url, name, info));
     }
 
     if !docker_ok() {
@@ -207,8 +229,12 @@ pub(crate) async fn apply_database(
 ) -> Result<Option<Change>, InitError> {
     match action {
         DatabaseAction::Provided { .. } => Ok(None),
-        DatabaseAction::ExistingEnv { url, restart } => {
-            let Some(name) = restart else {
+        DatabaseAction::ExistingEnv {
+            url,
+            container,
+            restart,
+        } => {
+            let (true, Some(name)) = (*restart, container.as_deref()) else {
                 return Ok(None);
             };
             // A failed start must not read as updated; validation reports the truth.
@@ -401,7 +427,8 @@ mod tests {
     fn existing_env_restart_is_previewed() {
         let action = DatabaseAction::ExistingEnv {
             url: "redis://localhost:6379".into(),
-            restart: Some("redis-init-x".into()),
+            container: Some("redis-init-x".into()),
+            restart: true,
         };
         let change = action.preview().unwrap();
         assert_eq!(change.status, Status::Planned);
@@ -409,9 +436,60 @@ mod tests {
 
         let no_restart = DatabaseAction::ExistingEnv {
             url: "redis://h:1".into(),
-            restart: None,
+            container: Some("redis-init-x".into()),
+            restart: false,
         };
         assert!(no_restart.preview().is_none());
+    }
+
+    #[test]
+    fn leftover_container_only_counts_for_a_local_url() {
+        let stopped = || {
+            Some(ContainerInfo {
+                running: false,
+                port: 6379,
+            })
+        };
+
+        let remote = decide_existing_env(
+            "rediss://default:s3cret@cloud.example:12000".into(),
+            "redis-init-x".into(),
+            stopped(),
+        );
+        assert_eq!(remote.container(), None);
+        assert!(matches!(
+            remote,
+            DatabaseAction::ExistingEnv { restart: false, .. }
+        ));
+
+        let local = decide_existing_env(
+            "redis://localhost:6379".into(),
+            "redis-init-x".into(),
+            stopped(),
+        );
+        assert_eq!(local.container(), Some("redis-init-x"));
+        assert!(matches!(
+            local,
+            DatabaseAction::ExistingEnv { restart: true, .. }
+        ));
+    }
+
+    #[test]
+    fn leftover_container_is_ignored_when_env_points_elsewhere() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".env"),
+            "REDIS_URL=\"rediss://default:x@cloud.example:12000\"\n",
+        )
+        .unwrap();
+        // Whatever containers exist on this machine, a remote URL means none of
+        // them belong to this database.
+        let action = plan_local_database(dir.path()).unwrap();
+        assert_eq!(action.container(), None);
+        assert!(matches!(
+            action,
+            DatabaseAction::ExistingEnv { restart: false, .. }
+        ));
     }
 
     #[test]
@@ -460,7 +538,7 @@ mod tests {
         // No local container matches, so nothing restarts.
         assert!(matches!(
             action,
-            DatabaseAction::ExistingEnv { restart: None, .. }
+            DatabaseAction::ExistingEnv { restart: false, .. }
         ));
     }
 }

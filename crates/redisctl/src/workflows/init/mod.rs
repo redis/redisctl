@@ -44,6 +44,7 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
             path: ".".into(),
             message: e.to_string(),
         })?,
+        name: args.name.clone(),
         url_input: (!pasted.trim().is_empty()).then_some(pasted),
         agents: requested_agents(&args.agents),
         install_cli: !args.no_install_cli,
@@ -182,6 +183,21 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
             });
         }
     }
-    println!();
+
+    let suggestion = match (&plan.project.framework, plan.project.runtime) {
+        (Some(framework), _) => format!(
+            "Cache the slowest GET endpoint of this {framework} app in Redis with a 60-second TTL."
+        ),
+        (None, engine::Runtime::Unknown) => {
+            "Add a Redis-backed cache for the most expensive operation in this project.".to_string()
+        }
+        _ => "Cache the most expensive read path in Redis with a 60-second TTL.".to_string(),
+    };
+    println!(
+        "\n{}\n  1. Start your coding agent here ({names}) - it picks up the skills in {}.\n  2. Try asking it: {}\n",
+        bold("Next steps"),
+        report.skills_dir,
+        bold(&format!("\"{suggestion}\""))
+    );
     Ok(())
 }

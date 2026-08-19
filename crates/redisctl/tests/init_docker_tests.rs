@@ -75,7 +75,11 @@ fn full_run_provisions_validates_and_rerun_is_unchanged() {
         .success()
         .stdout(predicate::str::contains(&container))
         .stdout(predicate::str::contains(".agents/skills/redis-basics/"))
-        .stdout(predicate::str::contains("✓ PING  ✓ SET/GET"));
+        .stdout(predicate::str::contains(
+            ".agents/skills/redis-project-setup/SKILL.md",
+        ))
+        .stdout(predicate::str::contains("✓ PING  ✓ SET/GET"))
+        .stdout(predicate::str::contains("Next steps"));
     let env = std::fs::read_to_string(dir.join(".env")).unwrap();
     assert!(env.contains("REDIS_URL=\"redis://localhost:"), "{env}");
     let gitignore = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
