@@ -6,7 +6,7 @@ use redisctl_core::{Config, DeploymentType};
 use tracing::{debug, info, trace};
 
 /// User agent string for redisctl HTTP requests
-const REDISCTL_USER_AGENT: &str = concat!("redisctl/", env!("CARGO_PKG_VERSION"));
+const REDISCTL_USER_AGENT: &str = redisctl_core::USER_AGENT;
 
 /// Resolved Cloud connection details (without creating an HTTP client)
 // The credential fields are populated but not yet read by the curl builder in

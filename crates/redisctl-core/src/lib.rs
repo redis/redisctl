@@ -66,6 +66,12 @@
 //! ).await?;
 //! ```
 
+/// `User-Agent` sent by every redisctl HTTP client.
+///
+/// The Redis Cloud API recognises the `redisctl/` prefix as a trusted client for some operations
+/// (free-tier provisioning among them), so all consumers — CLI and MCP alike — must send it.
+pub const USER_AGENT: &str = concat!("redisctl/", env!("CARGO_PKG_VERSION"));
+
 pub mod auth;
 pub mod config;
 pub mod error;

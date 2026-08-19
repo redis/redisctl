@@ -225,6 +225,7 @@ impl AppState {
                     .api_key(api_key)
                     .api_secret(api_secret)
                     .base_url(&base_url)
+                    .user_agent(redisctl_core::USER_AGENT)
                     .build()
                     .context("Failed to build Cloud client")
             }
@@ -237,6 +238,7 @@ impl AppState {
                 CloudClient::builder()
                     .api_key(api_key)
                     .api_secret(api_secret)
+                    .user_agent(redisctl_core::USER_AGENT)
                     .build()
                     .context("Failed to build Cloud client")
             }
