@@ -299,8 +299,47 @@ fn dry_run_plans_the_standard_skills_install() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "would run: npx -y skills add redis/agent-skills -s * -a claude-code -a codex -y",
+            "would run: npx -y skills@latest add redis/agent-skills -s * -a claude-code -a codex -y",
         ));
+}
+
+/// The installer's own words must reach the user; a generic "(offline?)" guess sent
+/// a real demo failure down the wrong path.
+#[test]
+#[cfg(unix)]
+fn a_failed_npx_run_surfaces_the_installers_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = tempfile::tempdir().unwrap();
+    let fake_npx = bin.path().join("npx");
+    std::fs::write(
+        &fake_npx,
+        "#!/bin/sh\necho 'Unknown agent: codex' >&2\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        &fake_npx,
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    // PATH holds only the fake, so the skills step runs it and nothing else on the
+    // machine can answer has_bin probes. Validation still fails on the refused port.
+    redisctl()
+        .current_dir(dir.path())
+        .env("PATH", bin.path())
+        .args([
+            "init",
+            "--url",
+            "redis://127.0.0.1:9",
+            "--no-install-cli",
+            "--agent",
+            "claude,codex",
+        ])
+        .assert()
+        .code(10)
+        .stdout(predicate::str::contains(
+            "npx skills add failed: Unknown agent: codex - re-run it yourself",
+        ))
+        .stdout(predicate::str::contains("(offline?)").not());
 }
 
 #[test]
