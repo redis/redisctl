@@ -243,10 +243,19 @@ pub(crate) struct SkillsAction {
 
 impl SkillsAction {
     fn npx_args(&self) -> Vec<String> {
-        let mut args: Vec<String> = ["-y", "skills", "add", "redis/agent-skills", "-s", "*"]
-            .into_iter()
-            .map(str::to_string)
-            .collect();
+        // Pinning @latest keeps a stale npx cache from running an old skills CLI
+        // that rejects newer flags.
+        let mut args: Vec<String> = [
+            "-y",
+            "skills@latest",
+            "add",
+            "redis/agent-skills",
+            "-s",
+            "*",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
         for agent in &self.agents {
             args.push("-a".to_string());
             args.push(cli_agent(*agent).to_string());
@@ -327,7 +336,7 @@ impl SkillsAction {
             return Ok(vec![Change::new(
                 describe_target(self.global),
                 Status::Skipped,
-                "npx skills add failed (offline?) - re-run it yourself, or pass --skills-repo <a redis/agent-skills checkout>",
+                failure_note(&r.stderr, &r.stdout, r.status),
             )]);
         }
 
@@ -461,6 +470,27 @@ impl SkillsAction {
     }
 }
 
+/// A failed install's note leads with the installer's own first error line - a
+/// generic guess once sent a real failure down the wrong path. Notes render on one
+/// line, so the line is capped.
+fn failure_note(stderr: &str, stdout: &str, status: i32) -> String {
+    let error = [stderr, stdout]
+        .iter()
+        .flat_map(|out| out.lines())
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("exit status {status}"));
+    let error = if error.chars().count() > 160 {
+        format!("{}...", error.chars().take(160).collect::<String>())
+    } else {
+        error
+    };
+    format!(
+        "npx skills add failed: {error} - re-run it yourself, or pass --skills-repo <a redis/agent-skills checkout>"
+    )
+}
+
 fn display_relative(cwd: &Path, path: &Path) -> String {
     path.strip_prefix(cwd).unwrap_or(path).display().to_string()
 }
@@ -498,8 +528,31 @@ mod tests {
         assert_eq!(change.status, Status::Planned);
         assert_eq!(
             change.note,
-            "would run: npx -y skills add redis/agent-skills -s * -a claude-code -a github-copilot -g -y"
+            "would run: npx -y skills@latest add redis/agent-skills -s * -a claude-code -a github-copilot -g -y"
         );
+    }
+
+    #[test]
+    fn failure_note_carries_the_installers_own_error() {
+        let note = failure_note("Unknown agent: codex\nrun skills --help\n", "", 1);
+        assert_eq!(
+            note,
+            "npx skills add failed: Unknown agent: codex - re-run it yourself, or pass --skills-repo <a redis/agent-skills checkout>"
+        );
+    }
+
+    #[test]
+    fn failure_note_falls_back_to_stdout_then_to_the_exit_status() {
+        assert!(failure_note("", "only stdout spoke\n", 1).contains("only stdout spoke"));
+        assert!(failure_note("", "", 127).contains("exit status 127"));
+    }
+
+    #[test]
+    fn failure_note_truncates_a_rambling_error_line() {
+        let long = "x".repeat(500);
+        let note = failure_note(&long, "", 1);
+        assert!(note.len() < 300, "{}", note.len());
+        assert!(note.contains("..."));
     }
 
     #[test]
