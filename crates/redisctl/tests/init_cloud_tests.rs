@@ -438,40 +438,37 @@ async fn empty_account_creates_a_free_subscription_and_database() {
     assert!(env.contains("REDIS_URL=\""), "{env}");
 }
 
-#[test]
-fn existing_env_url_wins_over_cloud_and_provisions_nothing() {
+#[tokio::test(flavor = "multi_thread")]
+async fn an_explicit_cloud_flag_replaces_an_existing_env_url() {
+    // Explicit beats implicit: --cloud is consent to supersede what .env carries.
+    // The old value is named masked and the file ends up on the cloud database.
+    let cfg = tempfile::tempdir().unwrap();
     let project = tempfile::tempdir().unwrap();
     let repo = skills_fixture();
+    let server = MockServer::start().await;
+    write_cloud_profile(&cfg, &server.uri());
     let endpoint = format!("127.0.0.1:{}", fake_redis());
+    mount_both_tiers(&server, &endpoint).await;
     std::fs::write(
         project.path().join(".env"),
-        format!("REDIS_URL=\"redis://{endpoint}\"\n"),
+        "REDIS_URL=\"redis://default:0ldpw@stale-host:1\"\n",
     )
     .unwrap();
-    let before = std::fs::read_to_string(project.path().join(".env")).unwrap();
 
-    // No cloud profile and no CAPI mock exist: reaching the cloud client at all
-    // would fail this run, so success proves the existing value short-circuits.
-    let mut cmd = Command::cargo_bin("redisctl").unwrap();
-    cmd.env("REDISCTL_INIT_AMPLITUDE_KEY", "")
-        .current_dir(project.path())
-        .env("REDISCTL_INIT_SKILLS_REPO", repo.path())
-        .args([
-            "init",
-            "--cloud",
-            "--name",
-            "brand-new",
-            "--defaults",
-            "--no-install-cli",
-            "--agent",
-            "claude",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("already carries REDIS_URL"))
-        .stdout(predicate::str::contains("existing .env"));
-    assert_eq!(
-        std::fs::read_to_string(project.path().join(".env")).unwrap(),
-        before
-    );
+    run_init_cloud(
+        &cfg,
+        project.path(),
+        &repo,
+        &["--name", "essentials-db", "--defaults", "--agent", "claude"],
+    )
+    .assert()
+    .success()
+    .stdout(predicate::str::contains(
+        "REDIS_URL replaced (was redis://default:****@stale-host:1)",
+    ))
+    .stdout(predicate::str::contains("0ldpw").not())
+    .stdout(predicate::str::contains("✓ PING"));
+    let env = std::fs::read_to_string(project.path().join(".env")).unwrap();
+    assert!(env.contains(&endpoint), "{env}");
+    assert!(!env.contains("stale-host"), "{env}");
 }
