@@ -12,7 +12,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const WRAPPER = path.join(__dirname, '..', 'bin', 'redis-init.js');
+const WRAPPER = path.join(__dirname, '..', 'bin', 'redisctl.js');
 
 function fakeRedisctl(exitCode) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'redis-init-test-'));
@@ -44,15 +44,21 @@ function run(extraArgs, pathDir) {
   });
 }
 
-test('the README one-liner shape: zero args become exactly `init`', () => {
+test('the README one-liner shape: `init` forwards as exactly `init`', () => {
   const { dir, argsFile } = fakeRedisctl(0);
-  assert.strictEqual(run([], dir).status, 0);
+  assert.strictEqual(run(['init'], dir).status, 0);
   assert.deepStrictEqual(childArgs(argsFile), ['init']);
 });
 
-test('maps -y and --yes to --defaults and forwards the rest verbatim', () => {
+test('zero args reach redisctl bare, so its own help answers', () => {
   const { dir, argsFile } = fakeRedisctl(0);
-  const result = run(['-y', '--agent', 'claude', '--yes', '--dry-run'], dir);
+  assert.strictEqual(run([], dir).status, 0);
+  assert.deepStrictEqual(childArgs(argsFile), []);
+});
+
+test('maps -y and --yes to --defaults after init and forwards the rest verbatim', () => {
+  const { dir, argsFile } = fakeRedisctl(0);
+  const result = run(['init', '-y', '--agent', 'claude', '--yes', '--dry-run'], dir);
   assert.strictEqual(result.status, 0);
   assert.deepStrictEqual(childArgs(argsFile), [
     'init',
@@ -64,10 +70,16 @@ test('maps -y and --yes to --defaults and forwards the rest verbatim', () => {
   ]);
 });
 
+test('outside init, -y passes through untouched', () => {
+  const { dir, argsFile } = fakeRedisctl(0);
+  assert.strictEqual(run(['profile', 'list', '-y'], dir).status, 0);
+  assert.deepStrictEqual(childArgs(argsFile), ['profile', 'list', '-y']);
+});
+
 test('shell metacharacters in a pasted URL stay single argv tokens', () => {
   const { dir, argsFile } = fakeRedisctl(0);
   const url = 'redis://user:p^a|s%s@host:6379?timeout=5&clientName=my app';
-  const result = run(['--url', url, '--name', 'two words'], dir);
+  const result = run(['init', '--url', url, '--name', 'two words'], dir);
   assert.strictEqual(result.status, 0);
   assert.deepStrictEqual(childArgs(argsFile), [
     'init',
@@ -80,7 +92,7 @@ test('shell metacharacters in a pasted URL stay single argv tokens', () => {
 
 test('forwards the exit code verbatim', () => {
   const { dir } = fakeRedisctl(12);
-  assert.strictEqual(run(['--cloud'], dir).status, 12);
+  assert.strictEqual(run(['init', '--cloud'], dir).status, 12);
 });
 
 test('npm exec package pinning never reaches redisctl child processes', () => {
@@ -89,7 +101,7 @@ test('npm exec package pinning never reaches redisctl child processes', () => {
   // would then resolve THIS package instead of their real target. User npm
   // config (registry, proxy) must survive.
   const { dir, envFile } = fakeRedisctl(0);
-  const result = spawnSync(process.execPath, [WRAPPER, '--dry-run'], {
+  const result = spawnSync(process.execPath, [WRAPPER, 'init', '--dry-run'], {
     encoding: 'utf8',
     env: {
       ...process.env,
@@ -107,7 +119,7 @@ test('npm exec package pinning never reaches redisctl child processes', () => {
 });
 
 test('a missing redisctl gets the branch-install hint, not a stack trace', () => {
-  const result = run(['--dry-run']);
+  const result = run(['init', '--dry-run']);
   assert.strictEqual(result.status, 1);
   assert.match(result.stderr, /redisctl is not installed/);
   assert.match(result.stderr, /cargo install --git .* --branch feat\/init-command/);
