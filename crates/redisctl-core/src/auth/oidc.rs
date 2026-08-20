@@ -61,6 +61,14 @@ pub enum AuthError {
     /// The identity provider returned something unexpected or unparseable.
     #[error("unexpected identity-provider response: {0}")]
     Protocol(String),
+
+    /// The Redis Cloud account still authenticates with a password and has not been linked to a
+    /// social/SSO identity, so the token exchange cannot complete. Linking is a one-time step the
+    /// user performs in the Redis Cloud console.
+    #[error(
+        "this Redis Cloud account must be linked to social sign-in once before the CLI can use it"
+    )]
+    MigrationRequired,
 }
 
 /// A `BasicClient` with the Okta authorize / token / device-authorization endpoints set. The

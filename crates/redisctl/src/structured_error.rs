@@ -76,6 +76,15 @@ impl StructuredError {
     pub fn keyring_unavailable(message: impl Into<String>) -> Self {
         Self::new("keyring_unavailable", 2, false, message)
     }
+    pub fn migration_required() -> Self {
+        Self::new(
+            "migration_required",
+            2,
+            false,
+            "this Redis Cloud account signs in with a password and must be linked to Google or \
+             GitHub once, in the Redis Cloud console, before the CLI can use it",
+        )
+    }
     pub fn invalid_name(message: impl Into<String>) -> Self {
         Self::new("invalid_name", 2, false, message)
     }
@@ -140,6 +149,9 @@ impl From<AuthError> for StructuredError {
             AuthError::Protocol(msg) => {
                 Self::sm_exchange_failed(format!("login exchange failed: {msg}"))
             }
+            // A one-time console step, not a failure to retry — give it its own code so an agent
+            // can tell the user what to do rather than surfacing a generic exchange error.
+            AuthError::MigrationRequired => Self::migration_required(),
         }
     }
 }
@@ -195,6 +207,10 @@ mod tests {
             StructuredError::from(AuthError::Protocol("boom".into())).code,
             "sm_exchange_failed"
         );
+        let mig = StructuredError::from(AuthError::MigrationRequired);
+        assert_eq!(mig.code, "migration_required");
+        assert_eq!(mig.exit_code, 2);
+        assert!(!mig.retryable);
     }
 
     #[test]

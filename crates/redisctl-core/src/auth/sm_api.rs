@@ -18,6 +18,10 @@ use url::Url;
 
 use super::{AuthError, default_http_client, endpoint, truncate};
 
+/// SM error code returned when a password-only account must be linked to social sign-in before it
+/// can authenticate this way. The consent step is console-only.
+const SOCIAL_MIGRATION_REQUIRED_CODE: &str = "user-agreement-for-social-login-migration-missing";
+
 /// Attribution sent on `POST /login`, mirroring what RedisInsight sends. SM records these on the
 /// signup path (`registerOktaUser` → `buildRegistrationItem`), so without them a user whose first
 /// contact with Redis Cloud is `cloud auth login` is registered with no originating tool.
@@ -57,6 +61,37 @@ struct Session {
     /// Full cookie header value, e.g. `JSESSIONID=abc123`.
     cookie: String,
     csrf: String,
+}
+
+/// SM's error envelope: `{"errors": {"status": 422, "code": "…"}}`.
+#[derive(Debug, Default, Deserialize)]
+struct SmErrorEnvelope {
+    errors: Option<SmError>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct SmError {
+    code: Option<String>,
+}
+
+/// Pull the error code out of an SM response body, if it has the usual envelope.
+fn sm_error_code(body: &str) -> Option<String> {
+    serde_json::from_str::<SmErrorEnvelope>(body)
+        .ok()?
+        .errors?
+        .code
+}
+
+/// Classify a failed `POST /login`. Codes we can act on get their own variant; everything else
+/// stays a protocol error carrying the body for diagnosis.
+fn classify_login_error(status: reqwest::StatusCode, body: &str) -> AuthError {
+    match sm_error_code(body).as_deref() {
+        // A password-only account that has never signed in socially: SM asks for consent to link
+        // it, which only the console can collect. Surface it distinctly so the CLI can name that
+        // one-time step instead of reporting a generic failure.
+        Some(SOCIAL_MIGRATION_REQUIRED_CODE) => AuthError::MigrationRequired,
+        _ => AuthError::Protocol(format!("SM /login failed ({status}): {}", truncate(body))),
+    }
 }
 
 /// The authenticated user (`GET /users/me`), trimmed to what the bootstrap needs.
@@ -177,10 +212,7 @@ impl SmApiClient {
         let cookie = extract_jsessionid(&resp);
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(AuthError::Protocol(format!(
-                "SM /login failed ({status}): {}",
-                truncate(&body)
-            )));
+            return Err(classify_login_error(status, &body));
         }
         let cookie = cookie
             .ok_or_else(|| AuthError::Protocol("SM /login did not set a JSESSIONID".into()))?;
@@ -563,6 +595,28 @@ mod tests {
     /// SM records `utm_*` on the signup path, so a first-ever login through redisctl must carry
     /// attribution or the tool is invisible in signup analytics. The mock matches only if all three
     /// fields are present, and `utm_campaign` distinguishes the two flows.
+    /// A password-only account that hasn't been linked to social sign-in gets its own error, so
+    /// the CLI can point the user at the one-time console step instead of a generic failure.
+    #[tokio::test]
+    async fn login_social_migration_required_is_classified() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/login"))
+            .respond_with(ResponseTemplate::new(422).set_body_json(serde_json::json!({
+                "errors": {
+                    "status": 422,
+                    "code": "user-agreement-for-social-login-migration-missing"
+                }
+            })))
+            .mount(&server)
+            .await;
+        let mut c = client(&server);
+        assert!(matches!(
+            c.login("ACCESS", None).await,
+            Err(AuthError::MigrationRequired)
+        ));
+    }
+
     #[tokio::test]
     async fn login_sends_utm_attribution_per_flow() {
         for (flow, campaign) in [
