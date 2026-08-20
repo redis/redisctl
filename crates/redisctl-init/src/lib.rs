@@ -16,6 +16,8 @@ mod skills;
 mod util;
 
 pub use change::{Change, Status};
+pub use docker::docker_ok as docker_available;
+pub use project::{detect as detect_project, detect_agents};
 
 pub(crate) const SKILLS_DIR: &str = ".agents/skills";
 pub use docker::validate;
@@ -253,7 +255,9 @@ fn url_regex() -> &'static regex::Regex {
     RE.get_or_init(|| regex::Regex::new(r#"rediss?://[^\s"']+"#).expect("static regex"))
 }
 
-fn extract_url(input: &str) -> Result<String, InitError> {
+/// Pull the connection string out of raw input (a URL, or a pasted
+/// `redis-cli -u <url>` command). The error's echoed text is credential-masked.
+pub fn extract_url(input: &str) -> Result<String, InitError> {
     match url_regex().find(input) {
         Some(m) => Ok(m.as_str().to_string()),
         None => Err(InitError::NoUrlInInput {
