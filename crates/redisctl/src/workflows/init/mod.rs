@@ -217,10 +217,18 @@ async fn run_inner(
     telemetry.props.wizard_questions_asked = if interactive { pending.len() } else { 0 };
     if interactive {
         telemetry.step("wizard");
+        // Probed only when the database question will actually be asked: the
+        // wizard offers to reuse a server that is already running locally.
+        let local = if pending.contains(&wizard::Question::Database) {
+            engine::probe_local_redis(engine::LOCAL_REDIS_URL).await
+        } else {
+            engine::LocalRedis::NotFound
+        };
         let answers = wizard::run(
             &pending,
             &engine::detect_agents(&cwd),
             engine::docker_available(),
+            local,
         )?;
         if let Some(url) = answers.url {
             options.url_input = Some(url);
