@@ -78,6 +78,23 @@ fn progress_open_line(label: &str) -> String {
     format!("{}  {}", brand_red("◇"), dim(&format!("{label}...")))
 }
 
+/// An info line on the same rail column, so header facts between the questions
+/// and the status steps keep the rail unbroken.
+pub fn rail_line(s: &str) -> String {
+    format!("{}  {}", brand_red("◇"), s)
+}
+
+/// A bare rail row: the connector that carries the line across gaps between
+/// entries, clack-style.
+pub fn rail_gap() -> String {
+    brand_red("│")
+}
+
+/// The rail's closing corner, ending the step column before the summary.
+pub fn rail_end(label: &str) -> String {
+    format!("{}  {}", brand_red("└"), dim(label))
+}
+
 pub fn progress(label: &str) -> Progress {
     use std::io::Write;
     print!("{}", progress_open_line(label));
@@ -197,6 +214,12 @@ mod tests {
                 (RunKind::Block, "██".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn rail_gap_and_end_close_the_line() {
+        assert_eq!(rail_gap(), "│");
+        assert_eq!(rail_end("done"), "└  done");
     }
 
     #[test]
