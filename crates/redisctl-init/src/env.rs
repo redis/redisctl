@@ -137,6 +137,38 @@ pub(crate) fn plan_env_set(
     }
 }
 
+/// Like [`plan_env_set`], but with explicit consent to supersede: a different
+/// existing value is replaced in place and the note names the old one (masked).
+/// Used only when the user explicitly chose a database source.
+pub(crate) fn plan_env_replace(
+    dir: &Path,
+    rel: &str,
+    key: &str,
+    value: &str,
+) -> Result<FileAction, InitError> {
+    let existing = read_env_key(dir, rel, key);
+    match existing {
+        Some(old) if old != value => {
+            let content = read_for_planning(dir, rel)?.unwrap_or_default();
+            let re = regex::Regex::new(&format!(
+                r"(?m)^\s*(?:export\s+)?{}\s*=.*$",
+                regex::escape(key)
+            ))
+            .expect("escaped key regex");
+            let replaced = re
+                .replace(&content, format!("{key}=\"{value}\""))
+                .into_owned();
+            Ok(FileAction::Write {
+                rel: rel.to_string(),
+                content: replaced,
+                status: Status::Updated,
+                note: format!("{key} replaced (was {})", mask_url(&old)),
+            })
+        }
+        _ => plan_env_set(dir, rel, key, value),
+    }
+}
+
 /// Set several keys as one provenance block. Never-clobber per key: absent keys are
 /// added, present-and-identical ignored, present-and-different kept (named, never
 /// echoed). `base` is the file content this block plans against - callers planning
@@ -296,6 +328,56 @@ mod tests {
         let action =
             plan_env_set(dir.path(), ".env", "REDIS_URL", "redis://localhost:6379").unwrap();
         assert_eq!(action.preview().status, Status::Unchanged);
+    }
+
+    #[test]
+    fn env_replace_swaps_the_value_and_masks_the_old_one_in_the_note() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join(".env"),
+            "A=1\nREDIS_URL=\"redis://old:secret@h:1\"\nB=2\n",
+        )
+        .unwrap();
+        let action = plan_env_replace(dir.path(), ".env", "REDIS_URL", "redis://new:6379").unwrap();
+        let FileAction::Write {
+            content,
+            status,
+            note,
+            ..
+        } = action
+        else {
+            panic!("expected a write");
+        };
+        assert_eq!(status, Status::Updated);
+        assert!(
+            content.contains("REDIS_URL=\"redis://new:6379\""),
+            "{content}"
+        );
+        assert!(!content.contains("secret"), "{content}");
+        assert!(
+            content.contains("A=1") && content.contains("B=2"),
+            "{content}"
+        );
+        assert!(note.contains("redis://old:****@h:1"), "{note}");
+        assert!(!note.contains("secret"), "{note}");
+    }
+
+    #[test]
+    fn env_replace_reads_unchanged_on_same_value_and_appends_when_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(".env"), "REDIS_URL=\"redis://h:1\"\n").unwrap();
+        assert!(matches!(
+            plan_env_replace(dir.path(), ".env", "REDIS_URL", "redis://h:1").unwrap(),
+            FileAction::Unchanged { .. }
+        ));
+        let fresh = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            plan_env_replace(fresh.path(), ".env", "REDIS_URL", "redis://h:1").unwrap(),
+            FileAction::Write {
+                status: Status::Created,
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -22,7 +22,7 @@ pub use docker::docker_ok as docker_available;
 pub use project::{detect as detect_project, detect_agents};
 
 pub(crate) const SKILLS_DIR: &str = ".agents/skills";
-pub use docker::{LOCAL_REDIS_URL, LocalRedis, probe_local_redis, validate};
+pub use docker::{LOCAL_REDIS_URL, LocalRedis, PLACEHOLDER_URL, probe_local_redis, validate};
 pub use env::read_env_key;
 pub use products::{
     ProductKey, ProductRequest, SECRET_PLACEHOLDER, WiredProduct, validate_product,
@@ -112,6 +112,12 @@ pub struct Options {
     pub skills_repo: Option<PathBuf>,
     /// Install the official skills for the user instead of into this project.
     pub skills_global: bool,
+    /// The user explicitly chose a database source (wizard answer or flag), so an
+    /// existing REDIS_URL in .env is superseded instead of kept.
+    pub replace_env_url: bool,
+    /// The wizard's "connect later": write a placeholder REDIS_URL and end with
+    /// instructions instead of provisioning and validating.
+    pub env_placeholder: bool,
 }
 
 // Manual, because `{:?}` reaches logs: `url_input` can carry a password and
@@ -132,6 +138,8 @@ impl std::fmt::Debug for Options {
             .field("install_cli", &self.install_cli)
             .field("skills_repo", &self.skills_repo)
             .field("skills_global", &self.skills_global)
+            .field("replace_env_url", &self.replace_env_url)
+            .field("env_placeholder", &self.env_placeholder)
             .finish()
     }
 }
@@ -199,6 +207,12 @@ impl Plan {
     /// `None` means this run works without a database (products-only, `--iris`).
     pub fn database_url(&self) -> Option<&str> {
         self.database.as_ref().map(|db| db.url())
+    }
+
+    /// The "connect later" path: a placeholder REDIS_URL is written, nothing is
+    /// validated, and the run ends with instructions.
+    pub fn database_pending(&self) -> bool {
+        matches!(self.database, Some(docker::DatabaseAction::Placeholder))
     }
 
     /// The database's provenance for the summary line. `applied` picks the wording
@@ -290,7 +304,11 @@ pub fn plan(options: &Options) -> Result<Plan, InitError> {
         Some(input) => Some(docker::DatabaseAction::Provided {
             url: extract_url(input)?,
         }),
-        None if wants_database => Some(docker::plan_local_database(&options.cwd)?),
+        None if options.env_placeholder => Some(docker::DatabaseAction::Placeholder),
+        None if wants_database => Some(docker::plan_local_database(
+            &options.cwd,
+            options.replace_env_url,
+        )?),
         None => None,
     };
     let project = project::detect(&options.cwd);
@@ -305,7 +323,11 @@ pub fn plan(options: &Options) -> Result<Plan, InitError> {
     let mut env_base: Option<String> = None;
     let mut example_base: Option<String> = None;
     if let Some(database) = &database {
-        let action = env::plan_env_set(&options.cwd, ".env", "REDIS_URL", database.url())?;
+        let action = if options.replace_env_url {
+            env::plan_env_replace(&options.cwd, ".env", "REDIS_URL", database.url())?
+        } else {
+            env::plan_env_set(&options.cwd, ".env", "REDIS_URL", database.url())?
+        };
         if let env::FileAction::Write { content, .. } = &action {
             env_base = Some(content.clone());
         }
@@ -557,6 +579,8 @@ mod tests {
             install_cli: false,
             skills_repo: None,
             skills_global: false,
+            replace_env_url: false,
+            env_placeholder: false,
         })
         .unwrap();
         assert_eq!(plan.project.runtime, Runtime::Go);
@@ -582,6 +606,8 @@ mod tests {
             install_cli: false,
             skills_repo: None,
             skills_global: false,
+            replace_env_url: false,
+            env_placeholder: false,
         })
         .unwrap();
         let changes = plan.changes();
@@ -618,6 +644,8 @@ mod tests {
             install_cli: false,
             skills_repo: Some(repo.path().to_path_buf()),
             skills_global: false,
+            replace_env_url: false,
+            env_placeholder: false,
         };
         let plan = plan(&options(dir.path())).unwrap();
         let report = apply(&plan, &mut |_| {}).await.unwrap();

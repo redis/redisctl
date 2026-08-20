@@ -30,6 +30,9 @@ pub(crate) enum DatabaseAction {
         port: u16,
         url: String,
     },
+    /// The user chose to connect later: a placeholder REDIS_URL gets written and
+    /// the run ends with instructions instead of validation.
+    Placeholder,
     /// No container yet: run the image on the chosen free port.
     RunNew {
         name: String,
@@ -43,7 +46,7 @@ pub(crate) enum DatabaseAction {
 impl DatabaseAction {
     pub(crate) fn container(&self) -> Option<&str> {
         match self {
-            DatabaseAction::Provided { .. } => None,
+            DatabaseAction::Provided { .. } | DatabaseAction::Placeholder => None,
             DatabaseAction::ExistingEnv { container, .. } => container.as_deref(),
             DatabaseAction::StartExisting { name, .. }
             | DatabaseAction::AlreadyRunning { name, .. }
@@ -53,6 +56,7 @@ impl DatabaseAction {
 
     pub(crate) fn url(&self) -> &str {
         match self {
+            DatabaseAction::Placeholder => PLACEHOLDER_URL,
             DatabaseAction::Provided { url }
             | DatabaseAction::ExistingEnv { url, .. }
             | DatabaseAction::StartExisting { url, .. }
@@ -64,6 +68,7 @@ impl DatabaseAction {
     pub(crate) fn source(&self, applied: bool) -> &'static str {
         match self {
             DatabaseAction::Provided { .. } => "provided URL",
+            DatabaseAction::Placeholder => "placeholder - fill .env",
             DatabaseAction::ExistingEnv { .. } => "existing .env",
             DatabaseAction::StartExisting { .. } | DatabaseAction::AlreadyRunning { .. } => {
                 "existing Docker container"
@@ -84,6 +89,7 @@ impl DatabaseAction {
                 Status::Planned,
                 "would start existing container",
             )),
+            DatabaseAction::Placeholder => Some(placeholder_change()),
             DatabaseAction::Provided { .. } | DatabaseAction::ExistingEnv { .. } => None,
             DatabaseAction::StartExisting { name, .. } => Some(Change::new(
                 format!("docker:{name}"),
@@ -104,6 +110,19 @@ impl DatabaseAction {
             )),
         }
     }
+}
+
+/// The value the "connect later" path writes to .env; a run that finds it treats
+/// the database as still pending instead of validating garbage.
+pub const PLACEHOLDER_URL: &str = "<paste-your-redis-url>";
+
+/// The same line in the plan preview and the apply report - dry-run parity.
+fn placeholder_change() -> Change {
+    Change::new(
+        "database",
+        Status::Skipped,
+        "no connection yet - fill REDIS_URL in .env, then run redisctl init --complete",
+    )
 }
 
 pub fn docker_ok() -> bool {
@@ -185,10 +204,18 @@ fn decide_existing_env(url: String, name: String, info: Option<ContainerInfo>) -
 }
 
 /// Probe (read-only) how this project gets its local database.
-pub(crate) fn plan_local_database(cwd: &Path) -> Result<DatabaseAction, InitError> {
+pub(crate) fn plan_local_database(
+    cwd: &Path,
+    ignore_env: bool,
+) -> Result<DatabaseAction, InitError> {
     let name = container_name(cwd);
 
-    if let Some(url) = read_env_key(cwd, ".env", "REDIS_URL") {
+    // `ignore_env` is the user's explicit choice of a fresh source superseding
+    // whatever .env carries.
+    if let Some(url) = read_env_key(cwd, ".env", "REDIS_URL").filter(|_| !ignore_env) {
+        if url == PLACEHOLDER_URL {
+            return Ok(DatabaseAction::Placeholder);
+        }
         // Second run typically lands here: revive our container if it is just stopped.
         let info = container_info(&name);
         return Ok(decide_existing_env(url, name, info));
@@ -229,6 +256,7 @@ pub(crate) async fn apply_database(
 ) -> Result<Option<Change>, InitError> {
     match action {
         DatabaseAction::Provided { .. } => Ok(None),
+        DatabaseAction::Placeholder => Ok(Some(placeholder_change())),
         DatabaseAction::ExistingEnv {
             url,
             container,
@@ -501,6 +529,20 @@ mod tests {
     }
 
     #[test]
+    fn a_placeholder_env_value_plans_a_pending_database() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".env"),
+            format!("REDIS_URL=\"{PLACEHOLDER_URL}\"\n"),
+        )
+        .unwrap();
+        // Returns before any docker probe, so this stays hermetic.
+        let action = plan_local_database(dir.path(), false).unwrap();
+        assert!(matches!(action, DatabaseAction::Placeholder));
+        assert_eq!(action.source(true), "placeholder - fill .env");
+    }
+
+    #[test]
     fn parse_container_info_reads_running_and_port() {
         let info = parse_container_info("true 6380\n").unwrap();
         assert!(info.running);
@@ -583,7 +625,7 @@ mod tests {
         .unwrap();
         // Whatever containers exist on this machine, a remote URL means none of
         // them belong to this database.
-        let action = plan_local_database(dir.path()).unwrap();
+        let action = plan_local_database(dir.path(), false).unwrap();
         assert_eq!(action.container(), None);
         assert!(matches!(
             action,
@@ -631,7 +673,7 @@ mod tests {
     fn existing_env_url_wins_without_docker() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(".env"), "REDIS_URL=\"redis://h:1\"\n").unwrap();
-        let action = plan_local_database(dir.path()).unwrap();
+        let action = plan_local_database(dir.path(), false).unwrap();
         assert_eq!(action.url(), "redis://h:1");
         assert_eq!(action.source(true), "existing .env");
         // No local container matches, so nothing restarts.
