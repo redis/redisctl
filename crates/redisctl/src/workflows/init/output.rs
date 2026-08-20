@@ -72,9 +72,15 @@ pub struct Progress {
     open: bool,
 }
 
+/// Status steps are rail entries, continuing the wizard's clack rail through the
+/// apply phase instead of dropping to plain indented text.
+fn progress_open_line(label: &str) -> String {
+    format!("{}  {}", brand_red("◇"), dim(&format!("{label}...")))
+}
+
 pub fn progress(label: &str) -> Progress {
     use std::io::Write;
-    print!("{}", dim(&format!("  {label}...")));
+    print!("{}", progress_open_line(label));
     let _ = std::io::stdout().flush();
     Progress { open: true }
 }
@@ -190,6 +196,16 @@ mod tests {
                 (RunKind::Edge, "╔═".to_string()),
                 (RunKind::Block, "██".to_string()),
             ]
+        );
+    }
+
+    #[test]
+    fn progress_lines_join_the_wizard_rail() {
+        // Piped output (tests are not a tty), so no colour codes - the rail glyph
+        // still leads the line, keeping status steps visually part of the wizard.
+        assert_eq!(
+            progress_open_line("installing skills (npx skills add)"),
+            "◇  installing skills (npx skills add)..."
         );
     }
 
