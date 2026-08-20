@@ -18,11 +18,39 @@ use url::Url;
 
 use super::{AuthError, default_http_client, endpoint, truncate};
 
+/// Attribution sent on `POST /login`, mirroring what RedisInsight sends. SM records these on the
+/// signup path (`registerOktaUser` → `buildRegistrationItem`), so without them a user whose first
+/// contact with Redis Cloud is `cloud auth login` is registered with no originating tool.
+const UTM_SOURCE: &str = "redisctl";
+/// Coarse channel, kept stable so dashboards can group on it; the flow goes in `utm_campaign`.
+const UTM_MEDIUM: &str = "cli";
+
+/// Which login flow produced the tokens. Reported as `utm_campaign`, so interactive and
+/// agent-driven sign-ins can be told apart in analytics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginFlow {
+    /// Browser on the same machine, redirect caught on loopback.
+    Loopback,
+    /// Device-authorization grant — headless machines and agents.
+    Device,
+}
+
+impl LoginFlow {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Loopback => "loopback",
+            Self::Device => "device",
+        }
+    }
+}
+
 /// SM API client. Stateless until [`SmApiClient::login`] establishes a session.
 pub struct SmApiClient {
     base_url: Url,
     http: reqwest::Client,
     session: Option<Session>,
+    /// Which flow produced the tokens, reported to SM as `utm_campaign`.
+    flow: LoginFlow,
 }
 
 struct Session {
@@ -99,20 +127,22 @@ struct AccountsEnvelope {
 
 impl SmApiClient {
     /// Build a client for the SM API base (e.g. `https://<sm-api-host>/api/v1`).
-    pub fn new(base_url: Url) -> Self {
+    pub fn new(base_url: Url, flow: LoginFlow) -> Self {
         Self {
             base_url,
             http: default_http_client(),
             session: None,
+            flow,
         }
     }
 
     /// Build with a caller-provided reqwest client (tests / shared client).
-    pub fn with_http_client(base_url: Url, http: reqwest::Client) -> Self {
+    pub fn with_http_client(base_url: Url, http: reqwest::Client, flow: LoginFlow) -> Self {
         Self {
             base_url,
             http,
             session: None,
+            flow,
         }
     }
 
@@ -131,7 +161,14 @@ impl SmApiClient {
                 format!("Bearer {access_token}"),
             )
             .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body("{}");
+            .body(
+                serde_json::json!({
+                    "utm_source": UTM_SOURCE,
+                    "utm_medium": UTM_MEDIUM,
+                    "utm_campaign": self.flow.as_str(),
+                })
+                .to_string(),
+            );
         if let Some(id) = sm_id_token {
             req = req.header("sm-id-token", id);
         }
@@ -316,7 +353,7 @@ fn extract_jsessionid(resp: &reqwest::Response) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     async fn mount_login_and_csrf(server: &MockServer) {
@@ -338,7 +375,7 @@ mod tests {
     }
 
     fn client(server: &MockServer) -> SmApiClient {
-        SmApiClient::new(Url::parse(&server.uri()).unwrap())
+        SmApiClient::new(Url::parse(&server.uri()).unwrap(), LoginFlow::Loopback)
     }
 
     async fn logged_in(server: &MockServer) -> SmApiClient {
@@ -521,6 +558,40 @@ mod tests {
             c.login("ACCESS", None).await,
             Err(AuthError::Protocol(_))
         ));
+    }
+
+    /// SM records `utm_*` on the signup path, so a first-ever login through redisctl must carry
+    /// attribution or the tool is invisible in signup analytics. The mock matches only if all three
+    /// fields are present, and `utm_campaign` distinguishes the two flows.
+    #[tokio::test]
+    async fn login_sends_utm_attribution_per_flow() {
+        for (flow, campaign) in [
+            (LoginFlow::Loopback, "loopback"),
+            (LoginFlow::Device, "device"),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/login"))
+                .and(body_string_contains("\"utm_source\":\"redisctl\""))
+                .and(body_string_contains("\"utm_medium\":\"cli\""))
+                .and(body_string_contains(format!(
+                    "\"utm_campaign\":\"{campaign}\""
+                )))
+                .respond_with(
+                    ResponseTemplate::new(200).append_header("Set-Cookie", "JSESSIONID=S"),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/csrf"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "csrfToken": { "csrf_token": "CSRF", "csrf_enabled": true, "errors": [] }
+                })))
+                .mount(&server)
+                .await;
+            let mut c = SmApiClient::new(Url::parse(&server.uri()).unwrap(), flow);
+            c.login("ACCESS", None).await.unwrap();
+        }
     }
 
     #[tokio::test]
