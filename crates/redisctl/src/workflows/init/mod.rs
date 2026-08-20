@@ -5,6 +5,7 @@
 //! rendering. The decisions live in the `redisctl-init` engine crate.
 
 mod cloud;
+mod dns;
 mod output;
 pub(crate) mod wizard;
 
@@ -155,6 +156,9 @@ pub async fn run(
             args.defaults,
         )
         .await?;
+        // A freshly published endpoint's DNS can lag the API; gate before any
+        // OS-resolver lookup so a premature failure never gets negative-cached.
+        dns::wait_for_endpoint_dns(&outcome.url).await;
         options.url_input = Some(outcome.url);
         options.cloud = Some(outcome.facts);
         cloud_changes = outcome.changes;
@@ -257,9 +261,16 @@ pub async fn run(
         ),
         Err(e) => {
             println!("{} {e}", output::red("✗"));
+            // A name that does not resolve is almost never stale input - it is a
+            // record still propagating, or an OS cache remembering the gap.
+            let remedy = if dns::is_dns_error(&e) {
+                "The endpoint's DNS record may still be propagating (new databases can take a minute) - wait a moment and re-run.\n  macOS caches failed lookups; clear with: sudo dscacheutil -flushcache && sudo killall -HUP mDNSResponder"
+            } else {
+                "If this URL is stale, remove REDIS_URL from .env and re-run, or pass --url."
+            };
             return Err(RedisCtlError::ConnectionError {
                 message: format!(
-                    "could not talk to Redis at {}\n  If this URL is stale, remove REDIS_URL from .env and re-run, or pass --url.",
+                    "could not talk to Redis at {}\n  {remedy}",
                     engine::mask_url(plan.database_url())
                 ),
             });
