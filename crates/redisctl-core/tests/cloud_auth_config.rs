@@ -81,9 +81,15 @@ fn resolve_cloud_auth_falls_back_to_prod_defaults() {
     let config = Config::default();
     let resolved = config.resolve_cloud_auth("anything");
     assert_eq!(resolved, CloudAuthConfig::prod_defaults());
-    // Prod endpoints aren't provisioned yet, so it isn't complete, but the CAPI base is known.
-    assert!(!resolved.is_complete());
+    // Production endpoints are built in, so a profile with no `[cloud_auth]` section can log in.
+    assert!(resolved.is_complete());
     assert_eq!(resolved.capi_url, "https://api.redislabs.com/v1");
+    assert_eq!(
+        resolved.okta_issuer,
+        "https://auth.redis.com/oauth2/default"
+    );
+    assert!(!resolved.okta_client_id.is_empty());
+    assert_eq!(resolved.sm_api_url, "https://cloud.redis.io/api/v1");
 }
 
 #[test]
