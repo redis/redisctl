@@ -337,6 +337,7 @@ mod tests {
             skills_repo: None,
             skills_global: false,
             dry_run: false,
+            no_telemetry: false,
             pasted: Vec::new(),
         }
     }

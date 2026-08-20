@@ -2,7 +2,10 @@
 //! and a minimal in-test RESP responder plays the provisioned database so the
 //! validation step exercises a real socket. No Docker, no network.
 
+mod init_common;
+
 use assert_cmd::Command;
+use init_common::{fake_redis, skills_fixture};
 use predicates::prelude::*;
 use serde_json::json;
 use tempfile::TempDir;
@@ -24,68 +27,6 @@ default_cloud = "test"
 "#
     );
     std::fs::write(dir.path().join("config.toml"), config).unwrap();
-}
-
-fn skills_fixture() -> TempDir {
-    let repo = tempfile::tempdir().unwrap();
-    let skill = repo.path().join("skills/redis-basics");
-    std::fs::create_dir_all(&skill).unwrap();
-    std::fs::write(skill.join("SKILL.md"), "# basics\n").unwrap();
-    repo
-}
-
-/// Just enough RESP to pass init's validation (AUTH, PING, SET, GET, DEL).
-/// Returns the loopback port it serves on.
-fn fake_redis() -> u16 {
-    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let port = listener.local_addr().unwrap().port();
-    std::thread::spawn(move || {
-        use std::io::{BufRead, BufReader, Write};
-        for stream in listener.incoming() {
-            let Ok(stream) = stream else { break };
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut stream = stream;
-            let mut stored = String::new();
-            let mut line = String::new();
-            loop {
-                line.clear();
-                if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                    break;
-                }
-                if !line.starts_with('*') {
-                    continue;
-                }
-                let argc: usize = line[1..].trim().parse().unwrap_or(0);
-                let mut args = Vec::with_capacity(argc);
-                for _ in 0..argc {
-                    let mut len = String::new();
-                    let mut arg = String::new();
-                    if reader.read_line(&mut len).unwrap_or(0) == 0
-                        || reader.read_line(&mut arg).unwrap_or(0) == 0
-                    {
-                        break;
-                    }
-                    args.push(arg.trim_end().to_string());
-                }
-                let reply = match args.first().map(|c| c.to_ascii_uppercase()) {
-                    Some(cmd) if cmd == "PING" => "+PONG\r\n".to_string(),
-                    Some(cmd) if cmd == "SET" => {
-                        stored = args.get(2).cloned().unwrap_or_default();
-                        "+OK\r\n".to_string()
-                    }
-                    Some(cmd) if cmd == "GET" => {
-                        format!("${}\r\n{}\r\n", stored.len(), stored)
-                    }
-                    Some(cmd) if cmd == "DEL" => ":1\r\n".to_string(),
-                    _ => "+OK\r\n".to_string(),
-                };
-                if stream.write_all(reply.as_bytes()).is_err() {
-                    break;
-                }
-            }
-        }
-    });
-    port
 }
 
 /// Mount the account inventory: one free Essentials sub (1) holding
@@ -161,6 +102,8 @@ fn run_init_cloud(cfg: &TempDir, dir: &std::path::Path, repo: &TempDir, extra: &
         cmd.env_remove(var);
     }
     cmd.current_dir(dir)
+        // Explicitly off: an ambient key must not make test runs send telemetry.
+        .env("REDISCTL_INIT_AMPLITUDE_KEY", "")
         .env("REDISCTL_INIT_SKILLS_REPO", repo.path())
         .arg("--config-file")
         .arg(cfg.path().join("config.toml"))
@@ -376,13 +319,34 @@ async fn dry_run_reports_the_choice_it_would_offer() {
     write_cloud_profile(&cfg, &server.uri());
     mount_both_tiers(&server, "h:1").await;
 
+    // Telemetry pointed at a second mock: a dry run must report the planned
+    // database_source vocabulary, not the applied one.
+    let amplitude = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/2/httpapi"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&amplitude)
+        .await;
     run_init_cloud(&cfg, project.path(), &repo, &["--dry-run"])
+        .env("REDISCTL_INIT_AMPLITUDE_KEY", "test-key")
+        .env(
+            "REDISCTL_INIT_AMPLITUDE_URL",
+            format!("{}/2/httpapi", amplitude.uri()),
+        )
+        .env("HOME", cfg.path())
         .assert()
         .success()
         .stdout(predicates::str::contains(
             "would offer \"essentials-db\", \"flexible-db\" or a new free database",
         ));
     assert!(!project.path().join(".env").exists());
+    let requests = amplitude.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    let props =
+        requests[0].body_json::<serde_json::Value>().unwrap()["events"][0]["event_properties"]
+            .clone();
+    assert_eq!(props["database_source"], "Redis Cloud (planned)");
+    assert_eq!(props["dry_run"], true);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -489,7 +453,8 @@ fn existing_env_url_wins_over_cloud_and_provisions_nothing() {
     // No cloud profile and no CAPI mock exist: reaching the cloud client at all
     // would fail this run, so success proves the existing value short-circuits.
     let mut cmd = Command::cargo_bin("redisctl").unwrap();
-    cmd.current_dir(project.path())
+    cmd.env("REDISCTL_INIT_AMPLITUDE_KEY", "")
+        .current_dir(project.path())
         .env("REDISCTL_INIT_SKILLS_REPO", repo.path())
         .args([
             "init",
