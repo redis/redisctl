@@ -95,6 +95,15 @@ sequenceDiagram
     CLI-->>A: authenticated and account_id
 ```
 
+### Password accounts need linking once
+
+Redis Cloud accounts that sign in with an email and password cannot be used by the CLI directly —
+the sign-in happens at the identity provider, which never held that password. Sign in to the
+[Redis Cloud console](https://app.redislabs.com) once with **Google or GitHub using the same email
+address** and accept the prompt to link the account; afterwards `cloud auth login` works normally.
+
+Until that's done, login exits `2` with `migration_required`.
+
 ## Status
 
 ```bash
@@ -178,7 +187,7 @@ of parsing prose:
 | Exit code | Meaning | Example codes |
 |-----------|---------|---------------|
 | `1` | unknown / backend failure | `sm_exchange_failed` |
-| `2` | usage / precondition to fix | `not_authenticated`, `auth_denied`, `keyring_unavailable` |
+| `2` | usage / precondition to fix | `not_authenticated`, `auth_denied`, `keyring_unavailable`, `migration_required` |
 | `3` | transient / retryable | `device_code_expired`, `transient_api_error`, `rate_limited` |
 
 Human (non-JSON) mode prints the usual diagnostic to stderr and keeps today's `0`/`1` exit behavior.

@@ -38,6 +38,7 @@ keeps today's `0` / `1` exit behavior.
 | `not_authenticated` | 2 | no | No usable credentials for the profile. Run `redisctl cloud auth login`. |
 | `auth_denied` | 2 | no | The sign-in request was denied. |
 | `keyring_unavailable` | 2 | no | No OS keyring available to store the key. Re-run with `--allow-plaintext`. |
+| `migration_required` | 2 | no | The account signs in with a password and must be linked to Google/GitHub once in the Redis Cloud console. |
 | `invalid_name` | 2 | no | The database name doesn't match the naming rules (see below). |
 | `name_conflict` | 2 | no | The name maps to a conflicting existing resource. |
 | `device_code_expired` | 3 | yes | The device login code expired before approval. Start login again. |
