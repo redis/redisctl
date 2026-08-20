@@ -4,6 +4,8 @@
 //! This module owns only the CLI surface: argument shaping, banner, colours, and
 //! rendering. The decisions live in the `redisctl-init` engine crate.
 
+mod cloud;
+mod dns;
 mod output;
 pub(crate) mod wizard;
 
@@ -34,7 +36,11 @@ fn requested_agents(flags: &[AgentArg]) -> Option<Vec<engine::Agent>> {
     )
 }
 
-pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
+pub async fn run(
+    args: &InitArgs,
+    conn_mgr: &crate::connection::ConnectionManager,
+    profile: Option<&str>,
+) -> Result<(), RedisCtlError> {
     let pasted = [args.url.clone().unwrap_or_default()]
         .into_iter()
         .chain(args.pasted.iter().cloned())
@@ -53,6 +59,7 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
         cwd: cwd.clone(),
         name: args.name.clone(),
         url_input,
+        cloud: None,
         agents: requested_agents(&args.agents),
         install_cli: !args.no_install_cli,
         skills_repo: args.skills_repo.clone(),
@@ -90,6 +97,7 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
 
     let pending = wizard::pending_questions(args, options.url_input.is_some());
     let mut asked_agents = false;
+    let mut wants_cloud = args.cloud;
     if wizard::applies(args, &pending) {
         let answers = wizard::run(
             &pending,
@@ -99,6 +107,7 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
         if let Some(url) = answers.url {
             options.url_input = Some(url);
         }
+        wants_cloud = wants_cloud || answers.cloud;
         if let Some(agents) = answers.agents {
             options.agents = Some(agents);
             asked_agents = true;
@@ -106,6 +115,53 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
         if let Some(global) = answers.skills_global {
             options.skills_global = global;
         }
+    }
+    // Never-clobber means a freshly provisioned database could never be recorded
+    // in .env; keep the existing value instead of creating one the project would
+    // not use (and burning the free-plan slot).
+    if wants_cloud && engine::read_env_key(&cwd, ".env", "REDIS_URL").is_some() {
+        println!(
+            "{}",
+            yellow(
+                "  note: .env already carries REDIS_URL - keeping it (init never overwrites credentials). Remove that line to take the database from Redis Cloud.\n"
+            )
+        );
+        wants_cloud = false;
+    }
+    let mut cloud_changes = Vec::new();
+    if wants_cloud {
+        // A missing profile has one fix worth naming here; other client errors
+        // keep their own classification.
+        let client = conn_mgr.create_cloud_client(profile).await.map_err(|e| {
+            if matches!(
+                e,
+                RedisCtlError::NoProfileConfigured { .. }
+                    | RedisCtlError::MissingCredentials { .. }
+                    | RedisCtlError::ProfileNotFound { .. }
+            ) {
+                RedisCtlError::Other(format!(
+                    "{e}\n  Sign in first: redisctl cloud auth login   (or pass -p <profile> with API keys)"
+                ))
+            } else {
+                e
+            }
+        })?;
+        let outcome = cloud::resolve(
+            &client,
+            &cwd,
+            args.name.as_deref(),
+            args.cloud_subscription,
+            profile,
+            dry,
+            args.defaults,
+        )
+        .await?;
+        // A freshly published endpoint's DNS can lag the API; gate before any
+        // OS-resolver lookup so a premature failure never gets negative-cached.
+        dns::wait_for_endpoint_dns(&outcome.url).await;
+        options.url_input = Some(outcome.url);
+        options.cloud = Some(outcome.facts);
+        cloud_changes = outcome.changes;
     }
     let plan = engine::plan(&options)?;
 
@@ -160,7 +216,7 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
             bold("Plan"),
             dim(&format!("({})", subject(false)))
         );
-        for change in plan.changes() {
+        for change in cloud_changes.iter().cloned().chain(plan.changes()) {
             println!("{}", output::change_line(&change));
         }
         uvx_note(&plan);
@@ -189,7 +245,7 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
         bold("Changes"),
         dim(&format!("({})", subject(true)))
     );
-    for change in &report.changes {
+    for change in cloud_changes.iter().chain(report.changes.iter()) {
         println!("{}", output::change_line(change));
     }
     uvx_note(&plan);
@@ -205,9 +261,16 @@ pub async fn run(args: &InitArgs) -> Result<(), RedisCtlError> {
         ),
         Err(e) => {
             println!("{} {e}", output::red("✗"));
+            // A name that does not resolve is almost never stale input - it is a
+            // record still propagating, or an OS cache remembering the gap.
+            let remedy = if dns::is_dns_error(&e) {
+                "The endpoint's DNS record may still be propagating (new databases can take a minute) - wait a moment and re-run.\n  macOS caches failed lookups; clear with: sudo dscacheutil -flushcache && sudo killall -HUP mDNSResponder"
+            } else {
+                "If this URL is stale, remove REDIS_URL from .env and re-run, or pass --url."
+            };
             return Err(RedisCtlError::ConnectionError {
                 message: format!(
-                    "could not talk to Redis at {}\n  If this URL is stale, remove REDIS_URL from .env and re-run, or pass --url.",
+                    "could not talk to Redis at {}\n  {remedy}",
                     engine::mask_url(plan.database_url())
                 ),
             });
