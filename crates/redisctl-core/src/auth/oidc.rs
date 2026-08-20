@@ -102,7 +102,7 @@ pub(crate) fn okta_client(issuer: &Url, client_id: &str) -> Result<OktaClient, A
 pub(crate) fn oauth_http_client() -> Result<oauth2::reqwest::Client, AuthError> {
     oauth2::reqwest::Client::builder()
         .redirect(oauth2::reqwest::redirect::Policy::none())
-        .user_agent(concat!("redisctl/", env!("CARGO_PKG_VERSION")))
+        .user_agent(crate::USER_AGENT)
         .build()
         .map_err(|e| AuthError::Protocol(format!("could not build the OAuth HTTP client: {e}")))
 }
@@ -110,7 +110,7 @@ pub(crate) fn oauth_http_client() -> Result<oauth2::reqwest::Client, AuthError> 
 /// A reqwest client with the redisctl user agent (used by the SM API exchange).
 pub(crate) fn default_http_client() -> reqwest::Client {
     reqwest::Client::builder()
-        .user_agent(concat!("redisctl/", env!("CARGO_PKG_VERSION")))
+        .user_agent(crate::USER_AGENT)
         .build()
         .expect("building the reqwest client should not fail")
 }
