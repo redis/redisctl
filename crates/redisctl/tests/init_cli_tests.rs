@@ -217,6 +217,31 @@ fn dead_url_writes_env_then_fails_validation_with_the_stale_hint() {
 }
 
 #[test]
+fn a_dns_failure_gets_the_propagation_hint_not_the_stale_one() {
+    // .invalid is RFC-reserved: resolution always fails, distinguishing the DNS
+    // remedy from the refused-port stale-URL remedy the test above pins.
+    let dir = tempfile::tempdir().unwrap();
+    let repo = skills_fixture();
+    redisctl()
+        .current_dir(dir.path())
+        .env("REDISCTL_INIT_SKILLS_REPO", repo.path())
+        .args([
+            "init",
+            "--url",
+            "redis://no-such-host.invalid:6379",
+            "--no-install-cli",
+            "--agent",
+            "claude",
+        ])
+        .assert()
+        .code(10)
+        .stderr(predicate::str::contains(
+            "DNS record may still be propagating",
+        ))
+        .stderr(predicate::str::contains("remove REDIS_URL from .env").not());
+}
+
+#[test]
 fn rerun_with_a_url_reports_env_unchanged() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
