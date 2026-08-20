@@ -85,13 +85,16 @@ impl Theme for RedisTheme {
         prompt: &str,
         sel: &str,
     ) -> std::fmt::Result {
+        // The trailing bare rail row carries the line to the next entry, so the
+        // clack rail never breaks between answered questions.
         write!(
             f,
-            "{}  {}\n{}  {}",
+            "{}  {}\n{}  {}\n{}",
             brand().apply_to('◇'),
             Style::new().bold().apply_to(prompt),
             brand().apply_to('│'),
-            Style::new().dim().apply_to(sel)
+            Style::new().dim().apply_to(sel),
+            brand().apply_to('│')
         )
     }
 
@@ -140,7 +143,28 @@ impl Theme for RedisTheme {
 }
 
 const DATABASE_PROMPT: &str = "Where should the database come from?";
-const DATABASE_ITEMS: [&str; 3] = ["Redis Cloud", "Local Redis", "Paste a connection string"];
+
+/// The database options, shaped by what .env already carries: an existing
+/// REDIS_URL leads (masked) and replaces the fill-in-later option - placeholders
+/// make no sense when the value is already there.
+fn database_items(env_url: Option<&str>) -> Vec<String> {
+    let mut items = Vec::new();
+    if let Some(url) = env_url {
+        items.push(format!(
+            "Keep the REDIS_URL already in .env  ({})",
+            engine::mask_url(url)
+        ));
+    }
+    items.extend(
+        ["Redis Cloud", "Local Redis", "Paste a connection string"]
+            .into_iter()
+            .map(str::to_string),
+    );
+    if env_url.is_none() {
+        items.push("Skip for now - fill in .env later".to_string());
+    }
+    items
+}
 const LOCAL_FOUND_PROMPT: &str = "Found a local Redis at localhost:6379 - use it?";
 const LOCAL_NONE_PROMPT: &str = "No local Redis found - create one?";
 const AGENTS_PROMPT: &str = "Which agent(s) should be configured?";
@@ -199,6 +223,11 @@ pub fn applies(args: &InitArgs, pending: &[Question]) -> bool {
 pub struct Answers {
     pub url: Option<String>,
     pub cloud: bool,
+    /// The user picked a concrete source (not "keep .env"), superseding any
+    /// REDIS_URL already there.
+    pub database_explicit: bool,
+    /// "Skip for now": write a placeholder REDIS_URL to fill in later.
+    pub placeholder: bool,
     pub agents: Option<Vec<engine::Agent>>,
     pub skills_global: Option<bool>,
 }
@@ -225,14 +254,23 @@ pub fn run(
     detected: &[engine::Agent],
     docker: bool,
     local: engine::LocalRedis,
+    env_url: Option<&str>,
 ) -> Result<Answers, RedisCtlError> {
     let mut answers = Answers::default();
     for question in pending {
         match question {
-            Question::Database => match ask_database(docker, local)? {
-                DatabaseChoice::Docker => {}
-                DatabaseChoice::Cloud => answers.cloud = true,
-                DatabaseChoice::Url(url) => answers.url = Some(url),
+            Question::Database => match ask_database(docker, local, env_url)? {
+                DatabaseChoice::KeepEnv => {}
+                DatabaseChoice::Placeholder => answers.placeholder = true,
+                DatabaseChoice::Docker => answers.database_explicit = true,
+                DatabaseChoice::Cloud => {
+                    answers.cloud = true;
+                    answers.database_explicit = true;
+                }
+                DatabaseChoice::Url(url) => {
+                    answers.url = Some(url);
+                    answers.database_explicit = true;
+                }
             },
             Question::Agents => answers.agents = Some(ask_agents(detected)?),
             Question::Skills => answers.skills_global = Some(ask_skills_scope()?),
@@ -242,6 +280,8 @@ pub fn run(
 }
 
 enum DatabaseChoice {
+    KeepEnv,
+    Placeholder,
     Docker,
     Cloud,
     Url(String),
@@ -250,21 +290,35 @@ enum DatabaseChoice {
 /// Redis Cloud leads and is the default; "Local Redis" reuses a server that is
 /// already running (asking for credentials when it wants them) and only falls back
 /// to creating a Docker container; a paste comes back as the URL.
-fn ask_database(docker: bool, local: engine::LocalRedis) -> Result<DatabaseChoice, RedisCtlError> {
+fn ask_database(
+    docker: bool,
+    local: engine::LocalRedis,
+    env_url: Option<&str>,
+) -> Result<DatabaseChoice, RedisCtlError> {
     const PROMPT: &str = DATABASE_PROMPT;
     // No tier qualifier on Redis Cloud: the cloud flow connects to existing
     // databases on any plan; only creating a new one defaults to the free plan.
+    let items = database_items(env_url);
     let selection = Select::with_theme(&RedisTheme)
         .with_prompt(PROMPT)
-        .items(&DATABASE_ITEMS)
+        .items(&items)
         .default(0)
         .interact_opt()
         .map_err(prompt_failed)?;
-    match selection {
-        None => Err(cancelled(PROMPT)),
-        Some(0) => Ok(DatabaseChoice::Cloud),
-        Some(1) => ask_local(docker, local),
-        _ => ask_paste(),
+    let Some(selection) = selection else {
+        return Err(cancelled(PROMPT));
+    };
+    // With an existing .env the keep-option occupies slot 0 and there is no
+    // fill-in-later slot; without one the list ends with it.
+    let offset = usize::from(env_url.is_some());
+    if env_url.is_some() && selection == 0 {
+        return Ok(DatabaseChoice::KeepEnv);
+    }
+    match selection - offset {
+        0 => Ok(DatabaseChoice::Cloud),
+        1 => ask_local(docker, local),
+        2 => ask_paste(),
+        _ => Ok(DatabaseChoice::Placeholder),
     }
 }
 
@@ -423,11 +477,40 @@ mod tests {
     }
 
     #[test]
+    fn an_answered_question_carries_a_trailing_rail_row() {
+        // The bare rail row under each answer keeps the clack line unbroken
+        // between entries.
+        let mut out = String::new();
+        RedisTheme
+            .format_select_prompt_selection(&mut out, "Q?", "Answer")
+            .unwrap();
+        assert!(out.trim_end().ends_with('│'), "{out}");
+    }
+
+    #[test]
     fn redis_cloud_leads_the_database_options() {
         assert_eq!(
-            DATABASE_ITEMS,
-            ["Redis Cloud", "Local Redis", "Paste a connection string"]
+            database_items(None),
+            [
+                "Redis Cloud",
+                "Local Redis",
+                "Paste a connection string",
+                "Skip for now - fill in .env later"
+            ]
         );
+    }
+
+    #[test]
+    fn an_existing_env_url_becomes_the_first_option_masked() {
+        let items = database_items(Some("redis://default:s3cret@host:6379"));
+        assert_eq!(
+            items[0],
+            "Keep the REDIS_URL already in .env  (redis://default:****@host:6379)"
+        );
+        assert!(!items[0].contains("s3cret"));
+        assert_eq!(items[1], "Redis Cloud");
+        // Placeholders make no sense when .env is already filled in.
+        assert!(!items.iter().any(|i| i.contains("Skip for now")));
     }
 
     #[test]
