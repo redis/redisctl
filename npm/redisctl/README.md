@@ -1,4 +1,4 @@
-# @redis/init
+# @redis/redisctl
 
 > **Not yet self-contained:** until the `redisctl` binary npm package ships as a
 > dependency, this wrapper requires `redisctl` on PATH (see the checklist below).
@@ -6,18 +6,18 @@
 Onboard a project to Redis services and make its AI coding agent Redis-fluent:
 
 ```bash
-npx @redis/init
+npx @redis/redisctl init
 ```
 
 This package is a thin wrapper over [`redisctl init`](https://github.com/redis/redisctl):
-it maps npm muscle memory (`-y`/`--yes`) to `redisctl`'s `--defaults`, inherits the
+it maps npm muscle memory (`-y`/`--yes` after `init`) to `redisctl`'s `--defaults`, inherits the
 terminal (the wizard and banner work), and forwards exit codes verbatim
-(0 success / 2 usage / 6 validation / 10 network / 12 cancelled). Every flag after
-`npx @redis/init` goes to `redisctl init` unchanged.
+(0 success / 2 usage / 6 validation / 10 network / 12 cancelled). Everything after
+`npx @redis/redisctl` goes to `redisctl` unchanged, so other subcommands work too.
 
-Note the position of `-y`: `npx @redis/init -y` reaches the wrapper (and becomes
-`--defaults`); `npx -y @redis/init` is npx's own skip-prompt flag and never
-reaches it. Both are fine - they just answer different questions.
+Note the position of `-y`: `npx @redis/redisctl init -y` reaches the wrapper (and
+becomes `--defaults`); `npx -y @redis/redisctl init` is npx's own skip-prompt flag
+and never reaches it. Both are fine - they just answer different questions.
 
 ## How the binary is found
 
@@ -38,10 +38,10 @@ single arguments on every platform.
 
 1. Add `"npm"` to `installers` in the workspace `[workspace.metadata.dist]` and
    rerun `dist generate --mode ci`, so every release also publishes the `redisctl`
-   binary package (name/scope: open question).
+   binary package (wrapper scope/name decided: `@redis/redisctl`).
 2. Add that package here as an exact-version dependency (lockstep with the binary),
    and set this package's `version` from the release pipeline.
-3. Swap the install hint (in `bin/redis-init.js` and above) to the released
+3. Swap the install hint (in `bin/redisctl.js` and above) to the released
    channels (`brew install redis/homebrew-tap/redisctl`, `cargo install redisctl`),
    and probe for the `init` subcommand - a pre-init 0.11.x binary on PATH exits 2,
    which the hint must explain.
@@ -50,9 +50,9 @@ single arguments on every platform.
 5. `npm publish --tag alpha` from the release workflow for a dress rehearsal;
    promote to `latest` when the init stack ships.
 
-Do not publish before step 1-2 exist: `npx @redis/init` on a clean machine must
-work end to end, not exit with an install hint.
+Do not publish before step 1-2 exist: `npx @redis/redisctl init` on a clean
+machine must work end to end, not exit with an install hint.
 
 Until then, test the wrapper itself with `npm pack` +
-`npx --yes --package=./redis-init-0.0.0.tgz redis-init --dry-run` against a
-`redisctl` on PATH (that `--yes` belongs to npx, not the wrapper).
+`npx --yes --package=./redis-redisctl-0.0.0.tgz redisctl init --dry-run` against
+a `redisctl` on PATH (that `--yes` belongs to npx, not the wrapper).

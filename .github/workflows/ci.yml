@@ -192,7 +192,7 @@ jobs:
 
       - name: Run wrapper tests
         run: npm test
-        working-directory: npm/redis-init
+        working-directory: npm/redisctl
 
   ci-status:
     name: CI Status
