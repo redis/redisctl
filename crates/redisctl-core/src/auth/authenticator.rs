@@ -9,7 +9,7 @@
 
 use url::Url;
 
-use super::sm_api::{SmAccount, SmApiClient};
+use super::sm_api::{LoginFlow, SmAccount, SmApiClient};
 use super::{AuthError, DeviceFlowClient, LoopbackFlowClient, TokenSet, default_http_client};
 
 /// Result of a completed login: a Redis Cloud CAPI key pair plus context, ready to persist.
@@ -108,8 +108,10 @@ impl CloudAuthenticator {
         &self,
         tokens: &TokenSet,
         key_name: &str,
+        flow: LoginFlow,
     ) -> Result<MintedCredentials, AuthError> {
-        let mut sm = SmApiClient::with_http_client(self.sm_api_url.clone(), self.http.clone());
+        let mut sm =
+            SmApiClient::with_http_client(self.sm_api_url.clone(), self.http.clone(), flow);
         // Google/GitHub logins must not send Sm-Id-Token (SSO-only); see sm_api docs.
         sm.login(&tokens.access_token, None).await?;
         let user = sm.fetch_current_user().await?;
@@ -283,7 +285,10 @@ mod tests {
             expires_in: 3600,
         };
 
-        let creds = auth.complete_login(&tokens, "redisctl-test").await.unwrap();
+        let creds = auth
+            .complete_login(&tokens, "redisctl-test", LoginFlow::Loopback)
+            .await
+            .unwrap();
         assert_eq!(creds.api_key, "ACCT-KEY");
         assert_eq!(creds.api_secret, "SECRET");
         assert_eq!(creds.api_url, "https://capi.example/v1");
@@ -316,7 +321,7 @@ mod tests {
             expires_in: 3600,
         };
         assert!(matches!(
-            auth.complete_login(&tokens, "k").await,
+            auth.complete_login(&tokens, "k", LoginFlow::Loopback).await,
             Err(AuthError::Protocol(_))
         ));
     }

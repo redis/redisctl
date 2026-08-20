@@ -18,7 +18,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use redisctl_core::auth::{CloudAuthenticator, MintedCredentials};
+use redisctl_core::auth::{CloudAuthenticator, LoginFlow, MintedCredentials};
 use redisctl_core::{CloudAuthConfig, Config, CredentialStore, DeviceAuthorization, TokenSet};
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -135,6 +135,11 @@ async fn login(
         &tokens,
         allow_plaintext,
         auth_cfg,
+        if use_device {
+            LoginFlow::Device
+        } else {
+            LoginFlow::Loopback
+        },
     )
     .await?;
     emit_signed_in(&creds, &profile_name, output)
@@ -228,9 +233,10 @@ async fn complete_and_persist(
     tokens: &TokenSet,
     allow_plaintext: bool,
     auth_cfg: CloudAuthConfig,
+    flow: LoginFlow,
 ) -> CliResult<MintedCredentials> {
     let creds = authenticator
-        .complete_login(tokens, &default_key_name())
+        .complete_login(tokens, &default_key_name(), flow)
         .await
         .map_err(auth_err)?;
 
@@ -312,6 +318,7 @@ async fn status(
                     &tokens,
                     pending.allow_plaintext,
                     auth_cfg,
+                    LoginFlow::Device,
                 )
                 .await?;
                 clear_pending(conn_mgr, &profile_name);
