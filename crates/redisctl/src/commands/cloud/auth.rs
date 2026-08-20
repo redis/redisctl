@@ -140,6 +140,23 @@ async fn login(
     emit_signed_in(&creds, &profile_name, output)
 }
 
+/// Sign-in instructions for the device flow. `verification_uri_complete` pre-fills the code on the
+/// activation page, so the user confirms it rather than typing it — RFC 8628 §3.3.1 still requires
+/// that explicit confirmation, so the step itself can't be skipped.
+fn device_instructions(authz: &DeviceAuthorization) -> String {
+    match authz.verification_uri_complete() {
+        Some(complete) => format!(
+            "\nTo sign in, open:\n  {complete}\nand confirm the code:  {}  (already filled in)\n",
+            authz.user_code(),
+        ),
+        None => format!(
+            "\nTo sign in, open:\n  {}\nand enter the code:  {}\n",
+            authz.verification_uri(),
+            authz.user_code(),
+        ),
+    }
+}
+
 /// Start the device flow, save a pending record, and return the device code to the caller
 /// (agent) without blocking. Completion happens later via `auth status --wait`.
 async fn initiate_device_login(
@@ -154,10 +171,6 @@ async fn initiate_device_login(
         .start(&SCOPES)
         .await
         .map_err(auth_err)?;
-    let verify = authz
-        .verification_uri_complete()
-        .unwrap_or_else(|| authz.verification_uri());
-
     save_pending(
         conn_mgr,
         &PendingAuth {
@@ -168,9 +181,8 @@ async fn initiate_device_login(
     )?;
 
     eprintln!(
-        "\nTo sign in, open:\n  {verify}\nand confirm the code:  {}\nThen run: redisctl cloud \
-         auth status --wait   (or wait for the agent to poll)",
-        authz.user_code()
+        "{}Then run: redisctl cloud auth status --wait   (or wait for the agent to poll)",
+        device_instructions(&authz),
     );
     print_formatted_output(
         serde_json::json!({
@@ -189,13 +201,7 @@ async fn initiate_device_login(
 async fn run_device_flow_blocking(auth: &CloudAuthenticator) -> CliResult<TokenSet> {
     let client = auth.device();
     let authz = client.start(&SCOPES).await.map_err(auth_err)?;
-    let verify = authz
-        .verification_uri_complete()
-        .unwrap_or_else(|| authz.verification_uri());
-    eprintln!(
-        "\nTo sign in, open:\n  {verify}\nand confirm the code:  {}\n(waiting for approval…)",
-        authz.user_code()
-    );
+    eprintln!("{}(waiting for approval…)", device_instructions(&authz));
 
     // oauth2 owns the poll loop (honoring the server's interval / slow_down); `None` polls until
     // the device code's own lifetime expires, which surfaces as `device_code_expired` via auth_err.

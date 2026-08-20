@@ -79,6 +79,7 @@ sequenceDiagram
     participant CLI as redisctl
     participant OK as Okta (OIDC)
     participant SM as Redis Cloud API
+    participant CFG as profile and keyring
     A->>CLI: cloud auth login --device
     CLI->>OK: request device authorization
     OK-->>CLI: user_code, verification_uri, device_code
@@ -90,6 +91,7 @@ sequenceDiagram
     OK-->>CLI: access and refresh tokens
     CLI->>SM: sign in, enable access, mint an API key
     SM-->>CLI: account API key and user secret
+    CLI->>CFG: write cloud profile (secrets to keyring)
     CLI-->>A: authenticated and account_id
 ```
 
