@@ -22,7 +22,7 @@ pub use docker::docker_ok as docker_available;
 pub use project::{detect as detect_project, detect_agents};
 
 pub(crate) const SKILLS_DIR: &str = ".agents/skills";
-pub use docker::validate;
+pub use docker::{LOCAL_REDIS_URL, LocalRedis, probe_local_redis, validate};
 pub use env::read_env_key;
 pub use products::{
     ProductKey, ProductRequest, SECRET_PLACEHOLDER, WiredProduct, validate_product,

@@ -365,6 +365,52 @@ async fn wait_for_ping(url: &str, timeout: Duration) -> Result<(), InitError> {
     }
 }
 
+/// The default endpoint a native local Redis listens on.
+pub const LOCAL_REDIS_URL: &str = "redis://localhost:6379";
+
+/// What answers (or does not) at a local Redis endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalRedis {
+    Ready,
+    NeedsAuth,
+    NotFound,
+}
+
+/// A quick look before the wizard offers to reuse a running server: PONG means
+/// usable as-is, an auth error still counts as running, anything else (refused,
+/// timeout, non-Redis chatter) reads as absent.
+pub async fn probe_local_redis(url: &str) -> LocalRedis {
+    const PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
+    let Ok(client) = redis::Client::open(url) else {
+        return LocalRedis::NotFound;
+    };
+    let mut conn = match tokio::time::timeout(
+        PROBE_TIMEOUT,
+        client.get_multiplexed_async_connection(),
+    )
+    .await
+    {
+        Ok(Ok(conn)) => conn,
+        Ok(Err(e)) if is_auth_error(&e) => return LocalRedis::NeedsAuth,
+        _ => return LocalRedis::NotFound,
+    };
+    match tokio::time::timeout(
+        PROBE_TIMEOUT,
+        redis::cmd("PING").query_async::<String>(&mut conn),
+    )
+    .await
+    {
+        Ok(Ok(_)) => LocalRedis::Ready,
+        Ok(Err(e)) if is_auth_error(&e) => LocalRedis::NeedsAuth,
+        _ => LocalRedis::NotFound,
+    }
+}
+
+fn is_auth_error(e: &redis::RedisError) -> bool {
+    e.kind() == redis::ErrorKind::AuthenticationFailed
+        || matches!(e.code(), Some("NOAUTH") | Some("WRONGPASS"))
+}
+
 /// Prove the database actually works: a PING and a SET/GET round trip on a
 /// short-lived key.
 pub async fn validate(url: &str) -> Result<(), String> {
@@ -400,6 +446,59 @@ pub async fn validate(url: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fake Redis that answers every incoming command with `reply` - the client
+    /// pipelines CLIENT SETINFO during setup before the PING the probe cares about,
+    /// so one reply per `*`-led command keeps the protocol in sync.
+    fn fake_redis(reply: &'static [u8]) -> String {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let url = format!(
+            "redis://127.0.0.1:{}",
+            listener.local_addr().unwrap().port()
+        );
+        std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                use std::io::{Read, Write};
+                let _ = sock.set_read_timeout(Some(Duration::from_secs(3)));
+                let mut buf = [0u8; 4096];
+                while let Ok(n) = sock.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    let commands = buf[..n].iter().filter(|b| **b == b'*').count().max(1);
+                    for _ in 0..commands {
+                        let _ = sock.write_all(reply);
+                    }
+                    let _ = sock.flush();
+                }
+            }
+        });
+        url
+    }
+
+    #[tokio::test]
+    async fn probe_finds_a_ready_local_redis() {
+        let url = fake_redis(b"+PONG\r\n");
+        assert_eq!(probe_local_redis(&url).await, LocalRedis::Ready);
+    }
+
+    #[tokio::test]
+    async fn probe_reads_an_auth_error_as_a_running_server() {
+        let url = fake_redis(b"-NOAUTH Authentication required.\r\n");
+        assert_eq!(probe_local_redis(&url).await, LocalRedis::NeedsAuth);
+    }
+
+    #[tokio::test]
+    async fn probe_reports_nothing_listening() {
+        // A bound-then-dropped listener guarantees a refused port.
+        let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let url = format!("redis://127.0.0.1:{port}");
+        assert_eq!(probe_local_redis(&url).await, LocalRedis::NotFound);
+    }
 
     #[test]
     fn parse_container_info_reads_running_and_port() {
