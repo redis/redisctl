@@ -264,9 +264,16 @@ fn rerun_with_a_url_reports_env_unchanged() {
 }
 
 #[test]
-fn a_different_existing_redis_url_is_kept_not_clobbered() {
+fn an_explicit_url_replaces_a_different_existing_redis_url() {
+    // Explicit beats implicit: --url is consent to supersede what .env carries.
+    // The note names the old value masked; only the implicit no-flags default
+    // keeps an existing REDIS_URL.
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join(".env"), "REDIS_URL=\"redis://keep-me:1\"\n").unwrap();
+    std::fs::write(
+        dir.path().join(".env"),
+        "REDIS_URL=\"redis://default:0ldpw@keep-me:1\"\n",
+    )
+    .unwrap();
     redisctl()
         .current_dir(dir.path())
         .args([
@@ -277,15 +284,40 @@ fn a_different_existing_redis_url_is_kept_not_clobbered() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("kept"))
-        .stdout(predicate::str::contains("left untouched"))
+        .stdout(predicate::str::contains(
+            "REDIS_URL replaced (was redis://default:****@keep-me:1)",
+        ))
         // A short token here once collided with a random tempdir name printed in the
         // Project line; whole-output negative assertions need collision-proof tokens.
-        .stdout(predicate::str::contains("s3cret").not());
+        .stdout(predicate::str::contains("s3cret").not())
+        .stdout(predicate::str::contains("0ldpw").not());
+    // Dry run: nothing written yet.
     assert_eq!(
         std::fs::read_to_string(dir.path().join(".env")).unwrap(),
-        "REDIS_URL=\"redis://keep-me:1\"\n"
+        "REDIS_URL=\"redis://default:0ldpw@keep-me:1\"\n"
     );
+}
+
+#[test]
+fn a_placeholder_env_completes_with_action_required() {
+    // The wizard's "skip for now" leaves this placeholder; --complete must treat
+    // it as still pending instead of validating garbage, and exit 0.
+    let dir = tempfile::tempdir().unwrap();
+    let repo = skills_fixture();
+    std::fs::write(
+        dir.path().join(".env"),
+        "REDIS_URL=\"<paste-your-redis-url>\"\n",
+    )
+    .unwrap();
+    redisctl()
+        .current_dir(dir.path())
+        .env("REDISCTL_INIT_SKILLS_REPO", repo.path())
+        .args(["init", "--complete", "--no-install-cli"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("waiting for REDIS_URL"))
+        .stdout(predicate::str::contains("Action required"))
+        .stdout(predicate::str::contains("redisctl init --complete"));
 }
 
 #[test]
