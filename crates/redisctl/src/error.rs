@@ -187,6 +187,12 @@ impl From<redisctl_init::InitError> for RedisCtlError {
                     message: err.to_string(),
                 }
             }
+            // Input-state problems: the invocation was fine, .env is not.
+            InitError::ProductIncomplete { .. } | InitError::NothingToComplete => {
+                RedisCtlError::InvalidInput {
+                    message: err.to_string(),
+                }
+            }
             InitError::DockerUnavailable
             | InitError::DockerCommand { .. }
             | InitError::NoFreePort => RedisCtlError::Other(err.to_string()),

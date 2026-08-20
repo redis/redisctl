@@ -76,53 +76,97 @@ fn control_plane_entry(cloud: &crate::CloudFacts) -> serde_json::Value {
     serde_json::json!({ "command": "redisctl-mcp", "args": args })
 }
 
+/// What decides which servers get registered; probing stays with the caller so
+/// this module never runs anything.
+pub(crate) struct McpInputs<'a> {
+    /// A database exists, so the data-plane `redis` server applies.
+    pub(crate) database: bool,
+    pub(crate) cloud: Option<(&'a crate::CloudFacts, bool)>,
+    /// `Some(npx_available)` when a Context Retriever product is wired.
+    pub(crate) context_retriever: Option<bool>,
+}
+
+/// The remote bridge: single quotes keep `${...}` unexpanded by sh, so mcp-remote
+/// resolves the agent key from its own environment and the config stays
+/// credential-free.
+fn context_retriever_entry() -> serde_json::Value {
+    serde_json::json!({
+        "command": "sh",
+        "args": ["-c", "set -a; . ./.env 2>/dev/null; set +a; exec npx -y mcp-remote \"$CONTEXT_RETRIEVER_MCP_URL\" --header 'X-API-Key:${CONTEXT_RETRIEVER_AGENT_KEY}'"]
+    })
+}
+
 pub(crate) fn plan_mcp(
     cwd: &Path,
     agents: &[Agent],
-    cloud: Option<(&crate::CloudFacts, bool)>,
+    inputs: McpInputs<'_>,
 ) -> Result<McpPlan, InitError> {
-    let runner = if has_bin("uvx") {
-        Runner::Uvx
-    } else if docker_ok() {
-        Runner::Docker
-    } else {
-        Runner::UvxMissing
-    };
-    let mut servers = vec![(
-        "redis",
-        server_entry(&runner),
-        "redis: reads REDIS_URL from .env at launch".to_string(),
-    )];
-    if let Some((cloud, true)) = cloud {
+    let mut servers = Vec::new();
+    let mut uvx_missing = false;
+    if inputs.database {
+        let runner = if has_bin("uvx") {
+            Runner::Uvx
+        } else if docker_ok() {
+            Runner::Docker
+        } else {
+            Runner::UvxMissing
+        };
+        uvx_missing = matches!(runner, Runner::UvxMissing);
+        servers.push((
+            "redis",
+            server_entry(&runner),
+            "redis: reads REDIS_URL from .env at launch".to_string(),
+        ));
+    }
+    if let Some((cloud, true)) = inputs.cloud {
         servers.push((
             "redisctl",
             control_plane_entry(cloud),
             "redisctl: control plane, credentials stay in the redisctl profile".to_string(),
         ));
     }
-    let mut actions = Vec::new();
-    for agent in agents {
-        actions.push(match agent {
-            Agent::Claude => upsert(cwd, ".mcp.json", "mcpServers", &servers, false)?,
-            Agent::Cursor => upsert(cwd, ".cursor/mcp.json", "mcpServers", &servers, false)?,
-            Agent::Vscode => upsert(cwd, ".vscode/mcp.json", "servers", &servers, true)?,
-            Agent::Codex => McpAction::Report(Change::new(
-                "mcp (codex)",
-                Status::Skipped,
-                "codex MCP config is user-scoped (~/.codex/config.toml); the skills cover it",
-            )),
-        });
+    if inputs.context_retriever == Some(true) {
+        servers.push((
+            "context-retriever",
+            context_retriever_entry(),
+            "context-retriever: reads the MCP URL and scoped agent key from .env at launch"
+                .to_string(),
+        ));
     }
-    if let Some((_, false)) = cloud {
+    let mut actions = Vec::new();
+    // No servers means no config files at all - a products-only run without an MCP
+    // product writes nothing here.
+    if !servers.is_empty() {
+        for agent in agents {
+            actions.push(match agent {
+                Agent::Claude => upsert(cwd, ".mcp.json", "mcpServers", &servers, false)?,
+                Agent::Cursor => upsert(cwd, ".cursor/mcp.json", "mcpServers", &servers, false)?,
+                Agent::Vscode => upsert(cwd, ".vscode/mcp.json", "servers", &servers, true)?,
+                Agent::Codex => McpAction::Report(Change::new(
+                    "mcp (codex)",
+                    Status::Skipped,
+                    "codex MCP config is user-scoped (~/.codex/config.toml); the skills cover it",
+                )),
+            });
+        }
+    }
+    if let Some((_, false)) = inputs.cloud {
         actions.push(McpAction::Report(Change::new(
             "mcp (redisctl)",
             Status::Skipped,
             "redisctl-mcp not on PATH (cargo install redisctl-mcp) - the CLI still works",
         )));
     }
+    if inputs.context_retriever == Some(false) {
+        actions.push(McpAction::Report(Change::new(
+            "mcp (context-retriever)",
+            Status::Skipped,
+            "npx is required for the remote MCP bridge; ctxctl remains available",
+        )));
+    }
     Ok(McpPlan {
         actions,
-        uvx_missing: matches!(runner, Runner::UvxMissing),
+        uvx_missing,
     })
 }
 
@@ -216,7 +260,16 @@ mod tests {
     use super::*;
 
     fn plan_for(dir: &Path, agents: &[Agent]) -> McpPlan {
-        plan_mcp(dir, agents, None).unwrap()
+        plan_mcp(
+            dir,
+            agents,
+            McpInputs {
+                database: true,
+                cloud: None,
+                context_retriever: None,
+            },
+        )
+        .unwrap()
     }
 
     fn cloud_facts(profile: Option<&str>) -> crate::CloudFacts {
@@ -237,7 +290,11 @@ mod tests {
         let plan = plan_mcp(
             dir.path(),
             &[Agent::Claude, Agent::Vscode],
-            Some((&cloud, true)),
+            McpInputs {
+                database: true,
+                cloud: Some((&cloud, true)),
+                context_retriever: None,
+            },
         )
         .unwrap();
         apply_all(dir.path(), &plan);
@@ -266,7 +323,16 @@ mod tests {
     fn cloud_without_the_mcp_binary_reports_a_skip() {
         let dir = tempfile::tempdir().unwrap();
         let cloud = cloud_facts(None);
-        let plan = plan_mcp(dir.path(), &[Agent::Claude], Some((&cloud, false))).unwrap();
+        let plan = plan_mcp(
+            dir.path(),
+            &[Agent::Claude],
+            McpInputs {
+                database: true,
+                cloud: Some((&cloud, false)),
+                context_retriever: None,
+            },
+        )
+        .unwrap();
         let last = plan.actions.last().unwrap().preview();
         assert_eq!(last.status, Status::Skipped);
         assert_eq!(last.subject, "mcp (redisctl)");

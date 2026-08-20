@@ -17,7 +17,9 @@ pub(crate) struct SkillFacts<'a> {
     pub(crate) runtime: Runtime,
     pub(crate) name: Option<&'a str>,
     pub(crate) cloud: Option<&'a crate::CloudFacts>,
+    pub(crate) database: bool,
     pub(crate) container: Option<&'a str>,
+    pub(crate) products: &'a [crate::WiredProduct],
     pub(crate) skills: &'a [String],
     pub(crate) client_installed: bool,
     pub(crate) cli_available: bool,
@@ -148,23 +150,214 @@ fn skills_hint(facts: &SkillFacts) -> String {
     }
 }
 
-pub(crate) fn content(facts: &SkillFacts) -> String {
+fn pending_line(env_key: &str) -> String {
     format!(
-        r#"---
-name: redis-project-setup
-description: >-
-  Use for any Redis-related work in this project - caching, sessions, queues,
-  streams, search, or anything touching a data store or Redis service: where
-  credentials live, which services this project uses (the database), client
-  setup, conventions, and available tooling.
----
+        "- Setup is waiting for `{env_key}`. Replace each placeholder in `.env` yourself, then run `redisctl init --complete`. Never paste a key into agent chat.\n"
+    )
+}
 
-# Redis setup in this project
+const AGENT_MEMORY_SDK_HINT: &str = r#"- The SDK reads `__KEY__` from the environment itself, so no secret appears in code (`__PKG__` is installed):
+  ```ts
+  import { AgentMemory } from '__PKG__';
+  const memory = new AgentMemory({ serverURL: process.env.__URL__, storeId: process.env.__ID__ });
+  ```
+"#;
 
-Set up by `redisctl init`; re-running it is safe and never clobbers existing content.
-Every credential lives in `.env` and nowhere else - not in code, not in a committed
-file.
+const AGENT_MEMORY_REST_HINT: &str = r#"- There is no __RUNTIME__ SDK for the managed service yet, so call the REST API with a bearer token - two endpoints cover session memory:
+  ```
+  POST ${__URL__}/v1/stores/${__ID__}/session-memory/events   # append a turn
+  GET  ${__URL__}/v1/stores/${__ID__}/session-memory/<sessionId>   # read it back
+  Authorization: Bearer ${__KEY__}
+  ```
+  Body for an append: `{ sessionId, actorId, role: "USER" | "ASSISTANT", content: [{ text }], createdAt }`.
+  Do not reach for PyPI's `agent-memory-client`: that is the client for the self-hosted Agent Memory Server, a different API.
+"#;
 
+const AGENT_MEMORY_BULLETS: &str = r#"- Session memory is the running conversation: append each turn with `addSessionEvent` (`sessionId` per conversation, `actorId` per end user, `role` USER or ASSISTANT), then read it back with `getSessionMemory` to rebuild context on the next turn.
+- Long-term memory is the durable set of facts: write with the long-term-memory endpoints and retrieve by semantic search, not by key. Use it for what should outlive one conversation; use session memory for the turn-by-turn transcript.
+- `sessionId` and `actorId` accept only letters, digits and hyphens: a dot or an underscore is rejected with 400 `invalid-data`, so slugify anything derived from a username or an email.
+- Prefer one session per conversation and a stable `actorId` per user - that pairing is what makes memory compound across sessions rather than pile up.
+"#;
+
+const LANGCACHE_TS_HINT: &str = r#"  ```ts
+  import { LangCache } from '__PKG__';
+  const cache = new LangCache({ serverURL: process.env.__URL__, cacheId: process.env.__ID__, apiKey: process.env.__KEY__ });
+  ```
+"#;
+
+const LANGCACHE_PY_HINT: &str = r#"  ```python
+  from langcache import LangCache
+  cache = LangCache(server_url=os.environ["__URL__"], cache_id=os.environ["__ID__"], api_key=os.environ["__KEY__"])
+  ```
+"#;
+
+const LANGCACHE_BULLETS: &str = r#"- The pattern is search-before-generate: search the cache with the user's prompt, return the hit if one comes back above the similarity threshold, and only call the model on a miss - then store that answer.
+- It matches on meaning, not on string equality, so tune `similarityThreshold` rather than normalizing prompts by hand. Attach `attributes` (tenant, model, language) when entries must not be shared across those boundaries.
+- Cache model answers, never anything user-specific unless the attributes scope it to that user.
+"#;
+
+const CONTEXT_RETRIEVER_BULLETS: &str = r#"- A project MCP server named `context-retriever` bridges the remote tools into supported coding agents. Once the placeholder is filled, restart the agent so it reloads the server and discovers the generated tools.
+- The agent key defines the surface and access tags. Treat the tool schemas as the business-data contract: inspect them before calling, prefer the narrow generated lookup or search tool, and do not bypass the surface with direct database queries.
+"#;
+
+const CONTEXT_RETRIEVER_PY_HINT: &str = r#"- The official client is installed for application-level MCP calls:
+  ```python
+  import os
+  from context_surfaces import UnifiedClient
+  context = UnifiedClient(mcp_url=os.environ["__URL__"])
+  tools = await context.list_tools(os.environ["__KEY__"])
+  ```
+"#;
+
+const CONTEXT_RETRIEVER_ANY_HINT: &str = r#"- Application code can use any MCP client with `__URL__` and an `X-API-Key` header read from `__KEY__`; the coding-agent path needs no product SDK.
+"#;
+
+const CONTEXT_RETRIEVER_CTL: &str = r#"- Provisioning stays outside the project secret boundary. Install the official CLI with `pipx install redis-context-retriever`, then use `ctxctl auth login`, `ctxctl surface ...`, and `ctxctl agent create ...`. Its login prompts hide credentials and its credential manager stores admin keys outside this repository.
+"#;
+
+fn fill_env(template: &str, product: &crate::WiredProduct, pkg: &str, runtime: Runtime) -> String {
+    template
+        .replace("__PKG__", pkg)
+        .replace("__URL__", product.spec.env_url)
+        .replace("__ID__", product.spec.env_id.unwrap_or_default())
+        .replace("__KEY__", product.spec.env_key)
+        .replace("__RUNTIME__", runtime.as_str())
+}
+
+fn product_section(facts: &SkillFacts, product: &crate::WiredProduct) -> String {
+    let pkg = crate::install::product_package(product.spec.key, facts.runtime);
+    let pending = product.pending_env().map(pending_line).unwrap_or_default();
+    match product.spec.key {
+        crate::ProductKey::AgentMemory => {
+            let hint = match pkg {
+                Some(pkg) => fill_env(AGENT_MEMORY_SDK_HINT, product, pkg, facts.runtime),
+                None => fill_env(AGENT_MEMORY_REST_HINT, product, "", facts.runtime),
+            };
+            format!(
+                "\n## Agent memory (Redis Iris)\n- Store `{id}` at `{url}`. Read all three from the environment - `{env_url}`, `{env_id}`, `{env_key}` are in `.env`; never hardcode the key or the store id.\n{pending}{hint}{AGENT_MEMORY_BULLETS}",
+                id = product.id.as_deref().unwrap_or_default(),
+                url = product.url(),
+                env_url = product.spec.env_url,
+                env_id = product.spec.env_id.unwrap_or_default(),
+                env_key = product.spec.env_key,
+            )
+        }
+        crate::ProductKey::LangCache => {
+            let hint = if facts.runtime == Runtime::Python {
+                fill_env(LANGCACHE_PY_HINT, product, "", facts.runtime)
+            } else {
+                fill_env(
+                    LANGCACHE_TS_HINT,
+                    product,
+                    pkg.unwrap_or("@redis-ai/langcache"),
+                    facts.runtime,
+                )
+            };
+            format!(
+                "\n## Semantic cache (LangCache)\n- Cache `{id}` at `{url}`. Read all three from the environment - `{env_url}`, `{env_id}`, `{env_key}` are in `.env`; never hardcode the key or the cache id.\n{pending}{hint}{LANGCACHE_BULLETS}",
+                id = product.id.as_deref().unwrap_or_default(),
+                url = product.url(),
+                env_url = product.spec.env_url,
+                env_id = product.spec.env_id.unwrap_or_default(),
+                env_key = product.spec.env_key,
+            )
+        }
+        crate::ProductKey::ContextRetriever => {
+            let client = if pkg.is_some() {
+                fill_env(CONTEXT_RETRIEVER_PY_HINT, product, "", facts.runtime)
+            } else {
+                fill_env(CONTEXT_RETRIEVER_ANY_HINT, product, "", facts.runtime)
+            };
+            format!(
+                "\n## Governed business data (Context Retriever)\n- The scoped agent tools are exposed at `{url}`. Read `{env_url}` and `{env_key}` from `.env`; never use a Context Retriever admin key in application code or agent tooling.\n{pending}{CONTEXT_RETRIEVER_BULLETS}{client}{CONTEXT_RETRIEVER_CTL}",
+                url = product.url(),
+                env_url = product.spec.env_url,
+                env_key = product.spec.env_key,
+            )
+        }
+    }
+}
+
+fn product_sections(facts: &SkillFacts) -> String {
+    facts
+        .products
+        .iter()
+        .map(|product| product_section(facts, product))
+        .collect()
+}
+
+/// Appended on every run, product or not: the recommendation policy is the point of
+/// `--iris`, and configured projects still need the "do not add more" guardrail.
+fn iris_recommendations(facts: &SkillFacts) -> String {
+    let intro = if facts.products.is_empty() {
+        "No Iris product is configured.".to_string()
+    } else {
+        format!(
+            "Configured Iris products: {}.",
+            facts
+                .products
+                .iter()
+                .map(|p| p.label())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    let additional = if facts.products.is_empty() {
+        "a product"
+    } else {
+        "another product"
+    };
+    format!(
+        r#"
+## Redis Iris product recommendations
+- {intro} Do not add {additional}, dependency, credential, example, or MCP server unless the user asks for it or explicitly approves your recommendation.
+- Recommend only from evidence in the project or the user's goal:
+  - Agent Memory when an agent must retain conversation state, user preferences, or learned
+    facts across turns or restarts.
+  - LangCache when semantically repeated model or RAG requests create avoidable latency or
+    model cost. Measure or identify that repeat path first.
+  - Context Retriever when an agent needs governed, structured access to live business
+    entities and relationships instead of direct database access or hand-built tool sprawl.
+  - Redis Data Integration when the source of truth is relational and its Redis
+    representation must stay current through snapshot plus change-data capture. This is
+    infrastructure onboarding, not an application dependency.
+- Before recommending a product, state the observed signal, expected benefit, and smallest
+  additional project footprint. If the user approves, run only that product's focused
+  `redisctl init` flow and preserve the human-only secret boundary.
+- Focused flows after approval:
+  - Agent Memory: `redisctl init --agent-memory <endpoint> --store <store-id>`.
+  - LangCache: `redisctl init --langcache <endpoint> --cache <cache-id>`.
+  - Context Retriever: `redisctl init --context-retriever <mcp-endpoint>` with only a scoped
+    agent key placed privately in `.env`.
+  - Redis Data Integration: guide its source, snapshot, and change-data-capture setup outside
+    the application. Onboard only the resulting Redis target database with `--url` or
+    `--cloud` when the application needs it directly.
+- Never suggest installing the full Iris portfolio by default. Reassess after each focused
+  integration because the next product may not be necessary.
+"#
+    )
+}
+
+/// What the frontmatter description names as this project's Redis surface.
+fn subjects(facts: &SkillFacts) -> String {
+    let mut subjects: Vec<String> = Vec::new();
+    if facts.database {
+        subjects.push("the database".to_string());
+    }
+    subjects.extend(facts.products.iter().map(|p| p.label().to_lowercase()));
+    if subjects.is_empty() {
+        "Iris product discovery".to_string()
+    } else {
+        subjects.join(", ")
+    }
+}
+
+fn database_sections(facts: &SkillFacts) -> String {
+    if !facts.database {
+        return String::new();
+    }
+    format!(
+        r#"
 ## Connection
 - The connection string is `REDIS_URL` in `.env` (placeholder in `.env.example`). Read it from the environment; never hardcode it and never commit `.env`.
 {client}
@@ -187,6 +380,30 @@ file.
         control_plane = control_plane_hint(facts),
         skills = skills_hint(facts),
         handy = handy_commands(facts),
+    )
+}
+
+pub(crate) fn content(facts: &SkillFacts) -> String {
+    format!(
+        r#"---
+name: redis-project-setup
+description: >-
+  Use for any Redis-related work in this project - caching, sessions, queues,
+  streams, search, or anything touching a data store or Redis service: where
+  credentials live, which services this project uses ({subjects}), client
+  setup, conventions, and available tooling.
+---
+
+# Redis setup in this project
+
+Set up by `redisctl init`; re-running it is safe and never clobbers existing content.
+Every credential lives in `.env` and nowhere else - not in code, not in a committed
+file.
+{database}{products}{iris}"#,
+        subjects = subjects(facts),
+        database = database_sections(facts),
+        products = product_sections(facts),
+        iris = iris_recommendations(facts),
     )
 }
 
@@ -310,7 +527,9 @@ mod tests {
             runtime: Runtime::Node,
             name: None,
             cloud: None,
+            database: true,
             container,
+            products: &[],
             skills,
             client_installed: true,
             cli_available: true,

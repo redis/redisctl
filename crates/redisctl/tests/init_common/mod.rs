@@ -1,4 +1,7 @@
 //! Helpers shared by the hermetic init suites (not a test target itself).
+//! Each suite compiles this module separately, so a helper one suite skips is
+//! not dead code.
+#![allow(dead_code)]
 
 use tempfile::TempDir;
 
