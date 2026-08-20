@@ -130,6 +130,28 @@ preserving the `[cloud_auth.<profile>]` login endpoints so you can log in again.
     The minted API key still exists in the Redis Cloud console until you revoke it there —
     server-side revocation on logout is a planned follow-up.
 
+## Who can use `cloud auth login`
+
+`cloud auth login` signs in through Redis Cloud's identity provider, so it works for accounts whose
+sign-in the identity provider can perform:
+
+| Account type | Supported | Notes |
+|---|---|---|
+| Google | ✅ | both flows |
+| GitHub | ✅ | both flows |
+| SSO / SAML | ❌ | the CLI cannot select an organization's own identity provider — use an API key |
+| Email + password | after linking | link the account to Google or GitHub once, in the console |
+| Marketplace (Heroku, GCP, Azure) | ❌ | sign-in is initiated by the marketplace; there is no Redis-side credential |
+
+For anything unsupported — and for **unattended automation** of any kind — create an API key in the
+[Redis Cloud console](https://app.redislabs.com) and configure it directly:
+
+```bash
+redisctl profile set prod --deployment cloud --api-key "$KEY" --api-secret "$SECRET"
+```
+
+or set `REDIS_CLOUD_API_KEY` / `REDIS_CLOUD_API_SECRET` in the environment.
+
 ## Configuration
 
 `cloud auth login` reads its OIDC endpoints from a `[cloud_auth.<profile>]` section, falling back
