@@ -104,16 +104,47 @@ impl CloudAuthenticator {
     }
 
     /// Given tokens from a flow, run the SM exchange and mint a CAPI key named `key_name`.
+    ///
+    /// Propagates [`AuthError::MfaRequired`] if the account is MFA-protected; use
+    /// [`CloudAuthenticator::complete_login_with_mfa`] to supply codes interactively.
     pub async fn complete_login(
         &self,
         tokens: &TokenSet,
         key_name: &str,
         flow: LoginFlow,
     ) -> Result<MintedCredentials, AuthError> {
+        self.complete_login_with_mfa(tokens, key_name, flow, |_, _| Ok(None))
+            .await
+    }
+
+    /// As [`CloudAuthenticator::complete_login`], but `mfa_prompt` is consulted when SM challenges
+    /// the login for multi-factor authentication.
+    ///
+    /// `mfa_prompt(factors, attempt)` is called with the factor types SM offered (possibly empty)
+    /// and a 1-based attempt number. Return `Some(code)` to submit a TOTP code, or `None` to give
+    /// up — which surfaces the original [`AuthError::MfaRequired`] to the caller, the right
+    /// behaviour when there is no terminal to prompt on.
+    pub async fn complete_login_with_mfa<F>(
+        &self,
+        tokens: &TokenSet,
+        key_name: &str,
+        flow: LoginFlow,
+        mut mfa_prompt: F,
+    ) -> Result<MintedCredentials, AuthError>
+    where
+        F: FnMut(&[String], u32) -> Result<Option<String>, AuthError>,
+    {
         let mut sm =
             SmApiClient::with_http_client(self.sm_api_url.clone(), self.http.clone(), flow);
         // Google/GitHub logins must not send Sm-Id-Token (SSO-only); see sm_api docs.
-        sm.login(&tokens.access_token, None).await?;
+        match sm.login(&tokens.access_token, None).await {
+            Ok(()) => {}
+            Err(AuthError::MfaRequired { factors }) => {
+                self.satisfy_mfa(&mut sm, tokens, &factors, &mut mfa_prompt)
+                    .await?
+            }
+            Err(e) => return Err(e),
+        }
         let user = sm.fetch_current_user().await?;
         sm.ensure_capi_enabled().await?;
         // Pick the account matching the logged-in user's current_account_id. /accounts list
@@ -146,7 +177,39 @@ impl CloudAuthenticator {
             redisctl_key_count,
         })
     }
+
+    /// Drive the MFA retry loop against an already-challenged client.
+    async fn satisfy_mfa<F>(
+        &self,
+        sm: &mut SmApiClient,
+        tokens: &TokenSet,
+        factors: &[String],
+        mfa_prompt: &mut F,
+    ) -> Result<(), AuthError>
+    where
+        F: FnMut(&[String], u32) -> Result<Option<String>, AuthError>,
+    {
+        for attempt in 1..=MFA_MAX_ATTEMPTS {
+            let Some(code) = mfa_prompt(factors, attempt)? else {
+                // Caller can't prompt (no TTY / agent): report the challenge, not a failure.
+                return Err(AuthError::MfaRequired {
+                    factors: factors.to_vec(),
+                });
+            };
+            match sm.complete_mfa(&tokens.access_token, None, &code).await {
+                Ok(()) => return Ok(()),
+                // Wrong code: loop and let the caller re-prompt, unless attempts are spent.
+                Err(AuthError::MfaInvalidCode) if attempt < MFA_MAX_ATTEMPTS => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Err(AuthError::MfaInvalidCode)
+    }
 }
+
+/// How many TOTP codes a single login will accept before giving up. SM enforces its own quota
+/// (`mfa-quota-exceeded`); this only bounds our prompting.
+const MFA_MAX_ATTEMPTS: u32 = 3;
 
 /// Choose the account matching `current_account_id` (the logged-in user context); fall back to
 /// the first account only when the id is absent or not present in the list.

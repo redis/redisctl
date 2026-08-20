@@ -69,6 +69,19 @@ pub enum AuthError {
         "this Redis Cloud account must be linked to social sign-in once before the CLI can use it"
     )]
     MigrationRequired,
+
+    /// SM challenged the login for multi-factor authentication (`user-mfa-required`). Carries the
+    /// factor types SM offered, when it reports them.
+    #[error("this account requires multi-factor authentication")]
+    MfaRequired { factors: Vec<String> },
+
+    /// The submitted MFA code was rejected (`mfa-invalid-code`).
+    #[error("the multi-factor code was not accepted")]
+    MfaInvalidCode,
+
+    /// Too many MFA attempts (`mfa-quota-exceeded`); retrying now will not help.
+    #[error("too many multi-factor attempts; wait before trying again")]
+    MfaQuotaExceeded,
 }
 
 /// A `BasicClient` with the Okta authorize / token / device-authorization endpoints set. The

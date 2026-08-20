@@ -18,6 +18,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use redisctl_core::AuthError;
 use redisctl_core::auth::{CloudAuthenticator, LoginFlow, MintedCredentials};
 use redisctl_core::{CloudAuthConfig, Config, CredentialStore, DeviceAuthorization, TokenSet};
 use serde::{Deserialize, Serialize};
@@ -206,7 +207,7 @@ async fn initiate_device_login(
 async fn run_device_flow_blocking(auth: &CloudAuthenticator) -> CliResult<TokenSet> {
     let client = auth.device();
     let authz = client.start(&SCOPES).await.map_err(auth_err)?;
-    eprintln!("{}(waiting for approval…)", device_instructions(&authz));
+    eprintln!("{}(waiting for approval…)", device_instructions(&authz),);
 
     // oauth2 owns the poll loop (honoring the server's interval / slow_down); `None` polls until
     // the device code's own lifetime expires, which surfaces as `device_code_expired` via auth_err.
@@ -225,6 +226,44 @@ async fn run_loopback_flow(auth: &CloudAuthenticator) -> CliResult<TokenSet> {
     Ok(tokens)
 }
 
+/// Ask the user for a TOTP code when SM challenges the login for MFA.
+///
+/// Returns `Ok(None)` when there is no terminal to prompt on — an agent can't produce a
+/// time-based code, so the caller reports `mfa_required` and the human re-runs interactively.
+/// The `^\d{6}$` check is local on purpose: a malformed value would otherwise consume one of the
+/// user's server-side attempts.
+fn prompt_mfa_code(factors: &[String], attempt: u32) -> Result<Option<String>, AuthError> {
+    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+        return Ok(None);
+    }
+    if attempt == 1 {
+        let detail = if factors.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", factors.join(", "))
+        };
+        eprintln!("\nThis account requires multi-factor authentication{detail}.");
+    } else {
+        eprintln!(
+            "That code wasn't accepted. {} attempt(s) left.",
+            4 - attempt
+        );
+    }
+    loop {
+        eprint!("Enter the 6-digit code from your authenticator app: ");
+        let _ = std::io::Write::flush(&mut std::io::stderr());
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).unwrap_or(0) == 0 {
+            return Ok(None); // EOF / Ctrl-D
+        }
+        let code = line.trim();
+        if code.len() == 6 && code.chars().all(|c| c.is_ascii_digit()) {
+            return Ok(Some(code.to_string()));
+        }
+        eprintln!("Codes are exactly 6 digits.");
+    }
+}
+
 /// Run the SM exchange, persist the profile + secrets, and return the minted credentials.
 async fn complete_and_persist(
     conn_mgr: &ConnectionManager,
@@ -236,7 +275,7 @@ async fn complete_and_persist(
     flow: LoginFlow,
 ) -> CliResult<MintedCredentials> {
     let creds = authenticator
-        .complete_login(tokens, &default_key_name(), flow)
+        .complete_login_with_mfa(tokens, &default_key_name(), flow, prompt_mfa_code)
         .await
         .map_err(auth_err)?;
 

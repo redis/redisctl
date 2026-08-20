@@ -85,6 +85,31 @@ impl StructuredError {
              GitHub once, in the Redis Cloud console, before the CLI can use it",
         )
     }
+    pub fn mfa_required() -> Self {
+        Self::new(
+            "mfa_required",
+            2,
+            false,
+            "this account requires multi-factor authentication; run `redisctl cloud auth login` \
+             in an interactive terminal to enter the code",
+        )
+    }
+    pub fn mfa_invalid_code() -> Self {
+        Self::new(
+            "mfa_invalid_code",
+            2,
+            false,
+            "the multi-factor code was not accepted; start login again",
+        )
+    }
+    pub fn mfa_quota_exceeded() -> Self {
+        Self::new(
+            "mfa_quota_exceeded",
+            4,
+            false,
+            "too many multi-factor attempts; wait before trying again",
+        )
+    }
     pub fn invalid_name(message: impl Into<String>) -> Self {
         Self::new("invalid_name", 2, false, message)
     }
@@ -152,6 +177,11 @@ impl From<AuthError> for StructuredError {
             // A one-time console step, not a failure to retry — give it its own code so an agent
             // can tell the user what to do rather than surfacing a generic exchange error.
             AuthError::MigrationRequired => Self::migration_required(),
+            // Reached only when there was no terminal to prompt on: the caller must re-run
+            // interactively, so this is a precondition to fix rather than a retryable failure.
+            AuthError::MfaRequired { .. } => Self::mfa_required(),
+            AuthError::MfaInvalidCode => Self::mfa_invalid_code(),
+            AuthError::MfaQuotaExceeded => Self::mfa_quota_exceeded(),
         }
     }
 }
@@ -211,6 +241,19 @@ mod tests {
         assert_eq!(mig.code, "migration_required");
         assert_eq!(mig.exit_code, 2);
         assert!(!mig.retryable);
+        // MFA reaches the structured path only when we couldn't prompt, so it's a precondition
+        // (exit 2) the caller fixes by re-running interactively — never "retryable".
+        let mfa = StructuredError::from(AuthError::MfaRequired { factors: vec![] });
+        assert_eq!(mfa.code, "mfa_required");
+        assert_eq!(mfa.exit_code, 2);
+        assert!(!mfa.retryable);
+        assert_eq!(
+            StructuredError::from(AuthError::MfaInvalidCode).code,
+            "mfa_invalid_code"
+        );
+        let quota = StructuredError::from(AuthError::MfaQuotaExceeded);
+        assert_eq!(quota.code, "mfa_quota_exceeded");
+        assert_eq!(quota.exit_code, 4);
     }
 
     #[test]

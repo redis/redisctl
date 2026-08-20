@@ -39,6 +39,8 @@ keeps today's `0` / `1` exit behavior.
 | `auth_denied` | 2 | no | The sign-in request was denied. |
 | `keyring_unavailable` | 2 | no | No OS keyring available to store the key. Re-run with `--allow-plaintext`. |
 | `migration_required` | 2 | no | The account signs in with a password and must be linked to Google/GitHub once in the Redis Cloud console. |
+| `mfa_required` | 2 | no | The account requires multi-factor authentication and there was no terminal to prompt on. Re-run `cloud auth login` interactively. |
+| `mfa_invalid_code` | 2 | no | The multi-factor code was rejected. Start login again. |
 | `invalid_name` | 2 | no | The database name doesn't match the naming rules (see below). |
 | `name_conflict` | 2 | no | The name maps to a conflicting existing resource. |
 | `device_code_expired` | 3 | yes | The device login code expired before approval. Start login again. |
@@ -47,6 +49,7 @@ keeps today's `0` / `1` exit behavior.
 | `rate_limited` | 3 | yes | Too many requests. Back off and retry. |
 | `free_db_exists` | 4 | no | The account already has a free database. |
 | `quota_exceeded` | 4 | no | An account quota or limit was reached. |
+| `mfa_quota_exceeded` | 4 | no | Too many multi-factor attempts. Wait before trying again. |
 | `sm_exchange_failed` | 1 | no | The sign-in / key-mint exchange failed unexpectedly. |
 | `unknown` | 1 | no | Unclassified failure; inspect `message`. |
 
