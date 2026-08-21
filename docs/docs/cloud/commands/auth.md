@@ -116,6 +116,29 @@ You get three attempts per login.
     `redisctl cloud auth login` in a terminal. For unattended automation, use a
     pre-created API key instead of `auth login`.
 
+### Which account the key belongs to
+
+A Redis Cloud API key is scoped to **one account**. If you belong to several, `cloud auth login`
+mints the key for your **current** account — the one selected in the
+[Redis Cloud console](https://app.redislabs.com) — and says which it used:
+
+```
+✓ Signed in as user@example.com. Credentials saved to profile 'cloud'.
+  note: the key is for Acme (#316941) — 1 of 3 accounts you belong to. To use another, switch
+  accounts in the Redis Cloud console and run login again.
+```
+
+To target a different one, switch to it in the console (top-right user menu) and run
+`cloud auth login` again. Keeping one profile per account works well:
+
+```bash
+redisctl cloud auth login --profile acme      # with Acme selected in the console
+redisctl cloud auth login --profile contoso   # after switching to Contoso
+```
+
+`-o json` reports `account_id`, `account_name` and `account_count`, so a script can confirm it got
+the account it expected before doing anything.
+
 ### Password accounts need linking once
 
 Redis Cloud accounts that sign in with an email and password cannot be used by the CLI directly —

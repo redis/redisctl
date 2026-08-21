@@ -105,6 +105,8 @@ fn apply_cloud_login_writes_profile_default_and_endpoints() {
         refresh_token: Some("RT".to_string()),
         capi_key_name: "redisctl-demo".to_string(),
         redisctl_key_count: 1,
+        account_name: None,
+        account_count: 1,
     };
 
     config

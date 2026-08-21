@@ -314,6 +314,21 @@ fn emit_signed_in(
         creds.email.as_deref().unwrap_or("your account"),
         profile_name
     );
+    // The key is scoped to one account — whichever is *current* for this user, decided server-side
+    // from the session. Say which was used when there was more than one it could have been.
+    if creds.account_count > 1 {
+        let which = match (&creds.account_name, &creds.account_id) {
+            (Some(name), Some(id)) => format!("{name} (#{id})"),
+            (None, Some(id)) => format!("account #{id}"),
+            (Some(name), None) => name.clone(),
+            (None, None) => "your current account".to_string(),
+        };
+        eprintln!(
+            "  note: the key is for {which} — 1 of {} accounts you belong to. To use another, \
+             switch accounts in the Redis Cloud console and run login again.",
+            creds.account_count
+        );
+    }
     // D5: each login mints a new redisctl-* CAPI key. Warn (don't delete) when they pile up.
     let key_count = creds.redisctl_key_count;
     if key_count > STALE_KEY_WARN_THRESHOLD {
@@ -328,6 +343,8 @@ fn emit_signed_in(
             "authenticated": true,
             "profile": profile_name,
             "account_id": creds.account_id,
+            "account_name": creds.account_name,
+            "account_count": creds.account_count,
             "email": creds.email,
             "redisctl_key_count": key_count,
         }),

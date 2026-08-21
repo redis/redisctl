@@ -32,6 +32,12 @@ pub struct MintedCredentials {
     /// How many `redisctl-*` CAPI keys the account has after this mint (best-effort; 0 if the
     /// listing failed). The CLI warns when this grows, since each login mints a new key (D5).
     pub redisctl_key_count: usize,
+    /// Name of the account the key was minted for, when the API reports one.
+    pub account_name: Option<String>,
+    /// How many accounts the signed-in user belongs to. The key is scoped to one of them — the
+    /// user's *current* account, chosen server-side from the session — so the CLI can say which
+    /// one it used when there was more than one it could have been.
+    pub account_count: usize,
 }
 
 impl std::fmt::Debug for MintedCredentials {
@@ -48,6 +54,8 @@ impl std::fmt::Debug for MintedCredentials {
             )
             .field("capi_key_name", &self.capi_key_name)
             .field("redisctl_key_count", &self.redisctl_key_count)
+            .field("account_name", &self.account_name)
+            .field("account_count", &self.account_count)
             .finish()
     }
 }
@@ -150,11 +158,11 @@ impl CloudAuthenticator {
         // Pick the account matching the logged-in user's current_account_id. /accounts list
         // order isn't guaranteed, so taking the first entry could mint a key for the wrong
         // account in a multi-account org. Fall back to the first only when it's absent/unknown.
-        let account = select_account(
-            sm.fetch_accounts().await?,
-            user.current_account_id.as_deref(),
-        )
-        .ok_or_else(|| AuthError::Protocol("no accounts associated with this login".into()))?;
+        let accounts = sm.fetch_accounts().await?;
+        let account_count = accounts.len();
+        let account = select_account(accounts, user.current_account_id.as_deref())
+            .ok_or_else(|| AuthError::Protocol("no accounts associated with this login".into()))?;
+        let account_name = account.name.clone();
         let api_key = account.api_access_key.ok_or_else(|| {
             AuthError::Protocol("account has no CAPI access key after enabling CAPI".into())
         })?;
@@ -175,6 +183,8 @@ impl CloudAuthenticator {
             refresh_token: tokens.refresh_token.clone(),
             capi_key_name: minted.name,
             redisctl_key_count,
+            account_name,
+            account_count,
         })
     }
 
@@ -271,6 +281,8 @@ mod tests {
             refresh_token: Some("RT-should-not-appear".to_string()),
             capi_key_name: "redisctl-cli-1".to_string(),
             redisctl_key_count: 3,
+            account_name: Some("Acme".to_string()),
+            account_count: 2,
         };
         let dbg = format!("{creds:?}");
         assert!(dbg.contains("<redacted>"));
