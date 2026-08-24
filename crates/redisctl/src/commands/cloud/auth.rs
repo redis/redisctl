@@ -381,10 +381,20 @@ async fn status(
     let authenticated = conn_mgr
         .resolve_cloud_connection(Some(&profile_name))
         .is_ok();
-    print_formatted_output(
-        serde_json::json!({ "authenticated": authenticated, "profile": profile_name }),
-        output,
-    )
+    // A pending device login is invisible in a bare `authenticated: false`, which reads as "login
+    // failed" when in fact it is half-finished. Say so, and name the command that completes it.
+    let pending = !authenticated && load_pending(conn_mgr, &profile_name).is_some();
+    if pending {
+        eprintln!(
+            "A device login for profile '{profile_name}' is waiting for approval.\nComplete it \
+             with: redisctl cloud auth status --wait"
+        );
+    }
+    let mut report = serde_json::json!({ "authenticated": authenticated, "profile": profile_name });
+    if pending {
+        report["status"] = "authorization_pending".into();
+    }
+    print_formatted_output(report, output)
 }
 
 /// Poll a pending device authorization to completion. `Ok(Some)` = approved (tokens),
