@@ -18,6 +18,10 @@ use url::Url;
 
 use super::{AuthError, default_http_client, endpoint, truncate};
 
+/// SM error code on the CAPI-enable call when the signed-in user is not the account owner. Note
+/// this endpoint nests its errors as a JSON-encoded string, so it is matched on the body rather
+/// than through the `/login` error envelope.
+const INSUFFICIENT_PERMISSION_CODE: &str = "insufficient-permission";
 /// SM error code returned when a password-only account must be linked to social sign-in before it
 /// can authenticate this way. The consent step is console-only.
 const SOCIAL_MIGRATION_REQUIRED_CODE: &str = "user-agreement-for-social-login-migration-missing";
@@ -385,6 +389,11 @@ impl SmApiClient {
         if body.contains("account_api_key_already_exists") {
             return Ok(());
         }
+        // Only an account owner can turn on programmatic access. Nothing the CLI can do, but the
+        // user can ask the owner to enable it once — after which the call above is a no-op.
+        if body.contains(INSUFFICIENT_PERMISSION_CODE) {
+            return Err(AuthError::NotAccountOwner);
+        }
         Err(AuthError::Protocol(format!(
             "enabling CAPI failed ({status}): {}",
             truncate(&body)
@@ -603,6 +612,25 @@ mod tests {
             .await;
         let c = logged_in(&server).await;
         assert!(c.ensure_capi_enabled().await.is_ok());
+    }
+
+    /// Only an owner may enable programmatic access. SM says so precisely, but nests the code in a
+    /// JSON-encoded string, so it is matched on the body — this pins that it is still classified.
+    #[tokio::test]
+    async fn ensure_capi_enabled_reports_owner_only_distinctly() {
+        let server = MockServer::start().await;
+        let c = logged_in(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/accounts/cloud-api/cloudApiAccessKey"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+                "errors": "[{\"field_name\":null,\"error_code\":\"insufficient-permission\",\"params\":[{\"key\":\"allowed-roles\",\"value\":[\"owner\"]}]}]"
+            })))
+            .mount(&server)
+            .await;
+        assert!(matches!(
+            c.ensure_capi_enabled().await,
+            Err(AuthError::NotAccountOwner)
+        ));
     }
 
     #[tokio::test]

@@ -70,6 +70,14 @@ pub enum AuthError {
     )]
     MigrationRequired,
 
+    /// Programmatic (CAPI) access is off for the account and only its owner may enable it, so the
+    /// login cannot mint a key. A one-time console step for the owner, not a retryable failure.
+    #[error(
+        "enabling programmatic access requires the Redis Cloud account owner; ask them to enable \
+         it once in the console, then run login again"
+    )]
+    NotAccountOwner,
+
     /// SM challenged the login for multi-factor authentication (`user-mfa-required`). Carries the
     /// factor types SM offered, when it reports them.
     #[error("this account requires multi-factor authentication")]

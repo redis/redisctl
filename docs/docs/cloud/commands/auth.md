@@ -208,7 +208,7 @@ of parsing prose:
 | Exit code | Meaning | Example codes |
 |-----------|---------|---------------|
 | `1` | unknown / backend failure | `sm_exchange_failed` |
-| `2` | usage / precondition to fix | `not_authenticated`, `auth_denied`, `keyring_unavailable`, `migration_required`, `mfa_required` |
+| `2` | usage / precondition to fix | `not_authenticated`, `auth_denied`, `keyring_unavailable`, `migration_required`, `insufficient_permission`, `mfa_required` |
 | `3` | transient / retryable | `device_code_expired`, `transient_api_error`, `rate_limited` |
 
 Human (non-JSON) mode prints the usual diagnostic to stderr and keeps today's `0`/`1` exit behavior.

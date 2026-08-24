@@ -76,6 +76,15 @@ impl StructuredError {
     pub fn keyring_unavailable(message: impl Into<String>) -> Self {
         Self::new("keyring_unavailable", 2, false, message)
     }
+    pub fn insufficient_permission() -> Self {
+        Self::new(
+            "insufficient_permission",
+            2,
+            false,
+            "enabling programmatic access requires the Redis Cloud account owner; ask them to \
+             enable it once in the console, then run login again",
+        )
+    }
     pub fn migration_required() -> Self {
         Self::new(
             "migration_required",
@@ -176,6 +185,7 @@ impl From<AuthError> for StructuredError {
             }
             // A one-time console step, not a failure to retry — give it its own code so an agent
             // can tell the user what to do rather than surfacing a generic exchange error.
+            AuthError::NotAccountOwner => Self::insufficient_permission(),
             AuthError::MigrationRequired => Self::migration_required(),
             // Reached only when there was no terminal to prompt on: the caller must re-run
             // interactively, so this is a precondition to fix rather than a retryable failure.
@@ -237,6 +247,9 @@ mod tests {
             StructuredError::from(AuthError::Protocol("boom".into())).code,
             "sm_exchange_failed"
         );
+        let owner = StructuredError::from(AuthError::NotAccountOwner);
+        assert_eq!(owner.code, "insufficient_permission");
+        assert_eq!(owner.exit_code, 2);
         let mig = StructuredError::from(AuthError::MigrationRequired);
         assert_eq!(mig.code, "migration_required");
         assert_eq!(mig.exit_code, 2);
