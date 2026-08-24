@@ -78,6 +78,11 @@ pub enum AuthError {
     )]
     NotAccountOwner,
 
+    /// `--account` named an account the signed-in user does not belong to. Carries what they do
+    /// have, so the caller can list the options instead of just refusing.
+    #[error("account {requested} is not one of yours; you belong to: {available}")]
+    UnknownAccount { requested: u64, available: String },
+
     /// SM challenged the login for multi-factor authentication (`user-mfa-required`). Carries the
     /// factor types SM offered, when it reports them.
     #[error("this account requires multi-factor authentication")]

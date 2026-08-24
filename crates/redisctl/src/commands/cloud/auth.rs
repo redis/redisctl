@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use redisctl_core::AuthError;
-use redisctl_core::auth::{CloudAuthenticator, LoginFlow, MintedCredentials};
+use redisctl_core::auth::{CloudAuthenticator, LoginAccount, LoginFlow, MintedCredentials};
 use redisctl_core::{CloudAuthConfig, Config, CredentialStore, DeviceAuthorization, TokenSet};
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -52,7 +52,19 @@ pub async fn handle_auth_command(
             device,
             allow_plaintext,
             wait,
-        } => login(conn_mgr, profile, *device, *allow_plaintext, *wait, output).await,
+            account,
+        } => {
+            login(
+                conn_mgr,
+                profile,
+                *device,
+                *allow_plaintext,
+                *wait,
+                *account,
+                output,
+            )
+            .await
+        }
         CloudAuthCommands::Status { wait, timeout } => {
             status(conn_mgr, profile, *wait, *timeout, output).await
         }
@@ -103,6 +115,7 @@ async fn login(
     device: bool,
     allow_plaintext: bool,
     wait: bool,
+    account: Option<u64>,
     output: OutputFormat,
 ) -> CliResult<()> {
     let (profile_name, authenticator, auth_cfg) = prepare(conn_mgr, profile)?;
@@ -119,6 +132,7 @@ async fn login(
             &profile_name,
             &authenticator,
             allow_plaintext,
+            account,
             output,
         )
         .await;
@@ -134,12 +148,15 @@ async fn login(
         &profile_name,
         &authenticator,
         &tokens,
-        allow_plaintext,
         auth_cfg,
-        if use_device {
-            LoginFlow::Device
-        } else {
-            LoginFlow::Loopback
+        LoginRun {
+            flow: if use_device {
+                LoginFlow::Device
+            } else {
+                LoginFlow::Loopback
+            },
+            account,
+            allow_plaintext,
         },
     )
     .await?;
@@ -170,6 +187,7 @@ async fn initiate_device_login(
     profile_name: &str,
     authenticator: &CloudAuthenticator,
     allow_plaintext: bool,
+    account: Option<u64>,
     output: OutputFormat,
 ) -> CliResult<()> {
     let authz = authenticator
@@ -183,6 +201,7 @@ async fn initiate_device_login(
             profile: profile_name.to_string(),
             device_authorization: authz.clone(),
             allow_plaintext,
+            account,
         },
     )?;
 
@@ -264,22 +283,36 @@ fn prompt_mfa_code(factors: &[String], attempt: u32) -> Result<Option<String>, A
     }
 }
 
+/// What one login run decided, threaded to the persist step together rather than as loose
+/// positional arguments.
+struct LoginRun {
+    flow: LoginFlow,
+    /// `--account`: mint for this account rather than the session's current one.
+    account: Option<u64>,
+    allow_plaintext: bool,
+}
+
 /// Run the SM exchange, persist the profile + secrets, and return the minted credentials.
 async fn complete_and_persist(
     conn_mgr: &ConnectionManager,
     profile_name: &str,
     authenticator: &CloudAuthenticator,
     tokens: &TokenSet,
-    allow_plaintext: bool,
     auth_cfg: CloudAuthConfig,
-    flow: LoginFlow,
+    run: LoginRun,
 ) -> CliResult<MintedCredentials> {
     let creds = authenticator
-        .complete_login_with_mfa(tokens, &default_key_name(), flow, prompt_mfa_code)
+        .complete_login_with_mfa(
+            tokens,
+            &default_key_name(),
+            run.flow,
+            run.account,
+            prompt_mfa_code,
+        )
         .await
         .map_err(auth_err)?;
 
-    let store = if allow_plaintext {
+    let store = if run.allow_plaintext {
         CredentialStore::plaintext()
     } else {
         CredentialStore::new()
@@ -290,7 +323,7 @@ async fn complete_and_persist(
     config
         .apply_cloud_login(&store, profile_name, &creds, Some(auth_cfg))
         .map_err(|e| {
-            if allow_plaintext {
+            if run.allow_plaintext {
                 RedisCtlError::from(e)
             } else {
                 RedisCtlError::Structured(Box::new(StructuredError::keyring_unavailable(format!(
@@ -316,7 +349,7 @@ fn emit_signed_in(
     );
     // The key is scoped to one account — whichever is *current* for this user, decided server-side
     // from the session. Say which was used when there was more than one it could have been.
-    if creds.account_count > 1 {
+    if creds.account_count() > 1 {
         let which = match (&creds.account_name, &creds.account_id) {
             (Some(name), Some(id)) => format!("{name} (#{id})"),
             (None, Some(id)) => format!("account #{id}"),
@@ -324,9 +357,22 @@ fn emit_signed_in(
             (None, None) => "your current account".to_string(),
         };
         eprintln!(
-            "  note: the key is for {which} — 1 of {} accounts you belong to. To use another, \
-             switch accounts in the Redis Cloud console and run login again.",
-            creds.account_count
+            "  note: the key is for {which} — 1 of {} accounts you belong to:",
+            creds.account_count()
+        );
+        eprintln!(
+            "    {}",
+            creds
+                .accounts
+                .iter()
+                .map(LoginAccount::label)
+                .collect::<Vec<_>>()
+                .join(" · ")
+        );
+        // Name the profile actually in use: a `<name>` placeholder invites inventing a new one,
+        // and an unconfigured profile silently resolves to the *production* endpoints.
+        eprintln!(
+            "  To use another: redisctl --profile {profile_name} cloud auth login --account <id>"
         );
     }
     // D5: each login mints a new redisctl-* CAPI key. Warn (don't delete) when they pile up.
@@ -344,7 +390,11 @@ fn emit_signed_in(
             "profile": profile_name,
             "account_id": creds.account_id,
             "account_name": creds.account_name,
-            "account_count": creds.account_count,
+            "account_count": creds.account_count(),
+            "accounts": creds.accounts.iter().map(|a| serde_json::json!({
+                "id": a.id,
+                "name": a.name,
+            })).collect::<Vec<_>>(),
             "email": creds.email,
             "redisctl_key_count": key_count,
         }),
@@ -372,9 +422,14 @@ async fn status(
                     &profile_name,
                     &authenticator,
                     &tokens,
-                    pending.allow_plaintext,
                     auth_cfg,
-                    LoginFlow::Device,
+                    LoginRun {
+                        flow: LoginFlow::Device,
+                        // Whatever the initiating `login --device --account` asked for; `None`
+                        // (no flag) keeps the session's current account.
+                        account: pending.account,
+                        allow_plaintext: pending.allow_plaintext,
+                    },
                 )
                 .await?;
                 clear_pending(conn_mgr, &profile_name);
@@ -473,6 +528,10 @@ fn logout(
 #[derive(Serialize, Deserialize)]
 struct PendingAuth {
     profile: String,
+    /// `--account` from the initiating `login`, so the account it asked for survives into the
+    /// `status --wait` that actually mints. Defaulted for pending files written before this field.
+    #[serde(default)]
+    account: Option<u64>,
     /// The full device authorization (serde-serializable), so a later `status --wait` — possibly
     /// a different process — can resume polling via `DeviceFlowClient::poll`.
     device_authorization: DeviceAuthorization,

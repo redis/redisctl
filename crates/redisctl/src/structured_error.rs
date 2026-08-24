@@ -85,6 +85,9 @@ impl StructuredError {
              enable it once in the console, then run login again",
         )
     }
+    pub fn unknown_account(message: impl Into<String>) -> Self {
+        Self::new("unknown_account", 2, false, message)
+    }
     pub fn migration_required() -> Self {
         Self::new(
             "migration_required",
@@ -186,6 +189,13 @@ impl From<AuthError> for StructuredError {
             // A one-time console step, not a failure to retry — give it its own code so an agent
             // can tell the user what to do rather than surfacing a generic exchange error.
             AuthError::NotAccountOwner => Self::insufficient_permission(),
+            // --account named an account the user is not in; the message lists the real ones.
+            AuthError::UnknownAccount {
+                requested,
+                ref available,
+            } => Self::unknown_account(format!(
+                "account {requested} is not one of yours; you belong to: {available}"
+            )),
             AuthError::MigrationRequired => Self::migration_required(),
             // Reached only when there was no terminal to prompt on: the caller must re-run
             // interactively, so this is a precondition to fix rather than a retryable failure.

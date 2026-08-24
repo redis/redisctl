@@ -9,7 +9,7 @@
 
 use url::Url;
 
-use super::sm_api::{LoginFlow, SmAccount, SmApiClient};
+use super::sm_api::{LoginFlow, SmAccount, SmApiClient, SmUser};
 use super::{AuthError, DeviceFlowClient, LoopbackFlowClient, TokenSet, default_http_client};
 
 /// Result of a completed login: a Redis Cloud CAPI key pair plus context, ready to persist.
@@ -34,10 +34,35 @@ pub struct MintedCredentials {
     pub redisctl_key_count: usize,
     /// Name of the account the key was minted for, when the API reports one.
     pub account_name: Option<String>,
-    /// How many accounts the signed-in user belongs to. The key is scoped to one of them — the
-    /// user's *current* account, chosen server-side from the session — so the CLI can say which
-    /// one it used when there was more than one it could have been.
-    pub account_count: usize,
+    /// Every account the signed-in user belongs to. The key is scoped to exactly one of them —
+    /// the session's *current* account — so the CLI can both name the one it used and list the
+    /// alternatives, which are otherwise only discoverable in the console.
+    pub accounts: Vec<LoginAccount>,
+}
+
+/// One account the signed-in user belongs to, as reported during login.
+#[derive(Debug, Clone)]
+pub struct LoginAccount {
+    pub id: u64,
+    pub name: Option<String>,
+}
+
+impl LoginAccount {
+    /// `Acme (#316941)`, or `#316941` when the API reports no name. Used both in the CLI listing
+    /// and in the `UnknownAccount` message, so the two always read the same.
+    pub fn label(&self) -> String {
+        match &self.name {
+            Some(n) => format!("{} (#{})", n, self.id),
+            None => format!("#{}", self.id),
+        }
+    }
+}
+
+impl MintedCredentials {
+    /// How many accounts the signed-in user belongs to.
+    pub fn account_count(&self) -> usize {
+        self.accounts.len()
+    }
 }
 
 impl std::fmt::Debug for MintedCredentials {
@@ -55,7 +80,7 @@ impl std::fmt::Debug for MintedCredentials {
             .field("capi_key_name", &self.capi_key_name)
             .field("redisctl_key_count", &self.redisctl_key_count)
             .field("account_name", &self.account_name)
-            .field("account_count", &self.account_count)
+            .field("accounts", &self.accounts)
             .finish()
     }
 }
@@ -120,8 +145,9 @@ impl CloudAuthenticator {
         tokens: &TokenSet,
         key_name: &str,
         flow: LoginFlow,
+        account: Option<u64>,
     ) -> Result<MintedCredentials, AuthError> {
-        self.complete_login_with_mfa(tokens, key_name, flow, |_, _| Ok(None))
+        self.complete_login_with_mfa(tokens, key_name, flow, account, |_, _| Ok(None))
             .await
     }
 
@@ -137,6 +163,7 @@ impl CloudAuthenticator {
         tokens: &TokenSet,
         key_name: &str,
         flow: LoginFlow,
+        account: Option<u64>,
         mut mfa_prompt: F,
     ) -> Result<MintedCredentials, AuthError>
     where
@@ -153,13 +180,22 @@ impl CloudAuthenticator {
             }
             Err(e) => return Err(e),
         }
-        let user = sm.fetch_current_user().await?;
+        let mut user = sm.fetch_current_user().await?;
+        if let Some(want) = account {
+            user = self.switch_account(&sm, user, want).await?;
+        }
         sm.ensure_capi_enabled().await?;
         // Pick the account matching the logged-in user's current_account_id. /accounts list
         // order isn't guaranteed, so taking the first entry could mint a key for the wrong
         // account in a multi-account org. Fall back to the first only when it's absent/unknown.
         let accounts = sm.fetch_accounts().await?;
-        let account_count = accounts.len();
+        let all_accounts: Vec<LoginAccount> = accounts
+            .iter()
+            .map(|a| LoginAccount {
+                id: a.id,
+                name: a.name.clone(),
+            })
+            .collect();
         let account = select_account(accounts, user.current_account_id.as_deref())
             .ok_or_else(|| AuthError::Protocol("no accounts associated with this login".into()))?;
         let account_name = account.name.clone();
@@ -184,8 +220,50 @@ impl CloudAuthenticator {
             capi_key_name: minted.name,
             redisctl_key_count,
             account_name,
-            account_count,
+            accounts: all_accounts,
         })
+    }
+
+    /// Point the session at `want` before anything account-scoped happens.
+    ///
+    /// Verifies the switch actually took rather than assuming it: every later call resolves the
+    /// account from the session, so a silent no-op here would mint the key on the wrong account.
+    async fn switch_account(
+        &self,
+        sm: &SmApiClient,
+        user: SmUser,
+        want: u64,
+    ) -> Result<SmUser, AuthError> {
+        if user.current_account_id.as_deref() == Some(want.to_string().as_str()) {
+            return Ok(user);
+        }
+        let accounts = sm.fetch_accounts().await?;
+        if !accounts.iter().any(|a| a.id == want) {
+            return Err(AuthError::UnknownAccount {
+                requested: want,
+                available: accounts
+                    .iter()
+                    .map(|a| {
+                        LoginAccount {
+                            id: a.id,
+                            name: a.name.clone(),
+                        }
+                        .label()
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            });
+        }
+        sm.set_current_account(want).await?;
+        let user = sm.fetch_current_user().await?;
+        // Trust the server's answer, not the request's success.
+        if user.current_account_id.as_deref() != Some(want.to_string().as_str()) {
+            return Err(AuthError::Protocol(format!(
+                "asked Redis Cloud to switch to account {want} but the session still reports {}",
+                user.current_account_id.as_deref().unwrap_or("none")
+            )));
+        }
+        Ok(user)
     }
 
     /// Drive the MFA retry loop against an already-challenged client.
@@ -244,6 +322,28 @@ mod tests {
         .unwrap()
     }
 
+    /// The label is shared by the CLI's account listing and the `UnknownAccount` message, so
+    /// both read identically — including when the API reports no name.
+    #[test]
+    fn login_account_labels_named_and_unnamed_accounts() {
+        assert_eq!(
+            LoginAccount {
+                id: 316941,
+                name: Some("Acme".to_string()),
+            }
+            .label(),
+            "Acme (#316941)"
+        );
+        assert_eq!(
+            LoginAccount {
+                id: 316941,
+                name: None,
+            }
+            .label(),
+            "#316941"
+        );
+    }
+
     #[test]
     fn select_account_prefers_current_account_id() {
         let accts = vec![account(111), account(222), account(333)];
@@ -282,7 +382,16 @@ mod tests {
             capi_key_name: "redisctl-cli-1".to_string(),
             redisctl_key_count: 3,
             account_name: Some("Acme".to_string()),
-            account_count: 2,
+            accounts: vec![
+                LoginAccount {
+                    id: 316941,
+                    name: Some("Acme".to_string()),
+                },
+                LoginAccount {
+                    id: 481022,
+                    name: Some("Contoso".to_string()),
+                },
+            ],
         };
         let dbg = format!("{creds:?}");
         assert!(dbg.contains("<redacted>"));
@@ -361,7 +470,7 @@ mod tests {
         };
 
         let creds = auth
-            .complete_login(&tokens, "redisctl-test", LoginFlow::Loopback)
+            .complete_login(&tokens, "redisctl-test", LoginFlow::Loopback, None)
             .await
             .unwrap();
         assert_eq!(creds.api_key, "ACCT-KEY");
@@ -396,7 +505,8 @@ mod tests {
             expires_in: 3600,
         };
         assert!(matches!(
-            auth.complete_login(&tokens, "k", LoginFlow::Loopback).await,
+            auth.complete_login(&tokens, "k", LoginFlow::Loopback, None)
+                .await,
             Err(AuthError::Protocol(_))
         ));
     }

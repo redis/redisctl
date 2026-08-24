@@ -40,6 +40,7 @@ redisctl cloud auth login --allow-plaintext
 | `--device` | Use the device-authorization flow (print a URL + code) instead of opening a browser. |
 | `--wait` | With `--device`: block until approved (one-shot). Without it, `login --device` returns immediately and `auth status --wait` completes the login. |
 | `--allow-plaintext` | Store credentials in the config file when no OS keyring is available. |
+| `--account <ID>` | Mint the key for this Redis Cloud account id. Defaults to your current account. Carried through the device flow, so `login --device --account <id>` still applies when `auth status --wait` completes it. |
 
 ### Browser (loopback) flow
 
@@ -120,24 +121,42 @@ You get three attempts per login.
 
 A Redis Cloud API key is scoped to **one account**. If you belong to several, `cloud auth login`
 mints the key for your **current** account — the one selected in the
-[Redis Cloud console](https://app.redislabs.com) — and says which it used:
+[Redis Cloud console](https://app.redislabs.com) — then names it and lists the alternatives, so you
+never have to look an account id up:
 
 ```
 ✓ Signed in as user@example.com. Credentials saved to profile 'cloud'.
-  note: the key is for Acme (#316941) — 1 of 3 accounts you belong to. To use another, switch
-  accounts in the Redis Cloud console and run login again.
+  note: the key is for Acme (#316941) — 1 of 3 accounts you belong to:
+    Acme (#316941) · Contoso (#481022) · Initech (#502113)
+  To use another: redisctl cloud auth login --profile <name> --account <id>
 ```
 
-To target a different one, switch to it in the console (top-right user menu) and run
-`cloud auth login` again. Keeping one profile per account works well:
+Use `--account` to pick one explicitly, without touching the console:
 
 ```bash
-redisctl cloud auth login --profile acme      # with Acme selected in the console
-redisctl cloud auth login --profile contoso   # after switching to Contoso
+redisctl cloud auth login --account 316941
 ```
 
-`-o json` reports `account_id`, `account_name` and `account_count`, so a script can confirm it got
-the account it expected before doing anything.
+Naming an account you don't belong to exits `2` with `unknown_account`, and the message lists the
+ones you do have. Keeping one profile per account works well:
+
+```bash
+redisctl --profile acme    cloud auth login --account 316941
+redisctl --profile contoso cloud auth login --account 481022
+```
+
+Re-using one profile is fine too, but each login replaces that profile's key, so only the most
+recent account stays usable.
+
+!!! note "A new profile name defaults to production"
+    A profile with no `[cloud_auth.<name>]` section falls back to the built-in **production**
+    endpoints. That is what you want for production, but when logging in to a non-production
+    environment, add the section first — otherwise the new profile silently signs you in to
+    production instead.
+
+`-o json` reports `account_id`, `account_name` and `account_count`, plus an `accounts` array of
+every `{id, name}` — so a script can confirm it got the account it expected, or pick one without a
+trip to the console.
 
 ### Password accounts need linking once
 

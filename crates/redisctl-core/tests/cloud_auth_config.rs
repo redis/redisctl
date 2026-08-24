@@ -106,7 +106,10 @@ fn apply_cloud_login_writes_profile_default_and_endpoints() {
         capi_key_name: "redisctl-demo".to_string(),
         redisctl_key_count: 1,
         account_name: None,
-        account_count: 1,
+        accounts: vec![redisctl_core::auth::LoginAccount {
+            id: 112117,
+            name: None,
+        }],
     };
 
     config

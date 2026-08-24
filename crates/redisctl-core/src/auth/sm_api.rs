@@ -464,6 +464,30 @@ impl SmApiClient {
             .ok_or_else(|| AuthError::Protocol("not logged in to the SM API".into()))
     }
 
+    /// Rebind the session to `account_id` (`POST /accounts/setcurrent/{id}`).
+    ///
+    /// Every CAPI call resolves the account from the session — `createApiSecretKey` uses the
+    /// session's `userAccountId` — so this must happen *before* enabling access or minting, or the
+    /// key lands on the previous account. Annotated `LEGACY_ONLY` server-side, which the JSESSIONID
+    /// established by [`SmApiClient::login`] satisfies.
+    pub async fn set_current_account(&self, account_id: u64) -> Result<(), AuthError> {
+        let resp = self
+            .authed_post_json(
+                &format!("accounts/setcurrent/{account_id}"),
+                serde_json::json!({}),
+            )
+            .await?;
+        if resp.status().is_success() {
+            return Ok(());
+        }
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        Err(AuthError::Protocol(format!(
+            "could not switch to account {account_id} ({status}): {}",
+            truncate(&body)
+        )))
+    }
+
     async fn authed_get(&self, path: &str) -> Result<reqwest::Response, AuthError> {
         let s = self.session()?;
         Ok(self
@@ -738,6 +762,36 @@ mod tests {
     /// SM records `utm_*` on the signup path, so a first-ever login through redisctl must carry
     /// attribution or the tool is invisible in signup analytics. The mock matches only if all three
     /// fields are present, and `utm_campaign` distinguishes the two flows.
+    /// Every account-scoped call resolves the account from the session, so a switch has to be a
+    /// real request to the documented path — the mock only matches that exact URL.
+    #[tokio::test]
+    async fn set_current_account_posts_to_setcurrent() {
+        let server = MockServer::start().await;
+        let c = logged_in(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/accounts/setcurrent/424242"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        c.set_current_account(424242).await.unwrap();
+    }
+
+    /// A refused switch must fail loudly; silently continuing would mint on the previous account.
+    #[tokio::test]
+    async fn set_current_account_surfaces_a_refusal() {
+        let server = MockServer::start().await;
+        let c = logged_in(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/accounts/setcurrent/1"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("nope"))
+            .mount(&server)
+            .await;
+        assert!(matches!(
+            c.set_current_account(1).await,
+            Err(AuthError::Protocol(_))
+        ));
+    }
+
     #[tokio::test]
     async fn login_sends_utm_attribution_per_flow() {
         for (flow, campaign) in [

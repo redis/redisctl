@@ -1680,6 +1680,10 @@ pub enum CloudAuthCommands {
         /// agent-friendly split. The browser (loopback) flow always blocks.
         #[arg(long)]
         wait: bool,
+        /// Mint the key for this Redis Cloud account id. Defaults to your current account; only
+        /// matters if you belong to more than one.
+        #[arg(long, value_name = "ID")]
+        account: Option<u64>,
     },
     /// Report whether the profile is authenticated to Redis Cloud.
     Status {

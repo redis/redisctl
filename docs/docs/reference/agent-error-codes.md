@@ -40,6 +40,7 @@ keeps today's `0` / `1` exit behavior.
 | `keyring_unavailable` | 2 | no | No OS keyring available to store the key. Re-run with `--allow-plaintext`. |
 | `migration_required` | 2 | no | The account signs in with a password and must be linked to Google/GitHub once in the Redis Cloud console. |
 | `insufficient_permission` | 2 | no | Enabling programmatic access requires the Redis Cloud account owner. Ask them to enable it once in the console. |
+| `unknown_account` | 2 | no | `--account` named an account you don't belong to. The message lists the accounts you do have. |
 | `mfa_required` | 2 | no | The account requires multi-factor authentication and there was no terminal to prompt on. Re-run `cloud auth login` interactively. |
 | `mfa_invalid_code` | 2 | no | The multi-factor code was rejected. Start login again. |
 | `invalid_name` | 2 | no | The database name doesn't match the naming rules (see below). |
