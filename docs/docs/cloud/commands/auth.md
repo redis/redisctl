@@ -61,6 +61,7 @@ sequenceDiagram
     CLI->>OK: exchange code and PKCE verifier for tokens
     OK-->>CLI: access and refresh tokens
     CLI->>SM: sign in, enable programmatic access, mint an API key
+    Note over CLI,SM: if the account has MFA: prompt for a 6-digit code, retry on the same session
     SM-->>CLI: account API key and user secret
     CLI->>CFG: write cloud profile (secrets to keyring)
     CLI-->>U: signed in - profile ready
@@ -90,10 +91,30 @@ sequenceDiagram
     CLI->>OK: poll for tokens until approved
     OK-->>CLI: access and refresh tokens
     CLI->>SM: sign in, enable access, mint an API key
+    Note over CLI,SM: if the account has MFA: needs a terminal, else exits mfa_required
     SM-->>CLI: account API key and user secret
     CLI->>CFG: write cloud profile (secrets to keyring)
     CLI-->>A: authenticated and account_id
 ```
+
+### Multi-factor authentication
+
+If your Redis Cloud account has MFA enabled, `login` prompts for the 6-digit code from your
+authenticator app after you sign in, then completes normally:
+
+```
+✓ Authenticated as user@example.com
+This account requires multi-factor authentication.
+Enter the 6-digit code from your authenticator app:
+```
+
+You get three attempts per login.
+
+!!! note "MFA needs an interactive terminal"
+    A time-based code can't be supplied ahead of time, so MFA can't be completed
+    non-interactively. Piped or agent-driven runs exit `2` with `mfa_required`; re-run
+    `redisctl cloud auth login` in a terminal. For unattended automation, use a
+    pre-created API key instead of `auth login`.
 
 ### Password accounts need linking once
 
@@ -187,7 +208,7 @@ of parsing prose:
 | Exit code | Meaning | Example codes |
 |-----------|---------|---------------|
 | `1` | unknown / backend failure | `sm_exchange_failed` |
-| `2` | usage / precondition to fix | `not_authenticated`, `auth_denied`, `keyring_unavailable`, `migration_required` |
+| `2` | usage / precondition to fix | `not_authenticated`, `auth_denied`, `keyring_unavailable`, `migration_required`, `mfa_required` |
 | `3` | transient / retryable | `device_code_expired`, `transient_api_error`, `rate_limited` |
 
 Human (non-JSON) mode prints the usual diagnostic to stderr and keeps today's `0`/`1` exit behavior.
