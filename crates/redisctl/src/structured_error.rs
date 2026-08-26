@@ -79,14 +79,8 @@ impl StructuredError {
     pub fn insufficient_permission(message: impl Into<String>) -> Self {
         Self::new("insufficient_permission", 2, false, message)
     }
-    pub fn capi_disabled() -> Self {
-        Self::new(
-            "capi_disabled",
-            2,
-            false,
-            "programmatic access is not enabled for this Redis Cloud account; ask Redis support \
-             to enable API access for the account, then run login again",
-        )
+    pub fn capi_disabled(message: impl Into<String>) -> Self {
+        Self::new("capi_disabled", 2, false, message)
     }
     pub fn unknown_account(message: impl Into<String>) -> Self {
         Self::new("unknown_account", 2, false, message)
@@ -191,22 +185,12 @@ impl From<AuthError> for StructuredError {
             }
             // A one-time console step, not a failure to retry — give it its own code so an agent
             // can tell the user what to do rather than surfacing a generic exchange error.
-            // Relay the role SM itself named, so the message stays right if that set widens.
-            AuthError::NotAccountOwner { ref allowed_roles } => {
-                Self::insufficient_permission(format!(
-                    "enabling programmatic access requires the {allowed_roles} role on this Redis \
-                     Cloud account; ask someone with it to enable it once in the console, then \
-                     run login again"
-                ))
-            }
-            AuthError::CapiDisabled => Self::capi_disabled(),
+            // Reuse the `AuthError` Display text rather than restating it: a second copy here
+            // would leave the agent-facing message stale whenever the attribute is edited.
+            AuthError::NotAccountOwner { .. } => Self::insufficient_permission(err.to_string()),
+            AuthError::CapiDisabled => Self::capi_disabled(err.to_string()),
             // --account named an account the user is not in; the message lists the real ones.
-            AuthError::UnknownAccount {
-                requested,
-                ref available,
-            } => Self::unknown_account(format!(
-                "account {requested} is not one of yours; you belong to: {available}"
-            )),
+            AuthError::UnknownAccount { .. } => Self::unknown_account(err.to_string()),
             AuthError::MigrationRequired => Self::migration_required(),
             // Reached only when there was no terminal to prompt on: the caller must re-run
             // interactively, so this is a precondition to fix rather than a retryable failure.
@@ -232,6 +216,13 @@ mod tests {
             StructuredError::not_authenticated("x"),
             StructuredError::sm_exchange_failed("x"),
             StructuredError::keyring_unavailable("x"),
+            StructuredError::insufficient_permission("x"),
+            StructuredError::capi_disabled("x"),
+            StructuredError::unknown_account("x"),
+            StructuredError::migration_required(),
+            StructuredError::mfa_required(),
+            StructuredError::mfa_invalid_code(),
+            StructuredError::mfa_quota_exceeded(),
             StructuredError::invalid_name("x"),
             StructuredError::name_conflict("x"),
             StructuredError::free_db_exists("x"),
@@ -268,13 +259,22 @@ mod tests {
             StructuredError::from(AuthError::Protocol("boom".into())).code,
             "sm_exchange_failed"
         );
+        // `allowed_roles` arrives already phrased (see sm_api::allowed_roles).
         let owner = StructuredError::from(AuthError::NotAccountOwner {
-            allowed_roles: "owner".to_string(),
+            allowed_roles: "the owner role".to_string(),
         });
         assert_eq!(owner.code, "insufficient_permission");
         assert_eq!(owner.exit_code, 2);
         // The role SM reported reaches the user rather than a hardcoded one.
-        assert!(owner.message.contains("owner role"));
+        assert!(owner.message.contains("the owner role"));
+        // The relayed text is the AuthError's own, so the two paths cannot drift.
+        assert_eq!(
+            owner.message,
+            AuthError::NotAccountOwner {
+                allowed_roles: "the owner role".to_string()
+            }
+            .to_string()
+        );
         let disabled = StructuredError::from(AuthError::CapiDisabled);
         assert_eq!(disabled.code, "capi_disabled");
         assert_eq!(disabled.exit_code, 2);

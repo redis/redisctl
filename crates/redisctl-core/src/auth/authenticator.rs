@@ -199,6 +199,10 @@ impl CloudAuthenticator {
         let account = select_account(accounts, user.current_account_id.as_deref())
             .ok_or_else(|| AuthError::Protocol("no accounts associated with this login".into()))?;
         let account_name = account.name.clone();
+        // Report the account the key belongs to, taken from the same entry the key came from.
+        // `user.current_account_id` can disagree with it (absent or unknown → `select_account`
+        // falls back), and printing that id would name an account the key is not for.
+        let account_id = Some(account.id.to_string());
         let api_key = account.api_access_key.ok_or_else(|| {
             AuthError::Protocol("account has no CAPI access key after enabling CAPI".into())
         })?;
@@ -211,7 +215,7 @@ impl CloudAuthenticator {
             .map(|keys| keys.iter().filter(|n| n.starts_with("redisctl-")).count())
             .unwrap_or(0);
         Ok(MintedCredentials {
-            account_id: user.current_account_id,
+            account_id,
             email: user.email,
             api_key,
             api_secret: minted.secret_key,
@@ -237,8 +241,18 @@ impl CloudAuthenticator {
         if user.current_account_id.as_deref() == Some(want.to_string().as_str()) {
             return Ok(user);
         }
+        // Fetched here rather than reusing the later call: membership has to be checked *before*
+        // `setcurrent`, while the later fetch has to come *after* `ensure_capi_enabled` to see the
+        // account access key it creates. Only runs when `--account` was given.
         let accounts = sm.fetch_accounts().await?;
         if !accounts.iter().any(|a| a.id == want) {
+            if accounts.is_empty() {
+                return Err(AuthError::Protocol(
+                    "this login is not associated with any Redis Cloud account, so there is \
+                     nothing to switch to"
+                        .into(),
+                ));
+            }
             return Err(AuthError::UnknownAccount {
                 requested: want,
                 available: accounts
@@ -483,6 +497,220 @@ mod tests {
         // secrets must not leak via Debug
         let dbg = format!("{creds:?}");
         assert!(!dbg.contains("SECRET") && !dbg.contains("ACCT-KEY") && !dbg.contains("RT"));
+    }
+
+    fn tokens() -> TokenSet {
+        TokenSet {
+            access_token: "AT".to_string(),
+            refresh_token: None,
+            expires_in: 3600,
+        }
+    }
+
+    fn authenticator(server: &MockServer) -> CloudAuthenticator {
+        CloudAuthenticator::new(
+            Url::parse("https://issuer.example/oauth2/default").unwrap(),
+            "client",
+            Url::parse(&server.uri()).unwrap(),
+            "https://capi.example/v1",
+        )
+    }
+
+    /// Everything the exchange needs apart from the account-shaped endpoints each test varies.
+    async fn common_login_mocks(server: &MockServer) {
+        Mock::given(method("POST"))
+            .and(path("/login"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({}))
+                    .append_header("Set-Cookie", "JSESSIONID=SID; Path=/"),
+            )
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/csrf"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"csrfToken": {"csrf_token": "C"}})),
+            )
+            .mount(server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/accounts/cloud-api/cloudApiAccessKey"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"cloudApiAccessKey": {"accessKey": "ACCT"}})),
+            )
+            .mount(server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/accounts/cloud-api/cloudApiKeys"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"name": "redisctl-test", "secret_key": "SECRET"}),
+            ))
+            .mount(server)
+            .await;
+    }
+
+    /// `--account` has to switch the session *before* anything account-scoped runs: both
+    /// `ensure_capi_enabled` and the mint resolve the account from the session, so a switch that
+    /// happened afterwards would put the key on the previous account. The mocks answer
+    /// `/users/me` differently before and after `setcurrent`, so the minted account is only right
+    /// if the ordering held.
+    #[tokio::test]
+    async fn complete_login_switches_before_minting() {
+        let server = MockServer::start().await;
+        let switched = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        common_login_mocks(&server).await;
+
+        // /users/me reports 111 until setcurrent runs, then 222.
+        let flag = switched.clone();
+        Mock::given(method("GET"))
+            .and(path("/users/me"))
+            .respond_with(move |_: &wiremock::Request| {
+                let id = if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                    "222"
+                } else {
+                    "111"
+                };
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "1", "current_account_id": id, "email": "u@e.com"
+                }))
+            })
+            .mount(&server)
+            .await;
+        let flag = switched.clone();
+        Mock::given(method("POST"))
+            .and(path("/accounts/setcurrent/222"))
+            .respond_with(move |_: &wiremock::Request| {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({}))
+            })
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/accounts"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "accounts": [
+                    {"id": 111, "name": "One", "api_access_key": "KEY-111"},
+                    {"id": 222, "name": "Two", "api_access_key": "KEY-222"}
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let creds = authenticator(&server)
+            .complete_login(&tokens(), "redisctl-test", LoginFlow::Loopback, Some(222))
+            .await
+            .unwrap();
+        // The key, the reported id and the reported name all describe the requested account.
+        assert_eq!(creds.account_id.as_deref(), Some("222"));
+        assert_eq!(creds.account_name.as_deref(), Some("Two"));
+        assert_eq!(creds.api_key, "KEY-222");
+        assert_eq!(creds.account_count(), 2);
+    }
+
+    /// An account the user does not belong to is refused before any switch is attempted, and the
+    /// message names the accounts they do have.
+    #[tokio::test]
+    async fn complete_login_refuses_an_account_the_user_is_not_in() {
+        let server = MockServer::start().await;
+        common_login_mocks(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/users/me"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"id": "1", "current_account_id": "111", "email": "u@e.com"}),
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/accounts"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "accounts": [{"id": 111, "name": "One", "api_access_key": "KEY-111"}]
+            })))
+            .mount(&server)
+            .await;
+        // No /accounts/setcurrent/* mock is mounted: reaching one would 404 and surface as a
+        // different error, which is itself the assertion that no switch was attempted.
+        match authenticator(&server)
+            .complete_login(&tokens(), "k", LoginFlow::Loopback, Some(999))
+            .await
+        {
+            Err(AuthError::UnknownAccount {
+                requested,
+                available,
+            }) => {
+                assert_eq!(requested, 999);
+                assert_eq!(available, "One (#111)");
+            }
+            other => panic!("expected UnknownAccount, got {other:?}"),
+        }
+    }
+
+    /// A `setcurrent` that reports success but leaves the session on the old account must fail
+    /// loudly: continuing would mint the key on the wrong account and report success.
+    #[tokio::test]
+    async fn complete_login_fails_when_the_switch_does_not_take() {
+        let server = MockServer::start().await;
+        common_login_mocks(&server).await;
+        // Never changes, however many times it is asked.
+        Mock::given(method("GET"))
+            .and(path("/users/me"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"id": "1", "current_account_id": "111", "email": "u@e.com"}),
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/accounts/setcurrent/222"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/accounts"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "accounts": [
+                    {"id": 111, "name": "One", "api_access_key": "KEY-111"},
+                    {"id": 222, "name": "Two", "api_access_key": "KEY-222"}
+                ]
+            })))
+            .mount(&server)
+            .await;
+        let err = authenticator(&server)
+            .complete_login(&tokens(), "k", LoginFlow::Loopback, Some(222))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, AuthError::Protocol(ref m) if m.contains("still reports")),
+            "expected a switch-verification failure, got {err:?}"
+        );
+    }
+
+    /// Asking for the account the session is already on must not issue a switch at all.
+    #[tokio::test]
+    async fn complete_login_skips_the_switch_when_already_current() {
+        let server = MockServer::start().await;
+        common_login_mocks(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/users/me"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"id": "1", "current_account_id": "111", "email": "u@e.com"}),
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/accounts"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "accounts": [{"id": 111, "name": "One", "api_access_key": "KEY-111"}]
+            })))
+            .mount(&server)
+            .await;
+        // Again, no setcurrent mount: if one were issued it would 404 and fail the login.
+        let creds = authenticator(&server)
+            .complete_login(&tokens(), "k", LoginFlow::Loopback, Some(111))
+            .await
+            .unwrap();
+        assert_eq!(creds.account_id.as_deref(), Some("111"));
     }
 
     #[tokio::test]

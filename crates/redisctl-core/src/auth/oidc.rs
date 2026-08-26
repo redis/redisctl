@@ -74,8 +74,9 @@ pub enum AuthError {
     /// the login cannot mint a key. A one-time step for someone who does hold the role, not a
     /// retryable failure. `allowed_roles` is what SM reported as sufficient, already formatted.
     #[error(
-        "enabling programmatic access requires the {allowed_roles} role on this Redis Cloud \
-         account; ask someone with it to enable it once in the console, then run login again"
+        "your role on this Redis Cloud account cannot enable programmatic access; that needs \
+         {allowed_roles}. Ask someone who has it to enable it once in the console, then run \
+         login again"
     )]
     NotAccountOwner { allowed_roles: String },
 

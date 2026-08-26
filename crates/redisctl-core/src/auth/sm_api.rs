@@ -210,32 +210,93 @@ struct AccountsEnvelope {
     accounts: Vec<SmAccount>,
 }
 
+/// Every `error_code` in an SM error body, in order.
+///
+/// Same nesting as [`allowed_roles`]: `errors` is a JSON-encoded string holding the list. Used to
+/// classify on the *set* of codes present rather than on a substring, so a generic code cannot be
+/// matched out of an unrelated envelope.
+fn sm_error_codes(body: &str) -> Vec<String> {
+    fn codes(errors: &serde_json::Value) -> Vec<String> {
+        errors
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|e| {
+                        e.get("error_code")
+                            .or_else(|| e.get("code"))?
+                            .as_str()
+                            .map(str::to_string)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| {
+            let errors = v.get("errors")?.clone();
+            Some(match errors {
+                serde_json::Value::String(inner) => {
+                    codes(&serde_json::from_str::<serde_json::Value>(&inner).ok()?)
+                }
+                other => codes(&other),
+            })
+        })
+        .unwrap_or_default()
+}
+
 /// Roles SM named as sufficient in an `insufficient-permission` body, formatted for a message.
 ///
-/// The response nests its error list as a JSON-encoded string, so the params arrive escaped and a
-/// plain `serde_json` walk does not reach them; scanning the raw body handles both shapes. Role
-/// names are bare words (`owner`, `viewer`), so anything else is discarded. Falls back to
-/// `"owner"` — the only role that has ever held this permission — when nothing is parseable, so
-/// the message stays accurate rather than empty.
+/// SM nests its error list as a JSON-encoded *string*, so reaching the params means parsing the
+/// body and then parsing `errors` again. Walking the decoded structure — rather than scanning the
+/// raw text — keeps this independent of key order inside each param object and of how role names
+/// are spelled. Falls back to `owner`, the only role that has ever held this permission, when
+/// nothing is parseable, so the message is never empty.
 fn allowed_roles(body: &str) -> String {
-    let roles: Vec<&str> = body
-        .split_once("allowed-roles")
-        .map(|(_, rest)| rest)
-        .and_then(|rest| {
-            let start = rest.find('[')?;
-            let end = rest[start..].find(']')?;
-            Some(&rest[start..start + end])
-        })
-        .map(|list| {
-            list.split(['"', '\\', '[', ',', ' '])
-                .filter(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_lowercase() || c == '_'))
-                .collect()
+    fn from_params(errors: &serde_json::Value) -> Option<Vec<String>> {
+        for err in errors.as_array()? {
+            for param in err.get("params")?.as_array()? {
+                if param.get("key")?.as_str()? != "allowed-roles" {
+                    continue;
+                }
+                let roles: Vec<String> = match param.get("value")? {
+                    serde_json::Value::Array(items) => items
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .map(str::to_string)
+                        .collect(),
+                    serde_json::Value::String(one) => vec![one.clone()],
+                    _ => continue,
+                };
+                if !roles.is_empty() {
+                    return Some(roles);
+                }
+            }
+        }
+        None
+    }
+
+    let roles = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| {
+            let errors = v.get("errors")?.clone();
+            // `errors` is normally a JSON-encoded string; tolerate it arriving already decoded.
+            match errors {
+                serde_json::Value::String(inner) => {
+                    from_params(&serde_json::from_str::<serde_json::Value>(&inner).ok()?)
+                }
+                other => from_params(&other),
+            }
         })
         .unwrap_or_default();
-    if roles.is_empty() {
-        return "owner".to_string();
+    match roles.len() {
+        // Only ever `owner` in practice; phrase both cases so the message reads correctly if the
+        // set widens (SM has feature flags for exactly that).
+        0 => "the owner role".to_string(),
+        1 => format!("the {} role", roles[0]),
+        _ => format!("one of these roles: {}", roles.join(", ")),
     }
-    roles.join(" or ")
 }
 
 impl SmApiClient {
@@ -428,7 +489,9 @@ impl SmApiClient {
                 allowed_roles: allowed_roles(&body),
             });
         }
-        if body.contains(FORBIDDEN_REQUEST_CODE) {
+        if status == reqwest::StatusCode::FORBIDDEN
+            && sm_error_codes(&body) == [FORBIDDEN_REQUEST_CODE]
+        {
             return Err(AuthError::CapiDisabled);
         }
         Err(AuthError::Protocol(format!(
@@ -691,32 +754,63 @@ mod tests {
         // The role SM named is carried through, not a hardcoded string.
         match c.ensure_capi_enabled().await {
             Err(AuthError::NotAccountOwner { allowed_roles }) => {
-                assert_eq!(allowed_roles, "owner")
+                assert_eq!(allowed_roles, "the owner role")
             }
             other => panic!("expected NotAccountOwner, got {other:?}"),
         }
     }
 
-    /// `allowed-roles` reaches us escaped inside a JSON-encoded string, and SM can name more than
-    /// one role. Anything unparseable still has to produce an accurate message.
+    /// `allowed-roles` reaches us escaped inside a JSON-encoded string. Parsing the structure
+    /// (rather than scanning the text) has to be independent of key order within a param and of
+    /// how role names are spelled, and anything unreadable must still say something accurate.
     #[test]
-    fn allowed_roles_parses_both_body_shapes_and_falls_back() {
+    fn allowed_roles_reads_the_param_regardless_of_shape() {
+        // The real wire shape: `errors` is a JSON-encoded string.
         assert_eq!(
             allowed_roles(
-                r#"{"errors":"[{\"params\":[{\"key\":\"allowed-roles\",\"value\":[\"owner\"]}]}]"}"#
+                r#"{"errors":"[{\"error_code\":\"insufficient-permission\",\"params\":[{\"key\":\"allowed-roles\",\"value\":[\"owner\"]}]}]"}"#
             ),
-            "owner"
+            "the owner role"
         );
+        // `value` before `key`, plus a second param that also has a value list: must not pick the
+        // wrong one. JSON object order carries no meaning, so this cannot be assumed away.
         assert_eq!(
-            allowed_roles(r#"{"params":[{"key":"allowed-roles","value":["owner","viewer"]}]}"#),
-            "owner or viewer"
+            allowed_roles(
+                r#"{"errors":[{"params":[{"value":["owner"],"key":"allowed-roles"},{"value":["viewer"],"key":"current-role"}]}]}"#
+            ),
+            "the owner role"
         );
-        // No params at all, or a shape we cannot read: name the only role that has ever held it.
+        // Several roles, including a name that is neither lowercase nor underscore-only.
+        assert_eq!(
+            allowed_roles(
+                r#"{"errors":[{"params":[{"key":"allowed-roles","value":["owner","billing_admin","Manager"]}]}]}"#
+            ),
+            "one of these roles: owner, billing_admin, Manager"
+        );
+        // No params, not JSON, or the param missing: name the only role that has ever held it.
         assert_eq!(
             allowed_roles(r#"{"errors":"insufficient-permission"}"#),
-            "owner"
+            "the owner role"
         );
-        assert_eq!(allowed_roles("allowed-roles but no list"), "owner");
+        assert_eq!(allowed_roles("not json at all"), "the owner role");
+        assert_eq!(
+            allowed_roles(r#"{"errors":[{"params":[{"key":"other","value":["x"]}]}]}"#),
+            "the owner role"
+        );
+    }
+
+    /// A generic code must not be matched out of an unrelated envelope.
+    #[test]
+    fn sm_error_codes_reads_every_nested_code() {
+        assert_eq!(
+            sm_error_codes(r#"{"errors":"[{\"error_code\":\"forbidden-request\"}]"}"#),
+            vec!["forbidden-request"]
+        );
+        assert_eq!(
+            sm_error_codes(r#"{"errors":[{"error_code":"a"},{"error_code":"b"}]}"#),
+            vec!["a", "b"]
+        );
+        assert!(sm_error_codes("not json").is_empty());
     }
 
     /// The account's own API access being off is a different failure from a role problem: no role
@@ -840,9 +934,6 @@ mod tests {
         ));
     }
 
-    /// SM records `utm_*` on the signup path, so a first-ever login through redisctl must carry
-    /// attribution or the tool is invisible in signup analytics. The mock matches only if all three
-    /// fields are present, and `utm_campaign` distinguishes the two flows.
     /// Every account-scoped call resolves the account from the session, so a switch has to be a
     /// real request to the documented path — the mock only matches that exact URL.
     #[tokio::test]
@@ -873,6 +964,9 @@ mod tests {
         ));
     }
 
+    /// SM records `utm_*` on the signup path, so a first-ever login through redisctl must carry
+    /// attribution or the tool is invisible in signup analytics. The mock matches only if all three
+    /// fields are present, and `utm_campaign` distinguishes the two flows.
     #[tokio::test]
     async fn login_sends_utm_attribution_per_flow() {
         for (flow, campaign) in [
