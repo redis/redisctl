@@ -79,6 +79,9 @@ impl StructuredError {
     pub fn insufficient_permission(message: impl Into<String>) -> Self {
         Self::new("insufficient_permission", 2, false, message)
     }
+    pub fn account_required(message: impl Into<String>) -> Self {
+        Self::new("account_required", 2, false, message)
+    }
     pub fn capi_disabled(message: impl Into<String>) -> Self {
         Self::new("capi_disabled", 2, false, message)
     }
@@ -189,6 +192,8 @@ impl From<AuthError> for StructuredError {
             // would leave the agent-facing message stale whenever the attribute is edited.
             AuthError::NotAccountOwner { .. } => Self::insufficient_permission(err.to_string()),
             AuthError::CapiDisabled => Self::capi_disabled(err.to_string()),
+            // A choice the caller has to make or correct, not a backend failure.
+            AuthError::AccountRequired(_) => Self::account_required(err.to_string()),
             // --account named an account the user is not in; the message lists the real ones.
             AuthError::UnknownAccount { .. } => Self::unknown_account(err.to_string()),
             AuthError::MigrationRequired => Self::migration_required(),
@@ -218,6 +223,7 @@ mod tests {
             StructuredError::keyring_unavailable("x"),
             StructuredError::insufficient_permission("x"),
             StructuredError::capi_disabled("x"),
+            StructuredError::account_required("x"),
             StructuredError::unknown_account("x"),
             StructuredError::migration_required(),
             StructuredError::mfa_required(),

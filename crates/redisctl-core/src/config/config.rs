@@ -70,6 +70,14 @@ pub struct CloudAuthConfig {
     /// Public CAPI base recorded in the resulting cloud profile (`api_url`).
     #[serde(default = "default_prod_capi_url")]
     pub capi_url: String,
+    /// Which account the profile's key was last minted for.
+    ///
+    /// Recorded because it cannot be derived locally: an API key does not name its account, and
+    /// `setcurrent` is session-scoped server-side, so a fresh sign-in reports the user's default
+    /// account rather than the one this profile is on. Absent for profiles written before this
+    /// existed, or set up by hand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<u64>,
 }
 
 fn default_prod_capi_url() -> String {
@@ -86,6 +94,7 @@ impl CloudAuthConfig {
             okta_client_id: "0oaw90hjzrLoATW0q5d7".to_string(),
             sm_api_url: "https://cloud.redis.io/api/v1".to_string(),
             capi_url: default_prod_capi_url(),
+            account_id: None,
         }
     }
 
@@ -653,6 +662,7 @@ impl Config {
         profile_name: &str,
         creds: &crate::auth::MintedCredentials,
         cloud_auth: Option<CloudAuthConfig>,
+        make_default: bool,
     ) -> Result<()> {
         let api_key =
             store.store_credential(&format!("{profile_name}-cloud-api-key"), &creds.api_key)?;
@@ -675,10 +685,17 @@ impl Config {
             tags: Vec::new(),
         };
         self.profiles.insert(profile_name.to_string(), profile);
-        if let Some(auth) = cloud_auth {
+        if let Some(mut auth) = cloud_auth {
+            // Remember the account this key is for, so a later switch can say which one the
+            // profile is on without asking the server (which would report the user's default).
+            auth.account_id = creds.account_id;
             self.cloud_auth.insert(profile_name.to_string(), auth);
         }
-        self.default_cloud = Some(profile_name.to_string());
+        // Only a login bootstraps a profile; re-pointing the default is not something a caller
+        // asked for when it merely changed which account an existing profile targets.
+        if make_default {
+            self.default_cloud = Some(profile_name.to_string());
+        }
         Ok(())
     }
 

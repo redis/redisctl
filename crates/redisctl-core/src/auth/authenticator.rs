@@ -42,6 +42,35 @@ pub struct MintedCredentials {
     pub accounts: Vec<LoginAccount>,
 }
 
+/// How the account to mint for is decided.
+///
+/// [`AccountChoice::Prompt`] exists because a picker cannot run before the exchange: listing the
+/// accounts needs a session, and re-logging-in to act on the answer would mean a second sign-in
+/// (and a second MFA challenge). The callback is invoked mid-exchange instead, on the one session.
+pub enum AccountChoice {
+    /// Whatever account the session is already on.
+    Current,
+    /// A specific account id.
+    Id(u64),
+    /// Decide once the accounts are known. Called with every account the user belongs to and the
+    /// id of the current one, when the API reports it.
+    Prompt(AccountPrompt),
+}
+
+/// Callback for [`AccountChoice::Prompt`]: pick an account id, or fail with the reason.
+pub type AccountPrompt =
+    Box<dyn Fn(&[LoginAccount], Option<u64>) -> Result<u64, AuthError> + Send + Sync>;
+
+impl std::fmt::Debug for AccountChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Current => f.write_str("Current"),
+            Self::Id(id) => write!(f, "Id({id})"),
+            Self::Prompt(_) => f.write_str("Prompt(..)"),
+        }
+    }
+}
+
 /// One account the signed-in user belongs to, as reported during login.
 #[derive(Debug, Clone)]
 pub struct LoginAccount {
@@ -64,6 +93,18 @@ impl MintedCredentials {
     /// How many accounts the signed-in user belongs to.
     pub fn account_count(&self) -> usize {
         self.accounts.len()
+    }
+
+    /// The account the key is for, rendered like the listing (`Acme (#316941)`).
+    ///
+    /// Shared so every place that names the account spells it the same way. `account_id` is always
+    /// one of `accounts` — both come from the same `/accounts` response — so the lookup only
+    /// misses for a hand-built value.
+    pub fn account_label(&self) -> String {
+        self.account_id
+            .and_then(|id| self.accounts.iter().find(|a| a.id == id))
+            .map(LoginAccount::label)
+            .unwrap_or_else(|| "your current account".to_string())
     }
 }
 
@@ -147,7 +188,7 @@ impl CloudAuthenticator {
         tokens: &TokenSet,
         key_name: &str,
         flow: LoginFlow,
-        account: Option<u64>,
+        account: AccountChoice,
     ) -> Result<MintedCredentials, AuthError> {
         self.complete_login_with_mfa(tokens, key_name, flow, account, |_, _| Ok(None))
             .await
@@ -165,7 +206,7 @@ impl CloudAuthenticator {
         tokens: &TokenSet,
         key_name: &str,
         flow: LoginFlow,
-        account: Option<u64>,
+        account: AccountChoice,
         mut mfa_prompt: F,
     ) -> Result<MintedCredentials, AuthError>
     where
@@ -183,7 +224,21 @@ impl CloudAuthenticator {
             Err(e) => return Err(e),
         }
         let mut user = sm.fetch_current_user().await?;
-        if let Some(want) = account {
+        let want = match account {
+            AccountChoice::Current => None,
+            AccountChoice::Id(id) => Some(id),
+            // The picker needs the list, so fetch it here; `switch_account` re-reads it to
+            // validate, which also covers ids that did not come from a picker.
+            AccountChoice::Prompt(choose) => {
+                let accounts = login_accounts(&sm.fetch_accounts().await?);
+                let current = user
+                    .current_account_id
+                    .as_deref()
+                    .and_then(|s| s.parse::<u64>().ok());
+                Some(choose(&accounts, current)?)
+            }
+        };
+        if let Some(want) = want {
             user = self.switch_account(&sm, user, want).await?;
         }
         sm.ensure_capi_enabled().await?;
@@ -191,13 +246,7 @@ impl CloudAuthenticator {
         // order isn't guaranteed, so taking the first entry could mint a key for the wrong
         // account in a multi-account org. Fall back to the first only when it's absent/unknown.
         let accounts = sm.fetch_accounts().await?;
-        let all_accounts: Vec<LoginAccount> = accounts
-            .iter()
-            .map(|a| LoginAccount {
-                id: a.id,
-                name: a.name.clone(),
-            })
-            .collect();
+        let all_accounts = login_accounts(&accounts);
         let account = select_account(accounts, user.current_account_id.as_deref())
             .ok_or_else(|| AuthError::Protocol("no accounts associated with this login".into()))?;
         let account_name = account.name.clone();
@@ -317,6 +366,23 @@ const MFA_MAX_ATTEMPTS: u32 = 3;
 
 /// Choose the account matching `current_account_id` (the logged-in user context); fall back to
 /// the first account only when the id is absent or not present in the list.
+/// Project the API's accounts into [`LoginAccount`]s, in a stable order.
+///
+/// `/accounts` order is not guaranteed. Sorting here rather than at each use means the picker's
+/// numbering, the printed listing and the JSON `accounts` array all agree between runs — the last
+/// of which callers are told to read for ids.
+fn login_accounts(accounts: &[SmAccount]) -> Vec<LoginAccount> {
+    let mut out: Vec<LoginAccount> = accounts
+        .iter()
+        .map(|a| LoginAccount {
+            id: a.id,
+            name: a.name.clone(),
+        })
+        .collect();
+    out.sort_by_key(|a| a.id);
+    out
+}
+
 fn select_account(accounts: Vec<SmAccount>, current_account_id: Option<&str>) -> Option<SmAccount> {
     let target = current_account_id.and_then(|s| s.parse::<u64>().ok());
     let idx = target
@@ -486,7 +552,12 @@ mod tests {
         };
 
         let creds = auth
-            .complete_login(&tokens, "redisctl-test", LoginFlow::Loopback, None)
+            .complete_login(
+                &tokens,
+                "redisctl-test",
+                LoginFlow::Loopback,
+                AccountChoice::Current,
+            )
             .await
             .unwrap();
         assert_eq!(creds.api_key, "ACCT-KEY");
@@ -602,7 +673,12 @@ mod tests {
             .await;
 
         let creds = authenticator(&server)
-            .complete_login(&tokens(), "redisctl-test", LoginFlow::Loopback, Some(222))
+            .complete_login(
+                &tokens(),
+                "redisctl-test",
+                LoginFlow::Loopback,
+                AccountChoice::Id(222),
+            )
             .await
             .unwrap();
         // The key, the reported id and the reported name all describe the requested account.
@@ -610,6 +686,111 @@ mod tests {
         assert_eq!(creds.account_name.as_deref(), Some("Two"));
         assert_eq!(creds.api_key, "KEY-222");
         assert_eq!(creds.account_count(), 2);
+    }
+
+    /// The picker runs mid-exchange, on the one session. It must see every account in a stable
+    /// order (the API does not promise one) along with the session's current account, and its
+    /// answer must be what gets minted.
+    #[tokio::test]
+    async fn complete_login_mints_what_the_picker_chose() {
+        let server = MockServer::start().await;
+        let switched = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        common_login_mocks(&server).await;
+
+        let flag = switched.clone();
+        Mock::given(method("GET"))
+            .and(path("/users/me"))
+            .respond_with(move |_: &wiremock::Request| {
+                let id = if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                    "111"
+                } else {
+                    "222"
+                };
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "1", "current_account_id": id, "email": "u@e.com"
+                }))
+            })
+            .mount(&server)
+            .await;
+        let flag = switched.clone();
+        Mock::given(method("POST"))
+            .and(path("/accounts/setcurrent/111"))
+            .respond_with(move |_: &wiremock::Request| {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({}))
+            })
+            .mount(&server)
+            .await;
+        // Deliberately returned highest-id-first, so a stable order cannot come from the API.
+        Mock::given(method("GET"))
+            .and(path("/accounts"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "accounts": [
+                    {"id": 222, "name": "Two", "api_access_key": "KEY-222"},
+                    {"id": 111, "name": "One", "api_access_key": "KEY-111"}
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen_current = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let (s2, c2) = (seen.clone(), seen_current.clone());
+        let creds = authenticator(&server)
+            .complete_login(
+                &tokens(),
+                "k",
+                LoginFlow::Switch,
+                AccountChoice::Prompt(Box::new(move |accounts, current| {
+                    *s2.lock().unwrap() = accounts.iter().map(|a| a.id).collect::<Vec<_>>();
+                    *c2.lock().unwrap() = current;
+                    Ok(111)
+                })),
+            )
+            .await
+            .unwrap();
+
+        // Sorted by id despite the API's order, so a positional choice is stable between runs.
+        assert_eq!(*seen.lock().unwrap(), vec![111, 222]);
+        // The session's account is passed through for context.
+        assert_eq!(*seen_current.lock().unwrap(), Some(222));
+        // And the picker's answer is what got minted.
+        assert_eq!(creds.account_id, Some(111));
+        assert_eq!(creds.api_key, "KEY-111");
+        assert_eq!(creds.account_label(), "One (#111)");
+    }
+
+    /// Refusing at the picker abandons the switch instead of minting something unasked for.
+    #[tokio::test]
+    async fn complete_login_propagates_a_declined_picker() {
+        let server = MockServer::start().await;
+        common_login_mocks(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/users/me"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"id": "1", "current_account_id": "111", "email": "u@e.com"}),
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/accounts"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "accounts": [{"id": 111, "name": "One", "api_access_key": "KEY-111"}]
+            })))
+            .mount(&server)
+            .await;
+        let err = authenticator(&server)
+            .complete_login(
+                &tokens(),
+                "k",
+                LoginFlow::Switch,
+                AccountChoice::Prompt(Box::new(|_, _| {
+                    Err(AuthError::AccountRequired("declined".into()))
+                })),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AuthError::AccountRequired(_)), "got {err:?}");
     }
 
     /// An account the user does not belong to is refused before any switch is attempted, and the
@@ -635,7 +816,7 @@ mod tests {
         // No /accounts/setcurrent/* mock is mounted: reaching one would 404 and surface as a
         // different error, which is itself the assertion that no switch was attempted.
         match authenticator(&server)
-            .complete_login(&tokens(), "k", LoginFlow::Loopback, Some(999))
+            .complete_login(&tokens(), "k", LoginFlow::Loopback, AccountChoice::Id(999))
             .await
         {
             Err(AuthError::UnknownAccount {
@@ -679,7 +860,7 @@ mod tests {
             .mount(&server)
             .await;
         let err = authenticator(&server)
-            .complete_login(&tokens(), "k", LoginFlow::Loopback, Some(222))
+            .complete_login(&tokens(), "k", LoginFlow::Loopback, AccountChoice::Id(222))
             .await
             .unwrap_err();
         assert!(
@@ -709,7 +890,7 @@ mod tests {
             .await;
         // Again, no setcurrent mount: if one were issued it would 404 and fail the login.
         let creds = authenticator(&server)
-            .complete_login(&tokens(), "k", LoginFlow::Loopback, Some(111))
+            .complete_login(&tokens(), "k", LoginFlow::Loopback, AccountChoice::Id(111))
             .await
             .unwrap();
         assert_eq!(creds.account_id, Some(111));
@@ -735,7 +916,7 @@ mod tests {
             expires_in: 3600,
         };
         assert!(matches!(
-            auth.complete_login(&tokens, "k", LoginFlow::Loopback, None)
+            auth.complete_login(&tokens, "k", LoginFlow::Loopback, AccountChoice::Current)
                 .await,
             Err(AuthError::Protocol(_))
         ));

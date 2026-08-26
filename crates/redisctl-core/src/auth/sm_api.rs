@@ -59,6 +59,8 @@ pub enum LoginFlow {
     Loopback,
     /// Device-authorization grant — headless machines and agents.
     Device,
+    /// `cloud auth switch`: no browser at all, a stored refresh token stands in for the sign-in.
+    Switch,
 }
 
 impl LoginFlow {
@@ -66,6 +68,7 @@ impl LoginFlow {
         match self {
             Self::Loopback => "loopback",
             Self::Device => "device",
+            Self::Switch => "switch",
         }
     }
 }
