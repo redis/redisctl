@@ -26,6 +26,7 @@ fn qa_cloud_auth() -> CloudAuthConfig {
         okta_client_id: "test-client-id".to_string(),
         sm_api_url: "https://sm.example.com/api/v1".to_string(),
         capi_url: "https://api.example.com/v1".to_string(),
+        account_id: None,
     }
 }
 
@@ -123,13 +124,18 @@ fn apply_cloud_login_writes_profile_default_and_endpoints() {
     assert_eq!(key, "ACCT-KEY");
     assert_eq!(secret, "USER-SECRET");
     assert_eq!(url, "https://api.example.com/v1");
-    // Login endpoints were recorded for re-login.
-    assert_eq!(config.resolve_cloud_auth("qa"), qa_cloud_auth());
+    // Login endpoints were recorded for re-login, along with the account the key is for — which
+    // cannot be derived later, since a key does not name its account.
+    let expected = CloudAuthConfig {
+        account_id: Some(112117),
+        ..qa_cloud_auth()
+    };
+    assert_eq!(config.resolve_cloud_auth("qa"), expected);
 
     // And it survives a save/load round-trip.
     let (_, loaded) = roundtrip(&config);
     assert_eq!(loaded.default_cloud.as_deref(), Some("qa"));
-    assert_eq!(loaded.resolve_cloud_auth("qa"), qa_cloud_auth());
+    assert_eq!(loaded.resolve_cloud_auth("qa"), expected);
 }
 
 /// Mirrors what `cloud auth logout` does at the config layer: it removes the profile (and its

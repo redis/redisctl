@@ -188,6 +188,10 @@ Either a list position or an account id is accepted. Pass the id to skip the pro
 redisctl cloud auth switch 481022
 ```
 
+The account marked `(current)` is the one **this profile** is on, recorded when the key was minted.
+It is not read back from the server: switching is scoped to the sign-in session, so Redis Cloud
+still reports your usual default account and the console is unaffected by a CLI switch.
+
 !!! note "Switching replaces the profile's key"
     An API key is scoped to one account, so switching mints a key for the account you pick and
     replaces the profile's current one — the previous account is no longer usable through this

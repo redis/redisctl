@@ -195,6 +195,9 @@ async fn switch(
         )));
     }
 
+    // Which account this profile is on today, as recorded at the last login/switch.
+    let on_account = auth_cfg.account_id;
+
     let store = CredentialStore::new();
     let refresh_token = store
         .get_credential(&format!("keyring:{profile_name}-okta-refresh"), None)
@@ -224,7 +227,12 @@ async fn switch(
             flow: LoginFlow::Loopback,
             account: match account {
                 Some(id) => AccountChoice::Id(id),
-                None => AccountChoice::Prompt(Box::new(prompt_account)),
+                // `on_account` comes from the profile, not the session: `setcurrent` is
+                // session-scoped server-side, so a fresh sign-in reports the user's default
+                // account and would mark the wrong row as current.
+                None => AccountChoice::Prompt(Box::new(move |accounts, _session_account| {
+                    prompt_account(accounts, on_account)
+                })),
             },
             // A refresh token only exists on the keyring path, so this is never plaintext.
             allow_plaintext: false,
@@ -271,6 +279,9 @@ fn prompt_account(accounts: &[LoginAccount], current: Option<u64>) -> Result<u64
             ""
         };
         eprintln!("  {}) {}{}", i + 1, a.label(), marker);
+    }
+    if current.is_none() {
+        eprintln!("  (which one this profile is on is unknown — sign in again to record it)");
     }
     eprint!("Switch to which? [1-{}]: ", accounts.len());
     use std::io::Write;

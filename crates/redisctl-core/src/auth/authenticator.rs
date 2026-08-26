@@ -218,7 +218,7 @@ impl CloudAuthenticator {
             // The picker needs the list, so fetch it here; `switch_account` re-reads it to
             // validate, which also covers ids that did not come from a picker.
             AccountChoice::Prompt(choose) => {
-                let accounts: Vec<LoginAccount> = sm
+                let mut accounts: Vec<LoginAccount> = sm
                     .fetch_accounts()
                     .await?
                     .into_iter()
@@ -227,6 +227,9 @@ impl CloudAuthenticator {
                         name: a.name,
                     })
                     .collect();
+                // `/accounts` order is not guaranteed. Sort so a positional picker means the same
+                // thing between runs — otherwise "2" could select a different account each time.
+                accounts.sort_by_key(|a| a.id);
                 let current = user
                     .current_account_id
                     .as_deref()
