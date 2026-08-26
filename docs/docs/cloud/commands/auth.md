@@ -158,7 +158,11 @@ recent account stays usable.
 
 `-o json` reports `account_id`, `account_name` and `account_count`, plus an `accounts` array of
 every `{id, name}` — so a script can confirm it got the account it expected, or pick one without a
-trip to the console.
+trip to the console. `account_id` and `accounts[].id` are both numbers, so they compare directly:
+
+```bash
+redisctl cloud auth login -o json | jq -e '.account_id == 316941'
+```
 
 ### Password accounts need linking once
 

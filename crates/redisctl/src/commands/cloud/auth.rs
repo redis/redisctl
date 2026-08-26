@@ -351,19 +351,13 @@ fn emit_signed_in(
     // from the session. Say which was used when there was more than one it could have been.
     if creds.account_count() > 1 {
         // Render through `label()` like the list below, so one account is never spelled two
-        // different ways two lines apart.
+        // different ways two lines apart. `account_id` is always one of `accounts` — both come
+        // from the same `/accounts` response — so the lookup only misses for a hand-built value.
         let which = creds
             .account_id
-            .as_deref()
-            .and_then(|id| id.parse::<u64>().ok())
             .and_then(|id| creds.accounts.iter().find(|a| a.id == id))
             .map(LoginAccount::label)
-            .unwrap_or_else(|| match (&creds.account_name, &creds.account_id) {
-                (Some(name), Some(id)) => format!("{name} (#{id})"),
-                (None, Some(id)) => format!("#{id}"),
-                (Some(name), None) => name.clone(),
-                (None, None) => "your current account".to_string(),
-            });
+            .unwrap_or_else(|| "your current account".to_string());
         eprintln!(
             "  note: the key is for {which} — 1 of {} accounts you belong to:",
             creds.account_count()

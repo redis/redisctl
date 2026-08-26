@@ -17,7 +17,9 @@ use super::{AuthError, DeviceFlowClient, LoopbackFlowClient, TokenSet, default_h
 /// Secret fields are redacted from `Debug`.
 #[derive(Clone)]
 pub struct MintedCredentials {
-    pub account_id: Option<String>,
+    /// Numeric account id, matching the `id` of the matching entry in `accounts`, so the two can
+    /// be compared directly by a caller reading the JSON output.
+    pub account_id: Option<u64>,
     pub email: Option<String>,
     /// Account-level CAPI key (`x-api-key`).
     pub api_key: String,
@@ -202,7 +204,7 @@ impl CloudAuthenticator {
         // Report the account the key belongs to, taken from the same entry the key came from.
         // `user.current_account_id` can disagree with it (absent or unknown → `select_account`
         // falls back), and printing that id would name an account the key is not for.
-        let account_id = Some(account.id.to_string());
+        let account_id = Some(account.id);
         let api_key = account.api_access_key.ok_or_else(|| {
             AuthError::Protocol("account has no CAPI access key after enabling CAPI".into())
         })?;
@@ -387,7 +389,7 @@ mod tests {
     #[test]
     fn debug_redacts_secrets() {
         let creds = MintedCredentials {
-            account_id: Some("42".to_string()),
+            account_id: Some(42),
             email: Some("u@example.com".to_string()),
             api_key: "AKEY-visible-should-not-appear".to_string(),
             api_secret: "SECRET-should-not-appear".to_string(),
@@ -490,7 +492,7 @@ mod tests {
         assert_eq!(creds.api_key, "ACCT-KEY");
         assert_eq!(creds.api_secret, "SECRET");
         assert_eq!(creds.api_url, "https://capi.example/v1");
-        assert_eq!(creds.account_id.as_deref(), Some("112117"));
+        assert_eq!(creds.account_id, Some(112117));
         assert_eq!(creds.email.as_deref(), Some("u@e.com"));
         assert_eq!(creds.refresh_token.as_deref(), Some("RT"));
         assert_eq!(creds.capi_key_name, "redisctl-test");
@@ -604,7 +606,7 @@ mod tests {
             .await
             .unwrap();
         // The key, the reported id and the reported name all describe the requested account.
-        assert_eq!(creds.account_id.as_deref(), Some("222"));
+        assert_eq!(creds.account_id, Some(222));
         assert_eq!(creds.account_name.as_deref(), Some("Two"));
         assert_eq!(creds.api_key, "KEY-222");
         assert_eq!(creds.account_count(), 2);
@@ -710,7 +712,7 @@ mod tests {
             .complete_login(&tokens(), "k", LoginFlow::Loopback, Some(111))
             .await
             .unwrap();
-        assert_eq!(creds.account_id.as_deref(), Some("111"));
+        assert_eq!(creds.account_id, Some(111));
     }
 
     #[tokio::test]
