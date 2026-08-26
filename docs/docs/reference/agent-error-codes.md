@@ -1,6 +1,6 @@
 # Agent Error Codes
 
-The agent-native surface — `cloud auth login | status | logout` and `cloud workflow
+The agent-native surface — `cloud auth login | switch | status | logout` and `cloud workflow
 quick-database | database-credentials` — reports failures in a **machine-branchable** form so
 scripts and agents can branch on a stable code instead of parsing prose.
 

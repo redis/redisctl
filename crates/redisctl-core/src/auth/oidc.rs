@@ -93,6 +93,11 @@ pub enum AuthError {
     #[error("account {requested} is not one of yours; you belong to: {available}")]
     UnknownAccount { requested: u64, available: String },
 
+    /// No usable account choice: none was given where one is required, or the caller gave up.
+    /// A precondition for the caller to fix, not a backend failure.
+    #[error("{0}")]
+    AccountRequired(String),
+
     /// SM challenged the login for multi-factor authentication (`user-mfa-required`). Carries the
     /// factor types SM offered, when it reports them.
     #[error("this account requires multi-factor authentication")]

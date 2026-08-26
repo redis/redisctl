@@ -662,6 +662,7 @@ impl Config {
         profile_name: &str,
         creds: &crate::auth::MintedCredentials,
         cloud_auth: Option<CloudAuthConfig>,
+        make_default: bool,
     ) -> Result<()> {
         let api_key =
             store.store_credential(&format!("{profile_name}-cloud-api-key"), &creds.api_key)?;
@@ -687,10 +688,14 @@ impl Config {
         if let Some(mut auth) = cloud_auth {
             // Remember the account this key is for, so a later switch can say which one the
             // profile is on without asking the server (which would report the user's default).
-            auth.account_id = creds.account_id.as_deref().and_then(|id| id.parse().ok());
+            auth.account_id = creds.account_id;
             self.cloud_auth.insert(profile_name.to_string(), auth);
         }
-        self.default_cloud = Some(profile_name.to_string());
+        // Only a login bootstraps a profile; re-pointing the default is not something a caller
+        // asked for when it merely changed which account an existing profile targets.
+        if make_default {
+            self.default_cloud = Some(profile_name.to_string());
+        }
         Ok(())
     }
 

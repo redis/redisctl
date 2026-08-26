@@ -164,6 +164,15 @@ trip to the console. `account_id` and `accounts[].id` are both numbers, so they 
 redisctl cloud auth login -o json | jq -e '.account_id == 316941'
 ```
 
+### Password accounts need linking once
+
+Redis Cloud accounts that sign in with an email and password cannot be used by the CLI directly —
+the sign-in happens at the identity provider, which never held that password. Sign in to the
+[Redis Cloud console](https://app.redislabs.com) once with **Google or GitHub using the same email
+address** and accept the prompt to link the account; afterwards `cloud auth login` works normally.
+
+Until that's done, login exits `2` with `migration_required`.
+
 ## Switch Accounts
 
 ```bash
@@ -208,15 +217,6 @@ Two cases where a full `login` is needed instead:
 Without a terminal to prompt on, the account id is required — otherwise `switch` exits `2` with
 `account_required` rather than blocking. Accounts with MFA still prompt for a code, since that
 challenge happens on sign-in.
-
-### Password accounts need linking once
-
-Redis Cloud accounts that sign in with an email and password cannot be used by the CLI directly —
-the sign-in happens at the identity provider, which never held that password. Sign in to the
-[Redis Cloud console](https://app.redislabs.com) once with **Google or GitHub using the same email
-address** and accept the prompt to link the account; afterwards `cloud auth login` works normally.
-
-Until that's done, login exits `2` with `migration_required`.
 
 ## Status
 

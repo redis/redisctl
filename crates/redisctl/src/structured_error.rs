@@ -192,6 +192,8 @@ impl From<AuthError> for StructuredError {
             // would leave the agent-facing message stale whenever the attribute is edited.
             AuthError::NotAccountOwner { .. } => Self::insufficient_permission(err.to_string()),
             AuthError::CapiDisabled => Self::capi_disabled(err.to_string()),
+            // A choice the caller has to make or correct, not a backend failure.
+            AuthError::AccountRequired(_) => Self::account_required(err.to_string()),
             // --account named an account the user is not in; the message lists the real ones.
             AuthError::UnknownAccount { .. } => Self::unknown_account(err.to_string()),
             AuthError::MigrationRequired => Self::migration_required(),

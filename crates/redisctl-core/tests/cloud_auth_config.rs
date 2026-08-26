@@ -114,7 +114,7 @@ fn apply_cloud_login_writes_profile_default_and_endpoints() {
     };
 
     config
-        .apply_cloud_login(&store, "qa", &creds, Some(qa_cloud_auth()))
+        .apply_cloud_login(&store, "qa", &creds, Some(qa_cloud_auth()), true)
         .unwrap();
 
     // Default cloud profile is set.
