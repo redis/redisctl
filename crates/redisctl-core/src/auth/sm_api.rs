@@ -22,6 +22,10 @@ use super::{AuthError, default_http_client, endpoint, truncate};
 /// this endpoint nests its errors as a JSON-encoded string, so it is matched on the body rather
 /// than through the `/login` error envelope.
 const INSUFFICIENT_PERMISSION_CODE: &str = "insufficient-permission";
+/// SM error code when the *account* cannot have programmatic access at all. On this flow the
+/// caller has already passed the role gate and mints for themselves, so the remaining cause is
+/// the account's `IsApiEnabled` flag being off — which only Redis can change.
+const FORBIDDEN_REQUEST_CODE: &str = "forbidden-request";
 /// SM error code returned when a password-only account must be linked to social sign-in before it
 /// can authenticate this way. The consent step is console-only.
 const SOCIAL_MIGRATION_REQUIRED_CODE: &str = "user-agreement-for-social-login-migration-missing";
@@ -204,6 +208,34 @@ struct CsrfToken {
 struct AccountsEnvelope {
     #[serde(default)]
     accounts: Vec<SmAccount>,
+}
+
+/// Roles SM named as sufficient in an `insufficient-permission` body, formatted for a message.
+///
+/// The response nests its error list as a JSON-encoded string, so the params arrive escaped and a
+/// plain `serde_json` walk does not reach them; scanning the raw body handles both shapes. Role
+/// names are bare words (`owner`, `viewer`), so anything else is discarded. Falls back to
+/// `"owner"` — the only role that has ever held this permission — when nothing is parseable, so
+/// the message stays accurate rather than empty.
+fn allowed_roles(body: &str) -> String {
+    let roles: Vec<&str> = body
+        .split_once("allowed-roles")
+        .map(|(_, rest)| rest)
+        .and_then(|rest| {
+            let start = rest.find('[')?;
+            let end = rest[start..].find(']')?;
+            Some(&rest[start..start + end])
+        })
+        .map(|list| {
+            list.split(['"', '\\', '[', ',', ' '])
+                .filter(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_lowercase() || c == '_'))
+                .collect()
+        })
+        .unwrap_or_default();
+    if roles.is_empty() {
+        return "owner".to_string();
+    }
+    roles.join(" or ")
 }
 
 impl SmApiClient {
@@ -389,10 +421,15 @@ impl SmApiClient {
         if body.contains("account_api_key_already_exists") {
             return Ok(());
         }
-        // Only an account owner can turn on programmatic access. Nothing the CLI can do, but the
-        // user can ask the owner to enable it once — after which the call above is a no-op.
+        // The caller's role does not carry the CAPI permission. Nothing the CLI can do, but
+        // someone who holds the role can enable it once — after which the call above is a no-op.
         if body.contains(INSUFFICIENT_PERMISSION_CODE) {
-            return Err(AuthError::NotAccountOwner);
+            return Err(AuthError::NotAccountOwner {
+                allowed_roles: allowed_roles(&body),
+            });
+        }
+        if body.contains(FORBIDDEN_REQUEST_CODE) {
+            return Err(AuthError::CapiDisabled);
         }
         Err(AuthError::Protocol(format!(
             "enabling CAPI failed ({status}): {}",
@@ -651,9 +688,53 @@ mod tests {
             })))
             .mount(&server)
             .await;
+        // The role SM named is carried through, not a hardcoded string.
+        match c.ensure_capi_enabled().await {
+            Err(AuthError::NotAccountOwner { allowed_roles }) => {
+                assert_eq!(allowed_roles, "owner")
+            }
+            other => panic!("expected NotAccountOwner, got {other:?}"),
+        }
+    }
+
+    /// `allowed-roles` reaches us escaped inside a JSON-encoded string, and SM can name more than
+    /// one role. Anything unparseable still has to produce an accurate message.
+    #[test]
+    fn allowed_roles_parses_both_body_shapes_and_falls_back() {
+        assert_eq!(
+            allowed_roles(
+                r#"{"errors":"[{\"params\":[{\"key\":\"allowed-roles\",\"value\":[\"owner\"]}]}]"}"#
+            ),
+            "owner"
+        );
+        assert_eq!(
+            allowed_roles(r#"{"params":[{"key":"allowed-roles","value":["owner","viewer"]}]}"#),
+            "owner or viewer"
+        );
+        // No params at all, or a shape we cannot read: name the only role that has ever held it.
+        assert_eq!(
+            allowed_roles(r#"{"errors":"insufficient-permission"}"#),
+            "owner"
+        );
+        assert_eq!(allowed_roles("allowed-roles but no list"), "owner");
+    }
+
+    /// The account's own API access being off is a different failure from a role problem: no role
+    /// can fix it, so it must not be reported as "ask someone with the owner role".
+    #[tokio::test]
+    async fn ensure_capi_enabled_reports_a_disabled_account_distinctly() {
+        let server = MockServer::start().await;
+        let c = logged_in(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/accounts/cloud-api/cloudApiAccessKey"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+                "errors": "[{\"field_name\":null,\"error_code\":\"forbidden-request\"}]"
+            })))
+            .mount(&server)
+            .await;
         assert!(matches!(
             c.ensure_capi_enabled().await,
-            Err(AuthError::NotAccountOwner)
+            Err(AuthError::CapiDisabled)
         ));
     }
 

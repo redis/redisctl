@@ -76,13 +76,16 @@ impl StructuredError {
     pub fn keyring_unavailable(message: impl Into<String>) -> Self {
         Self::new("keyring_unavailable", 2, false, message)
     }
-    pub fn insufficient_permission() -> Self {
+    pub fn insufficient_permission(message: impl Into<String>) -> Self {
+        Self::new("insufficient_permission", 2, false, message)
+    }
+    pub fn capi_disabled() -> Self {
         Self::new(
-            "insufficient_permission",
+            "capi_disabled",
             2,
             false,
-            "enabling programmatic access requires the Redis Cloud account owner; ask them to \
-             enable it once in the console, then run login again",
+            "programmatic access is not enabled for this Redis Cloud account; ask Redis support \
+             to enable API access for the account, then run login again",
         )
     }
     pub fn unknown_account(message: impl Into<String>) -> Self {
@@ -188,7 +191,15 @@ impl From<AuthError> for StructuredError {
             }
             // A one-time console step, not a failure to retry — give it its own code so an agent
             // can tell the user what to do rather than surfacing a generic exchange error.
-            AuthError::NotAccountOwner => Self::insufficient_permission(),
+            // Relay the role SM itself named, so the message stays right if that set widens.
+            AuthError::NotAccountOwner { ref allowed_roles } => {
+                Self::insufficient_permission(format!(
+                    "enabling programmatic access requires the {allowed_roles} role on this Redis \
+                     Cloud account; ask someone with it to enable it once in the console, then \
+                     run login again"
+                ))
+            }
+            AuthError::CapiDisabled => Self::capi_disabled(),
             // --account named an account the user is not in; the message lists the real ones.
             AuthError::UnknownAccount {
                 requested,
@@ -257,9 +268,17 @@ mod tests {
             StructuredError::from(AuthError::Protocol("boom".into())).code,
             "sm_exchange_failed"
         );
-        let owner = StructuredError::from(AuthError::NotAccountOwner);
+        let owner = StructuredError::from(AuthError::NotAccountOwner {
+            allowed_roles: "owner".to_string(),
+        });
         assert_eq!(owner.code, "insufficient_permission");
         assert_eq!(owner.exit_code, 2);
+        // The role SM reported reaches the user rather than a hardcoded one.
+        assert!(owner.message.contains("owner role"));
+        let disabled = StructuredError::from(AuthError::CapiDisabled);
+        assert_eq!(disabled.code, "capi_disabled");
+        assert_eq!(disabled.exit_code, 2);
+        assert!(!disabled.retryable);
         let mig = StructuredError::from(AuthError::MigrationRequired);
         assert_eq!(mig.code, "migration_required");
         assert_eq!(mig.exit_code, 2);

@@ -138,7 +138,9 @@ redisctl cloud auth login --account 316941
 ```
 
 Naming an account you don't belong to exits `2` with `unknown_account`, and the message lists the
-ones you do have. Keeping one profile per account works well:
+ones you do have. You need the **Owner** role on whichever account you pick — being an owner of one
+account says nothing about your role on another, so `--account` can exit `2` with
+`insufficient_permission` even when a plain `login` succeeds. Keeping one profile per account works well:
 
 ```bash
 redisctl --profile acme    cloud auth login --account 316941
@@ -214,6 +216,13 @@ sign-in the identity provider can perform:
 | SSO / SAML | ❌ | the CLI cannot select an organization's own identity provider — use an API key |
 | Email + password | after linking | link the account to Google or GitHub once, in the console |
 | Marketplace (Heroku, GCP, Azure) | ❌ | sign-in is initiated by the marketplace; there is no Redis-side credential |
+
+!!! note "Account owners only"
+    Whatever the sign-in method, `cloud auth login` also needs the **Owner** role on the account:
+    a Redis Cloud API key can only be created and held by an account owner. Every other role —
+    Member, Manager, Viewer, Billing Admin, Logs Viewer — exits `2` with
+    `insufficient_permission`, naming the role that is required. Ask an owner to create a key and
+    use it directly, as below.
 
 For anything unsupported — and for **unattended automation** of any kind — create an API key in the
 [Redis Cloud console](https://app.redislabs.com) and configure it directly:
