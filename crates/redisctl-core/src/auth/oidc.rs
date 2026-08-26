@@ -70,13 +70,28 @@ pub enum AuthError {
     )]
     MigrationRequired,
 
-    /// Programmatic (CAPI) access is off for the account and only its owner may enable it, so the
-    /// login cannot mint a key. A one-time console step for the owner, not a retryable failure.
+    /// The signed-in user's role on the account does not permit programmatic (CAPI) access, so
+    /// the login cannot mint a key. A one-time step for someone who does hold the role, not a
+    /// retryable failure. `allowed_roles` is what SM reported as sufficient, already formatted.
     #[error(
-        "enabling programmatic access requires the Redis Cloud account owner; ask them to enable \
-         it once in the console, then run login again"
+        "your role on this Redis Cloud account cannot enable programmatic access; that needs \
+         {allowed_roles}. Ask someone who has it to enable it once in the console, then run \
+         login again"
     )]
-    NotAccountOwner,
+    NotAccountOwner { allowed_roles: String },
+
+    /// The account itself has API access switched off, so no role can mint a key. Only Redis can
+    /// turn it back on — it is not exposed to account owners.
+    #[error(
+        "programmatic access is not enabled for this Redis Cloud account; ask Redis support to \
+         enable API access for the account, then run login again"
+    )]
+    CapiDisabled,
+
+    /// `--account` named an account the signed-in user does not belong to. Carries what they do
+    /// have, so the caller can list the options instead of just refusing.
+    #[error("account {requested} is not one of yours; you belong to: {available}")]
+    UnknownAccount { requested: u64, available: String },
 
     /// SM challenged the login for multi-factor authentication (`user-mfa-required`). Carries the
     /// factor types SM offered, when it reports them.

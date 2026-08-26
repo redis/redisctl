@@ -97,7 +97,7 @@ fn apply_cloud_login_writes_profile_default_and_endpoints() {
     let mut config = Config::default();
     let store = CredentialStore::plaintext(); // never touches the keyring
     let creds = MintedCredentials {
-        account_id: Some("112117".to_string()),
+        account_id: Some(112117),
         email: Some("u@e.com".to_string()),
         api_key: "ACCT-KEY".to_string(),
         api_secret: "USER-SECRET".to_string(),
@@ -105,6 +105,11 @@ fn apply_cloud_login_writes_profile_default_and_endpoints() {
         refresh_token: Some("RT".to_string()),
         capi_key_name: "redisctl-demo".to_string(),
         redisctl_key_count: 1,
+        account_name: None,
+        accounts: vec![redisctl_core::auth::LoginAccount {
+            id: 112117,
+            name: None,
+        }],
     };
 
     config

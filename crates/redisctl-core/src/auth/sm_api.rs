@@ -22,6 +22,10 @@ use super::{AuthError, default_http_client, endpoint, truncate};
 /// this endpoint nests its errors as a JSON-encoded string, so it is matched on the body rather
 /// than through the `/login` error envelope.
 const INSUFFICIENT_PERMISSION_CODE: &str = "insufficient-permission";
+/// SM error code when the *account* cannot have programmatic access at all. On this flow the
+/// caller has already passed the role gate and mints for themselves, so the remaining cause is
+/// the account's `IsApiEnabled` flag being off — which only Redis can change.
+const FORBIDDEN_REQUEST_CODE: &str = "forbidden-request";
 /// SM error code returned when a password-only account must be linked to social sign-in before it
 /// can authenticate this way. The consent step is console-only.
 const SOCIAL_MIGRATION_REQUIRED_CODE: &str = "user-agreement-for-social-login-migration-missing";
@@ -204,6 +208,95 @@ struct CsrfToken {
 struct AccountsEnvelope {
     #[serde(default)]
     accounts: Vec<SmAccount>,
+}
+
+/// Every `error_code` in an SM error body, in order.
+///
+/// Same nesting as [`allowed_roles`]: `errors` is a JSON-encoded string holding the list. Used to
+/// classify on the *set* of codes present rather than on a substring, so a generic code cannot be
+/// matched out of an unrelated envelope.
+fn sm_error_codes(body: &str) -> Vec<String> {
+    fn codes(errors: &serde_json::Value) -> Vec<String> {
+        errors
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|e| {
+                        e.get("error_code")
+                            .or_else(|| e.get("code"))?
+                            .as_str()
+                            .map(str::to_string)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| {
+            let errors = v.get("errors")?.clone();
+            Some(match errors {
+                serde_json::Value::String(inner) => {
+                    codes(&serde_json::from_str::<serde_json::Value>(&inner).ok()?)
+                }
+                other => codes(&other),
+            })
+        })
+        .unwrap_or_default()
+}
+
+/// Roles SM named as sufficient in an `insufficient-permission` body, formatted for a message.
+///
+/// SM nests its error list as a JSON-encoded *string*, so reaching the params means parsing the
+/// body and then parsing `errors` again. Walking the decoded structure — rather than scanning the
+/// raw text — keeps this independent of key order inside each param object and of how role names
+/// are spelled. Falls back to `owner`, the only role that has ever held this permission, when
+/// nothing is parseable, so the message is never empty.
+fn allowed_roles(body: &str) -> String {
+    fn from_params(errors: &serde_json::Value) -> Option<Vec<String>> {
+        for err in errors.as_array()? {
+            for param in err.get("params")?.as_array()? {
+                if param.get("key")?.as_str()? != "allowed-roles" {
+                    continue;
+                }
+                let roles: Vec<String> = match param.get("value")? {
+                    serde_json::Value::Array(items) => items
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .map(str::to_string)
+                        .collect(),
+                    serde_json::Value::String(one) => vec![one.clone()],
+                    _ => continue,
+                };
+                if !roles.is_empty() {
+                    return Some(roles);
+                }
+            }
+        }
+        None
+    }
+
+    let roles = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| {
+            let errors = v.get("errors")?.clone();
+            // `errors` is normally a JSON-encoded string; tolerate it arriving already decoded.
+            match errors {
+                serde_json::Value::String(inner) => {
+                    from_params(&serde_json::from_str::<serde_json::Value>(&inner).ok()?)
+                }
+                other => from_params(&other),
+            }
+        })
+        .unwrap_or_default();
+    match roles.len() {
+        // Only ever `owner` in practice; phrase both cases so the message reads correctly if the
+        // set widens (SM has feature flags for exactly that).
+        0 => "the owner role".to_string(),
+        1 => format!("the {} role", roles[0]),
+        _ => format!("one of these roles: {}", roles.join(", ")),
+    }
 }
 
 impl SmApiClient {
@@ -389,10 +482,17 @@ impl SmApiClient {
         if body.contains("account_api_key_already_exists") {
             return Ok(());
         }
-        // Only an account owner can turn on programmatic access. Nothing the CLI can do, but the
-        // user can ask the owner to enable it once — after which the call above is a no-op.
+        // The caller's role does not carry the CAPI permission. Nothing the CLI can do, but
+        // someone who holds the role can enable it once — after which the call above is a no-op.
         if body.contains(INSUFFICIENT_PERMISSION_CODE) {
-            return Err(AuthError::NotAccountOwner);
+            return Err(AuthError::NotAccountOwner {
+                allowed_roles: allowed_roles(&body),
+            });
+        }
+        if status == reqwest::StatusCode::FORBIDDEN
+            && sm_error_codes(&body) == [FORBIDDEN_REQUEST_CODE]
+        {
+            return Err(AuthError::CapiDisabled);
         }
         Err(AuthError::Protocol(format!(
             "enabling CAPI failed ({status}): {}",
@@ -462,6 +562,30 @@ impl SmApiClient {
         self.session
             .as_ref()
             .ok_or_else(|| AuthError::Protocol("not logged in to the SM API".into()))
+    }
+
+    /// Rebind the session to `account_id` (`POST /accounts/setcurrent/{id}`).
+    ///
+    /// Every CAPI call resolves the account from the session — `createApiSecretKey` uses the
+    /// session's `userAccountId` — so this must happen *before* enabling access or minting, or the
+    /// key lands on the previous account. Annotated `LEGACY_ONLY` server-side, which the JSESSIONID
+    /// established by [`SmApiClient::login`] satisfies.
+    pub async fn set_current_account(&self, account_id: u64) -> Result<(), AuthError> {
+        let resp = self
+            .authed_post_json(
+                &format!("accounts/setcurrent/{account_id}"),
+                serde_json::json!({}),
+            )
+            .await?;
+        if resp.status().is_success() {
+            return Ok(());
+        }
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        Err(AuthError::Protocol(format!(
+            "could not switch to account {account_id} ({status}): {}",
+            truncate(&body)
+        )))
     }
 
     async fn authed_get(&self, path: &str) -> Result<reqwest::Response, AuthError> {
@@ -627,9 +751,84 @@ mod tests {
             })))
             .mount(&server)
             .await;
+        // The role SM named is carried through, not a hardcoded string.
+        match c.ensure_capi_enabled().await {
+            Err(AuthError::NotAccountOwner { allowed_roles }) => {
+                assert_eq!(allowed_roles, "the owner role")
+            }
+            other => panic!("expected NotAccountOwner, got {other:?}"),
+        }
+    }
+
+    /// `allowed-roles` reaches us escaped inside a JSON-encoded string. Parsing the structure
+    /// (rather than scanning the text) has to be independent of key order within a param and of
+    /// how role names are spelled, and anything unreadable must still say something accurate.
+    #[test]
+    fn allowed_roles_reads_the_param_regardless_of_shape() {
+        // The real wire shape: `errors` is a JSON-encoded string.
+        assert_eq!(
+            allowed_roles(
+                r#"{"errors":"[{\"error_code\":\"insufficient-permission\",\"params\":[{\"key\":\"allowed-roles\",\"value\":[\"owner\"]}]}]"}"#
+            ),
+            "the owner role"
+        );
+        // `value` before `key`, plus a second param that also has a value list: must not pick the
+        // wrong one. JSON object order carries no meaning, so this cannot be assumed away.
+        assert_eq!(
+            allowed_roles(
+                r#"{"errors":[{"params":[{"value":["owner"],"key":"allowed-roles"},{"value":["viewer"],"key":"current-role"}]}]}"#
+            ),
+            "the owner role"
+        );
+        // Several roles, including a name that is neither lowercase nor underscore-only.
+        assert_eq!(
+            allowed_roles(
+                r#"{"errors":[{"params":[{"key":"allowed-roles","value":["owner","billing_admin","Manager"]}]}]}"#
+            ),
+            "one of these roles: owner, billing_admin, Manager"
+        );
+        // No params, not JSON, or the param missing: name the only role that has ever held it.
+        assert_eq!(
+            allowed_roles(r#"{"errors":"insufficient-permission"}"#),
+            "the owner role"
+        );
+        assert_eq!(allowed_roles("not json at all"), "the owner role");
+        assert_eq!(
+            allowed_roles(r#"{"errors":[{"params":[{"key":"other","value":["x"]}]}]}"#),
+            "the owner role"
+        );
+    }
+
+    /// A generic code must not be matched out of an unrelated envelope.
+    #[test]
+    fn sm_error_codes_reads_every_nested_code() {
+        assert_eq!(
+            sm_error_codes(r#"{"errors":"[{\"error_code\":\"forbidden-request\"}]"}"#),
+            vec!["forbidden-request"]
+        );
+        assert_eq!(
+            sm_error_codes(r#"{"errors":[{"error_code":"a"},{"error_code":"b"}]}"#),
+            vec!["a", "b"]
+        );
+        assert!(sm_error_codes("not json").is_empty());
+    }
+
+    /// The account's own API access being off is a different failure from a role problem: no role
+    /// can fix it, so it must not be reported as "ask someone with the owner role".
+    #[tokio::test]
+    async fn ensure_capi_enabled_reports_a_disabled_account_distinctly() {
+        let server = MockServer::start().await;
+        let c = logged_in(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/accounts/cloud-api/cloudApiAccessKey"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+                "errors": "[{\"field_name\":null,\"error_code\":\"forbidden-request\"}]"
+            })))
+            .mount(&server)
+            .await;
         assert!(matches!(
             c.ensure_capi_enabled().await,
-            Err(AuthError::NotAccountOwner)
+            Err(AuthError::CapiDisabled)
         ));
     }
 
@@ -731,6 +930,36 @@ mod tests {
         let mut c = client(&server);
         assert!(matches!(
             c.login("ACCESS", None).await,
+            Err(AuthError::Protocol(_))
+        ));
+    }
+
+    /// Every account-scoped call resolves the account from the session, so a switch has to be a
+    /// real request to the documented path — the mock only matches that exact URL.
+    #[tokio::test]
+    async fn set_current_account_posts_to_setcurrent() {
+        let server = MockServer::start().await;
+        let c = logged_in(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/accounts/setcurrent/424242"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        c.set_current_account(424242).await.unwrap();
+    }
+
+    /// A refused switch must fail loudly; silently continuing would mint on the previous account.
+    #[tokio::test]
+    async fn set_current_account_surfaces_a_refusal() {
+        let server = MockServer::start().await;
+        let c = logged_in(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/accounts/setcurrent/1"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("nope"))
+            .mount(&server)
+            .await;
+        assert!(matches!(
+            c.set_current_account(1).await,
             Err(AuthError::Protocol(_))
         ));
     }
