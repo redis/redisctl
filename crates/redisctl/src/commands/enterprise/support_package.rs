@@ -27,10 +27,6 @@ pub enum SupportPackageCommands {
         #[arg(long = "file", short = 'f')]
         file: Option<PathBuf>,
 
-        /// Use new API endpoint (/v1/cluster/debuginfo) instead of deprecated one
-        #[arg(long)]
-        use_new_api: bool,
-
         /// Skip pre-flight checks
         #[arg(long)]
         skip_checks: bool,
@@ -74,10 +70,6 @@ pub enum SupportPackageCommands {
         /// Output file path (defaults to ./support-package-database-{uid}-{timestamp}.tar.gz)
         #[arg(long = "file", short = 'f')]
         file: Option<PathBuf>,
-
-        /// Use new API endpoint (/v1/bdbs/{uid}/debuginfo) instead of deprecated one
-        #[arg(long)]
-        use_new_api: bool,
 
         /// Skip pre-flight checks
         #[arg(long)]
@@ -123,10 +115,6 @@ pub enum SupportPackageCommands {
         #[arg(long = "file", short = 'f')]
         file: Option<PathBuf>,
 
-        /// Use new API endpoint (/v1/nodes/{uid}/debuginfo) instead of deprecated one
-        #[arg(long)]
-        use_new_api: bool,
-
         /// Skip pre-flight checks
         #[arg(long)]
         skip_checks: bool,
@@ -161,15 +149,6 @@ pub enum SupportPackageCommands {
         #[command(flatten)]
         async_ops: AsyncOperationArgs,
     },
-
-    /// List available support packages (if supported by API)
-    List,
-
-    /// Check status of support package generation
-    Status {
-        /// Task ID from async operation
-        task_id: String,
-    },
 }
 
 /// Result structure for JSON output
@@ -198,7 +177,6 @@ pub async fn handle_support_package_command(
     match cmd {
         SupportPackageCommands::Cluster {
             file,
-            use_new_api,
             skip_checks,
             optimize,
             no_optimize: _,
@@ -234,7 +212,6 @@ pub async fn handle_support_package_command(
                 conn_mgr,
                 profile_name,
                 output_path,
-                use_new_api,
                 &async_ops,
                 output_format,
                 optimization_opts,
@@ -249,7 +226,6 @@ pub async fn handle_support_package_command(
         SupportPackageCommands::Database {
             uid,
             file,
-            use_new_api,
             skip_checks,
             optimize,
             no_optimize: _,
@@ -289,7 +265,6 @@ pub async fn handle_support_package_command(
                 profile_name,
                 uid,
                 output_path,
-                use_new_api,
                 &async_ops,
                 output_format,
                 optimization_opts,
@@ -304,7 +279,6 @@ pub async fn handle_support_package_command(
         SupportPackageCommands::Node {
             uid,
             file,
-            use_new_api,
             skip_checks,
             optimize,
             no_optimize: _,
@@ -346,7 +320,6 @@ pub async fn handle_support_package_command(
                 profile_name,
                 uid,
                 output_path,
-                use_new_api,
                 &async_ops,
                 output_format,
                 optimization_opts,
@@ -356,12 +329,6 @@ pub async fn handle_support_package_command(
                 no_save,
             )
             .await
-        }
-
-        SupportPackageCommands::List => list_support_packages(conn_mgr, profile_name).await,
-
-        SupportPackageCommands::Status { task_id } => {
-            check_support_package_status(conn_mgr, profile_name, &task_id).await
         }
     }
 }
@@ -413,7 +380,6 @@ async fn generate_cluster_package(
     conn_mgr: &ConnectionManager,
     profile_name: Option<&str>,
     output_path: PathBuf,
-    use_new_api: bool,
     _async_ops: &AsyncOperationArgs,
     output_format: OutputFormat,
     optimization_opts: Option<OptimizationOptions>,
@@ -468,19 +434,11 @@ async fn generate_cluster_package(
 
     let start_time = std::time::Instant::now();
 
-    // Use the appropriate endpoint based on flag
     let debuginfo_handler = redis_enterprise::debuginfo::DebugInfoHandler::new(client);
-    let mut data = if use_new_api {
-        debuginfo_handler
-            .cluster_debuginfo_binary()
-            .await
-            .map_err(RedisCtlError::from)?
-    } else {
-        debuginfo_handler
-            .all_binary()
-            .await
-            .map_err(RedisCtlError::from)?
-    };
+    let mut data = debuginfo_handler
+        .cluster_debuginfo_binary()
+        .await
+        .map_err(RedisCtlError::from)?;
 
     let original_size = data.len();
 
@@ -548,7 +506,19 @@ async fn generate_cluster_package(
     // Output based on format
     match output_format {
         OutputFormat::Json => {
-            let mut result = SupportPackageResult {
+            #[cfg(feature = "upload")]
+            let message = if uploaded_path.is_some() {
+                format!(
+                    "Support package {} and uploaded to Files.com",
+                    if should_save { "created" } else { "uploaded" }
+                )
+            } else {
+                "Support package created successfully".to_string()
+            };
+            #[cfg(not(feature = "upload"))]
+            let message = "Support package created successfully".to_string();
+
+            let result = SupportPackageResult {
                 success: true,
                 package_type: "cluster".to_string(),
                 file_path: output_path.display().to_string(),
@@ -557,17 +527,9 @@ async fn generate_cluster_package(
                 elapsed_seconds: elapsed.as_secs(),
                 cluster_name,
                 cluster_version,
-                message: "Support package created successfully".to_string(),
+                message,
                 timestamp: chrono::Utc::now().to_rfc3339(),
             };
-
-            #[cfg(feature = "upload")]
-            if uploaded_path.is_some() {
-                result.message = format!(
-                    "Support package {} and uploaded to Files.com",
-                    if should_save { "created" } else { "uploaded" }
-                );
-            }
 
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
@@ -617,7 +579,6 @@ async fn generate_database_package(
     profile_name: Option<&str>,
     uid: u32,
     output_path: PathBuf,
-    use_new_api: bool,
     _async_ops: &AsyncOperationArgs,
     output_format: OutputFormat,
     optimization_opts: Option<OptimizationOptions>,
@@ -667,19 +628,11 @@ async fn generate_database_package(
 
     let start_time = std::time::Instant::now();
 
-    // Use the appropriate endpoint based on flag
     let debuginfo_handler = redis_enterprise::debuginfo::DebugInfoHandler::new(client);
-    let mut data = if use_new_api {
-        debuginfo_handler
-            .database_debuginfo_binary(uid)
-            .await
-            .context(format!("Failed to collect debug info for database {}", uid))?
-    } else {
-        debuginfo_handler
-            .all_bdb_binary(uid)
-            .await
-            .context(format!("Failed to collect debug info for database {}", uid))?
-    };
+    let mut data = debuginfo_handler
+        .database_debuginfo_binary(uid)
+        .await
+        .context(format!("Failed to collect debug info for database {}", uid))?;
 
     let original_size = data.len();
 
@@ -747,7 +700,19 @@ async fn generate_database_package(
     // Output based on format
     match output_format {
         OutputFormat::Json => {
-            let mut result = SupportPackageResult {
+            #[cfg(feature = "upload")]
+            let message = if uploaded_path.is_some() {
+                format!(
+                    "Database support package {} and uploaded to Files.com",
+                    if should_save { "created" } else { "uploaded" }
+                )
+            } else {
+                "Database support package created successfully".to_string()
+            };
+            #[cfg(not(feature = "upload"))]
+            let message = "Database support package created successfully".to_string();
+
+            let result = SupportPackageResult {
                 success: true,
                 package_type: format!("database-{}", uid),
                 file_path: output_path.display().to_string(),
@@ -756,17 +721,9 @@ async fn generate_database_package(
                 elapsed_seconds: elapsed.as_secs(),
                 cluster_name: Some(format!("Database {}", uid)),
                 cluster_version: database_name,
-                message: "Database support package created successfully".to_string(),
+                message,
                 timestamp: chrono::Utc::now().to_rfc3339(),
             };
-
-            #[cfg(feature = "upload")]
-            if uploaded_path.is_some() {
-                result.message = format!(
-                    "Database support package {} and uploaded to Files.com",
-                    if should_save { "created" } else { "uploaded" }
-                );
-            }
 
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
@@ -815,7 +772,6 @@ async fn generate_node_package(
     profile_name: Option<&str>,
     uid: Option<u32>,
     output_path: PathBuf,
-    use_new_api: bool,
     _async_ops: &AsyncOperationArgs,
     output_format: OutputFormat,
     optimization_opts: Option<OptimizationOptions>,
@@ -875,31 +831,18 @@ async fn generate_node_package(
 
     let start_time = std::time::Instant::now();
 
-    // Use the appropriate endpoint based on flag
     let debuginfo_handler = redis_enterprise::debuginfo::DebugInfoHandler::new(client);
     let mut data = if let Some(node_uid) = uid {
-        if use_new_api {
-            debuginfo_handler
-                .node_debuginfo_binary(node_uid)
-                .await
-                .context(format!(
-                    "Failed to collect debug info for node {}",
-                    node_uid
-                ))?
-        } else {
-            debuginfo_handler
-                .node_binary()
-                .await
-                .map_err(RedisCtlError::from)?
-        }
-    } else if use_new_api {
         debuginfo_handler
-            .nodes_debuginfo_binary()
+            .node_debuginfo_binary(node_uid)
             .await
-            .map_err(RedisCtlError::from)?
+            .context(format!(
+                "Failed to collect debug info for node {}",
+                node_uid
+            ))?
     } else {
         debuginfo_handler
-            .node_binary()
+            .nodes_debuginfo_binary()
             .await
             .map_err(RedisCtlError::from)?
     };
@@ -976,7 +919,26 @@ async fn generate_node_package(
                 "nodes".to_string()
             };
 
-            let mut result = SupportPackageResult {
+            #[cfg(feature = "upload")]
+            let message = if uploaded_path.is_some() {
+                format!(
+                    "{} support package {} and uploaded to Files.com",
+                    if uid.is_some() { "Node" } else { "Nodes" },
+                    if should_save { "created" } else { "uploaded" }
+                )
+            } else if uid.is_some() {
+                "Node support package created successfully".to_string()
+            } else {
+                "Nodes support package created successfully".to_string()
+            };
+            #[cfg(not(feature = "upload"))]
+            let message = if uid.is_some() {
+                "Node support package created successfully".to_string()
+            } else {
+                "Nodes support package created successfully".to_string()
+            };
+
+            let result = SupportPackageResult {
                 success: true,
                 package_type,
                 file_path: output_path.display().to_string(),
@@ -985,22 +947,9 @@ async fn generate_node_package(
                 elapsed_seconds: elapsed.as_secs(),
                 cluster_name: uid.map(|id| format!("Node {}", id)),
                 cluster_version: node_address,
-                message: if uid.is_some() {
-                    "Node support package created successfully".to_string()
-                } else {
-                    "Nodes support package created successfully".to_string()
-                },
+                message,
                 timestamp: chrono::Utc::now().to_rfc3339(),
             };
-
-            #[cfg(feature = "upload")]
-            if uploaded_path.is_some() {
-                result.message = format!(
-                    "{} support package {} and uploaded to Files.com",
-                    if uid.is_some() { "Node" } else { "Nodes" },
-                    if should_save { "created" } else { "uploaded" }
-                );
-            }
 
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
@@ -1041,51 +990,6 @@ async fn generate_node_package(
     }
 
     Ok(())
-}
-
-/// List available support packages (placeholder - API doesn't support this yet)
-async fn list_support_packages(
-    _conn_mgr: &ConnectionManager,
-    _profile_name: Option<&str>,
-) -> CliResult<()> {
-    eprintln!("Note: Listing support packages is not currently supported by the API");
-    eprintln!("Support packages are generated on-demand and not stored on the server");
-    Ok(())
-}
-
-/// Check status of support package generation
-async fn check_support_package_status(
-    conn_mgr: &ConnectionManager,
-    profile_name: Option<&str>,
-    task_id: &str,
-) -> CliResult<()> {
-    let client = conn_mgr.create_enterprise_client(profile_name).await?;
-
-    let debuginfo_handler = redis_enterprise::debuginfo::DebugInfoHandler::new(client);
-
-    match debuginfo_handler.status(task_id).await {
-        Ok(status) => {
-            println!("Support Package Generation Status");
-            println!("=================================");
-            println!("Task ID: {}", status.task_id);
-            println!("Status: {}", status.status);
-
-            if let Some(progress) = status.progress {
-                println!("Progress: {:.0}%", progress);
-            }
-
-            if let Some(error) = status.error {
-                println!("Error: {}", error);
-            }
-
-            Ok(())
-        }
-        Err(e) => {
-            eprintln!("Failed to get status for task {}: {}", task_id, e);
-            eprintln!("\nNote: Status checking is only available for async operations");
-            Err(e.into())
-        }
-    }
 }
 
 /// Format file size for display

@@ -125,27 +125,10 @@ redisctl enterprise services update --name <service> --data '{...}'
 redisctl enterprise diagnostics get
 redisctl enterprise diagnostics update --data '{...}'
 
-# Run diagnostic checks
-redisctl enterprise diagnostics run
-
-# List available checks and reports
-redisctl enterprise diagnostics list-checks
-redisctl enterprise diagnostics list-reports
-
-# Get the last or a specific diagnostic report
-redisctl enterprise diagnostics last-report
-redisctl enterprise diagnostics get-report <ID>
-
-# Support package for Redis support
+# Generate a support package through the documented binary endpoints
 redisctl enterprise support-package cluster
-redisctl enterprise support-package database
-redisctl enterprise support-package node
-
-# Check status of an async support-package generation task
-redisctl enterprise support-package status <task-id>
-
-# List previously generated support packages
-redisctl enterprise support-package list
+redisctl enterprise support-package database <database-uid>
+redisctl enterprise support-package node [node-uid]
 ```
 
 ## Tips

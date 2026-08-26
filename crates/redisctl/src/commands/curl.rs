@@ -21,6 +21,7 @@ pub fn format_cloud_curl(
 
     parts.push(format!("'{}{}'", info.base_url, path));
     parts.push("-H 'Accept: application/json'".to_string());
+    parts.push(format!("-H 'User-Agent: {}'", info.user_agent));
     parts.push("-H 'x-api-key: <REDACTED>'".to_string());
     parts.push("-H 'x-api-secret-key: <REDACTED>'".to_string());
 
@@ -51,6 +52,7 @@ pub fn format_enterprise_curl(
 
     parts.push(format!("'{}{}'", info.base_url, path));
     parts.push("-H 'Accept: application/json'".to_string());
+    parts.push(format!("-H 'User-Agent: {}'", info.user_agent));
     parts.push("-u '<REDACTED>:<REDACTED>'".to_string());
 
     if let Some(ref ca_cert_path) = info.ca_cert {
@@ -83,6 +85,7 @@ mod tests {
         assert!(result.contains("'https://api.redislabs.com/v1/subscriptions'"));
         assert!(result.contains("x-api-key: <REDACTED>"));
         assert!(result.contains("x-api-secret-key: <REDACTED>"));
+        assert!(result.contains("User-Agent: redisctl/test"));
         assert!(!result.contains("-d "));
         assert!(!result.contains("Content-Type"));
     }
@@ -117,6 +120,7 @@ mod tests {
         assert!(result.contains("-X GET"));
         assert!(result.contains("'https://cluster:9443/v1/cluster'"));
         assert!(result.contains("-u '<REDACTED>:<REDACTED>'"));
+        assert!(result.contains("User-Agent: redisctl/test"));
         assert!(!result.contains("--cacert"));
     }
 

@@ -2,10 +2,12 @@
 name = "redisctl-mcp"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+documentation = "https://docs.rs/redisctl-mcp"
 description = "MCP (Model Context Protocol) server for Redis Cloud and Enterprise"
 readme = "README.md"
 keywords = ["redis", "mcp", "ai", "cloud", "enterprise"]
@@ -15,9 +17,29 @@ categories = ["api-bindings", "development-tools"]
 name = "redisctl-mcp"
 path = "src/main.rs"
 
+[[test]]
+name = "cloud_tools"
+required-features = ["cloud", "test-support"]
+
+[[test]]
+name = "enterprise_mcp_docker_integration_tests"
+required-features = ["enterprise", "test-support"]
+
+[[test]]
+name = "enterprise_tools"
+required-features = ["enterprise", "test-support"]
+
+[[test]]
+name = "redis_stack_tools"
+required-features = ["database", "test-support"]
+
+[[test]]
+name = "redis_tools"
+required-features = ["database", "test-support"]
+
 [dependencies]
 # MCP framework
-tower-mcp = { version = "0.8.2", features = ["http", "oauth", "dynamic-tools"] }
+tower-mcp = { version = "0.8.2", features = ["http", "dynamic-tools"] }
 schemars = "1.2"
 
 # Internal crates
@@ -51,7 +73,7 @@ async-trait = { workspace = true }
 # CLI
 clap = { workspace = true }
 
-# HTTP/OAuth
+# HTTP middleware
 tower = { workspace = true }
 
 [features]
@@ -61,11 +83,13 @@ cloud = ["dep:redis-cloud"]
 enterprise = ["dep:redis-enterprise"]
 database = ["dep:redis", "dep:urlencoding"]
 secure-storage = ["redisctl-core/secure-storage"]
+# Internal integration-test seam; not part of the supported Rust API.
 test-support = []
 
 [dev-dependencies]
 tokio = { workspace = true }
 tempfile = { workspace = true }
+tower-mcp = { version = "0.8.2", features = ["testing"] }
 redis-cloud = { workspace = true, features = ["test-support"] }
 redis-enterprise = { workspace = true, features = ["test-support"] }
 wiremock = { workspace = true }
@@ -73,4 +97,4 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 redis = { workspace = true }
 serial_test = { workspace = true }
-docker-wrapper = { git = "https://github.com/joshrotenberg/docker-wrapper", features = ["testing", "template-redis"] }
+docker-wrapper = { git = "https://github.com/joshrotenberg/docker-wrapper", rev = "e122332360311e4acf4914ab4b8c97bc84b30ac1", features = ["testing", "template-redis"] }

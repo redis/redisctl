@@ -2,10 +2,12 @@
 name = "redisctl"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+documentation.workspace = true
 description = "Unified CLI for Redis Cloud and Enterprise"
 keywords = ["redis", "cli", "cloud", "enterprise", "database"]
 categories = ["command-line-utilities", "api-bindings"]
@@ -40,7 +42,7 @@ url = { workspace = true }
 urlencoding = { workspace = true }
 dialoguer = "0.11"
 colored = "2.1"
-tabled = { version = "0.17", features = ["ansi"] }
+tabled = { version = "0.21", features = ["ansi"] }
 terminal_size = "0.4"
 indicatif = "0.18"
 unicode-segmentation = "1.12"
@@ -89,7 +91,7 @@ tokio = { workspace = true }
 serde_json = { workspace = true }
 redis = { workspace = true }
 # Using git until testing feature is released
-docker-wrapper = { git = "https://github.com/joshrotenberg/docker-wrapper", features = ["testing", "template-redis"] }
+docker-wrapper = { git = "https://github.com/joshrotenberg/docker-wrapper", rev = "e122332360311e4acf4914ab4b8c97bc84b30ac1", features = ["testing", "template-redis"] }
 
 [[bench]]
 name = "api_performance"

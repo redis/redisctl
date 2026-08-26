@@ -167,9 +167,6 @@ pub async fn handle_cluster_command(
             cluster_impl::disable_maintenance_mode(conn_mgr, profile_name, output_format, query)
                 .await
         }
-        EnterpriseClusterCommands::DebugInfo => {
-            cluster_impl::collect_debug_info(conn_mgr, profile_name, output_format, query).await
-        }
         EnterpriseClusterCommands::CheckStatus => {
             cluster_impl::check_cluster_status(conn_mgr, profile_name, output_format, query).await
         }

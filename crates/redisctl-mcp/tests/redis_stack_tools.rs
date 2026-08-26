@@ -13,7 +13,8 @@
 //! REUSE_CONTAINERS=1 cargo test -p redisctl-mcp --test redis_stack_tools --all-features -- --ignored --nocapture
 //! ```
 
-use std::collections::HashMap;
+mod support;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -24,9 +25,9 @@ use serial_test::serial;
 use tokio::sync::OnceCell;
 use tower_mcp::Tool;
 
-use redisctl_mcp::policy::{Policy, PolicyConfig, SafetyTier};
-use redisctl_mcp::state::AppState;
+use redisctl_mcp::AppState;
 use redisctl_mcp::tools::redis;
+use support::{database_state_full, database_state_readonly, database_state_write};
 
 // ============================================================================
 // Test infrastructure
@@ -80,63 +81,15 @@ fn redis_url(port: u16) -> String {
 }
 
 fn make_state(port: u16) -> Arc<AppState> {
-    let policy = Arc::new(Policy::new(
-        PolicyConfig::default(),
-        HashMap::new(),
-        "test".to_string(),
-    ));
-    Arc::new(
-        AppState::new(
-            redisctl_mcp::state::CredentialSource::Profiles(vec![]),
-            policy,
-            Some(redis_url(port)),
-            false,
-            None,
-        )
-        .unwrap(),
-    )
+    database_state_readonly(redis_url(port))
 }
 
 fn make_rw_state(port: u16) -> Arc<AppState> {
-    let policy = Arc::new(Policy::new(
-        PolicyConfig {
-            tier: SafetyTier::ReadWrite,
-            ..Default::default()
-        },
-        HashMap::new(),
-        "test".to_string(),
-    ));
-    Arc::new(
-        AppState::new(
-            redisctl_mcp::state::CredentialSource::Profiles(vec![]),
-            policy,
-            Some(redis_url(port)),
-            false,
-            None,
-        )
-        .unwrap(),
-    )
+    database_state_write(redis_url(port))
 }
 
 fn make_full_state(port: u16) -> Arc<AppState> {
-    let policy = Arc::new(Policy::new(
-        PolicyConfig {
-            tier: SafetyTier::Full,
-            ..Default::default()
-        },
-        HashMap::new(),
-        "test".to_string(),
-    ));
-    Arc::new(
-        AppState::new(
-            redisctl_mcp::state::CredentialSource::Profiles(vec![]),
-            policy,
-            Some(redis_url(port)),
-            false,
-            None,
-        )
-        .unwrap(),
-    )
+    database_state_full(redis_url(port))
 }
 
 async fn call_tool_text(tool: &Tool, input: serde_json::Value) -> String {

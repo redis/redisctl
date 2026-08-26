@@ -33,7 +33,7 @@ pub enum ModuleCommands {
         uid: String,
 
         /// Force deletion without confirmation
-        #[arg(long, short)]
+        #[arg(long)]
         force: bool,
     },
 

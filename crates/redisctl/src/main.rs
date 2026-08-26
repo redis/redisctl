@@ -325,7 +325,8 @@ fn maybe_inject_prefix(args: Vec<String>) -> Vec<String> {
                                 error::CliDiagnostic::error(&format!("{}", e)).print();
                             }
                         }
-                        std::process::exit(1);
+                        // Every arm above is a profile or config-file problem.
+                        std::process::exit(error::exit_code::CONFIG);
                     }
                 }
             }
@@ -350,7 +351,9 @@ fn maybe_inject_prefix(args: Vec<String>) -> Vec<String> {
                     ],
                 )
                 .print();
-                std::process::exit(1);
+                // The command is ambiguous as invoked: the platform has to be
+                // named or inferable.
+                std::process::exit(error::exit_code::USAGE);
             }
         }
     } else {
@@ -423,7 +426,7 @@ async fn main() -> Result<()> {
             std::process::exit(se.exit_code as i32);
         }
         e.print_diagnostic(cli.output);
-        std::process::exit(1);
+        std::process::exit(e.exit_code());
     }
 
     Ok(())
@@ -680,10 +683,12 @@ async fn execute_enterprise_command(
             )
             .await
         }
-        Alerts(alerts_cmd) => alerts_cmd
-            .execute(&conn_mgr.config, profile, output, query)
+        Alerts(alerts_cmd) => {
+            commands::enterprise::alerts::handle_alerts_command(
+                conn_mgr, profile, alerts_cmd, output, query,
+            )
             .await
-            .map_err(RedisCtlError::from),
+        }
         BdbGroup(bdb_group_cmd) => {
             commands::enterprise::bdb_group::handle_bdb_group_command(
                 conn_mgr,
@@ -862,10 +867,16 @@ async fn execute_enterprise_command(
             )
             .await
         }
-        License(license_cmd) => license_cmd
-            .execute(&conn_mgr.config, profile, output, query)
+        License(license_cmd) => {
+            commands::enterprise::license::handle_license_command(
+                conn_mgr,
+                profile,
+                license_cmd,
+                output,
+                query,
+            )
             .await
-            .map_err(RedisCtlError::from),
+        }
         Migration(migration_cmd) => {
             commands::enterprise::migration::handle_migration_command(
                 conn_mgr,
@@ -1149,7 +1160,7 @@ async fn handle_cloud_workflow_command(
                 .await
                 .map_err(|e| match e {
                     RedisCtlError::MissingCredentials { .. }
-                    | RedisCtlError::NoProfileConfigured
+                    | RedisCtlError::NoProfileConfigured { .. }
                     | RedisCtlError::ProfileNotFound { .. }
                     | RedisCtlError::AuthenticationFailed { .. } => {
                         RedisCtlError::Structured(Box::new(StructuredError::not_authenticated(
@@ -1224,10 +1235,15 @@ async fn handle_enterprise_workflow_command(
             }
             Ok(())
         }
-        License(license_workflow_cmd) => license_workflow_cmd
-            .execute(&conn_mgr.config, output, None)
+        License(license_workflow_cmd) => {
+            commands::enterprise::license_workflow::handle_license_workflow_command(
+                conn_mgr,
+                license_workflow_cmd,
+                output,
+                None,
+            )
             .await
-            .map_err(RedisCtlError::from),
+        }
         InitCluster {
             name,
             username,
@@ -1235,6 +1251,7 @@ async fn handle_enterprise_workflow_command(
             skip_database,
             database_name,
             database_memory_gb,
+            database_redis_version,
             // init-cluster does not consume the async flags; the value used to
             // flow into WorkflowContext.wait_timeout, which was never read.
             async_ops: _,
@@ -1246,6 +1263,9 @@ async fn handle_enterprise_workflow_command(
             args.insert("create_database", !skip_database);
             args.insert("database_name", database_name);
             args.insert("database_memory_gb", database_memory_gb);
+            if let Some(database_redis_version) = database_redis_version {
+                args.insert("database_redis_version", database_redis_version);
+            }
 
             let context = WorkflowContext {
                 conn_mgr: conn_mgr.clone(),
@@ -1506,9 +1526,150 @@ async fn execute_cloud_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Command;
+
+    const DESTRUCTIVE_COMMANDS: &[&str] = &[
+        "redisctl cloud acl delete-acl-user",
+        "redisctl cloud acl delete-redis-rule",
+        "redisctl cloud acl delete-role",
+        "redisctl cloud connectivity privatelink delete",
+        "redisctl cloud connectivity psc aa-endpoint-delete",
+        "redisctl cloud connectivity psc aa-service-delete",
+        "redisctl cloud connectivity psc endpoint-delete",
+        "redisctl cloud connectivity psc service-delete",
+        "redisctl cloud connectivity tgw aa-attachment-delete",
+        "redisctl cloud connectivity tgw attachment-delete",
+        "redisctl cloud connectivity vpc-peering delete",
+        "redisctl cloud connectivity vpc-peering delete-aa",
+        "redisctl cloud database delete",
+        "redisctl cloud database flush",
+        "redisctl cloud database flush-crdb",
+        "redisctl cloud fixed-database delete",
+        "redisctl cloud fixed-subscription delete",
+        "redisctl cloud provider-account delete",
+        "redisctl cloud subscription delete",
+        "redisctl cloud subscription delete-aa-regions",
+        "redisctl cloud user delete",
+        "redisctl enterprise acl delete",
+        "redisctl enterprise bdb-group delete",
+        "redisctl enterprise cluster reset",
+        "redisctl enterprise cm-settings import",
+        "redisctl enterprise cm-settings reset",
+        "redisctl enterprise cm-settings set",
+        "redisctl enterprise cm-settings set-value",
+        "redisctl enterprise crdb delete",
+        "redisctl enterprise crdb flush-instance",
+        "redisctl enterprise crdb-task cancel",
+        "redisctl enterprise database delete",
+        "redisctl enterprise database flush",
+        "redisctl enterprise database upgrade",
+        "redisctl enterprise module delete",
+        "redisctl enterprise node remove",
+        "redisctl enterprise node restart",
+        "redisctl enterprise role delete",
+        "redisctl enterprise shard bulk-failover",
+        "redisctl enterprise shard bulk-migrate",
+        "redisctl enterprise shard failover",
+        "redisctl enterprise shard migrate",
+        "redisctl enterprise suffix delete",
+        "redisctl enterprise user delete",
+    ];
+
+    const LEGACY_YES_ALIAS_COMMANDS: &[&str] = &[
+        "redisctl cloud connectivity psc aa-endpoint-delete",
+        "redisctl cloud connectivity psc aa-service-delete",
+        "redisctl cloud connectivity psc endpoint-delete",
+        "redisctl cloud connectivity psc service-delete",
+        "redisctl cloud connectivity tgw aa-attachment-delete",
+        "redisctl cloud connectivity tgw attachment-delete",
+        "redisctl cloud fixed-database delete",
+        "redisctl cloud fixed-subscription delete",
+    ];
 
     fn args(s: &str) -> Vec<String> {
         s.split_whitespace().map(String::from).collect()
+    }
+
+    fn inspect_confirmation_args(
+        command: &Command,
+        parents: &[String],
+        force_paths: &mut Vec<String>,
+        legacy_alias_paths: &mut Vec<String>,
+    ) {
+        let mut path = parents.to_vec();
+        path.push(command.get_name().to_string());
+        let display_path = path.join(" ");
+
+        for argument in command.get_arguments() {
+            assert_ne!(
+                argument.get_long(),
+                Some("yes"),
+                "{display_path} exposes non-canonical --yes"
+            );
+
+            if argument.get_long() == Some("force") {
+                assert_eq!(
+                    argument.get_short(),
+                    None,
+                    "{display_path} exposes ambiguous -f confirmation bypass"
+                );
+                force_paths.push(display_path.clone());
+
+                let has_legacy_long = argument
+                    .get_all_aliases()
+                    .is_some_and(|aliases| aliases.contains(&"yes"));
+                let has_legacy_short = argument
+                    .get_all_short_aliases()
+                    .is_some_and(|aliases| aliases.contains(&'y'));
+                assert_eq!(
+                    has_legacy_long, has_legacy_short,
+                    "{display_path} must retain --yes and -y together"
+                );
+
+                if has_legacy_long {
+                    assert!(
+                        argument
+                            .get_visible_aliases()
+                            .is_none_or(|aliases| aliases.is_empty()),
+                        "{display_path} must hide the deprecated --yes alias; visible aliases: {:?}",
+                        argument.get_visible_aliases()
+                    );
+                    assert!(
+                        argument
+                            .get_visible_short_aliases()
+                            .is_none_or(|aliases| aliases.is_empty()),
+                        "{display_path} must hide the deprecated -y alias"
+                    );
+                    legacy_alias_paths.push(display_path.clone());
+                }
+            }
+        }
+
+        for subcommand in command.get_subcommands() {
+            inspect_confirmation_args(subcommand, &path, force_paths, legacy_alias_paths);
+        }
+    }
+
+    #[test]
+    fn command_tree_is_valid() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn destructive_commands_use_long_only_force() {
+        let mut force_paths = Vec::new();
+        let mut legacy_alias_paths = Vec::new();
+        inspect_confirmation_args(
+            &Cli::command(),
+            &[],
+            &mut force_paths,
+            &mut legacy_alias_paths,
+        );
+        force_paths.sort();
+        legacy_alias_paths.sort();
+
+        assert_eq!(force_paths, DESTRUCTIVE_COMMANDS);
+        assert_eq!(legacy_alias_paths, LEGACY_YES_ALIAS_COMMANDS);
     }
 
     // --- Passthrough tests ---

@@ -1,6 +1,6 @@
 # Tools Reference
 
-The redisctl MCP server exposes **392 tools** across 4 toolsets and 2 system tools for managing Redis Cloud, Redis Enterprise, and direct database operations.
+The redisctl MCP server exposes **375 tools** across 4 toolsets and 2 system tools for managing Redis Cloud, Redis Enterprise, and direct database operations. The machine-checked [MCP catalog](compatibility.md) is the compatibility source of truth.
 
 Tools are organized into **toolsets** (Cloud, Enterprise, Database, App) and further into **sub-modules** that can be selectively loaded with the [`--tools` flag](configuration.md#the-tools-flag).
 
@@ -18,7 +18,7 @@ These tools are always available regardless of `--tools` selection or visibility
 | `list_available_tools` | List all available tools grouped by toolset, showing active vs. hidden |
 | `show_policy` | Show the active safety tier, per-toolset overrides, and allow/deny lists |
 
-## Cloud Toolset (151 tools)
+## Cloud Toolset (148 tools)
 
 Redis Cloud management tools. Select with `--tools cloud` or target specific sub-modules.
 
@@ -37,7 +37,7 @@ Manages flexible subscriptions and their databases -- creation, configuration, b
 | `get_backup_status` | Get database backup status |
 | `get_database_tags` | Get database tags |
 
-### `cloud:account` (35 tools)
+### `cloud:account` (33 tools)
 
 Account management -- users, ACL users/roles/rules, cloud provider accounts, payment methods, cost reports, and task tracking.
 
@@ -52,7 +52,7 @@ Account management -- users, ACL users/roles/rules, cloud provider accounts, pay
 | `generate_cost_report` | Generate cost reports |
 | `list_tasks` | List recent async tasks |
 
-### `cloud:networking` (52 tools)
+### `cloud:networking` (51 tools)
 
 Network connectivity -- VPC peering, Transit Gateway, Private Service Connect (PSC), and AWS PrivateLink for both standard and Active-Active subscriptions.
 
@@ -88,11 +88,11 @@ Essentials/Fixed tier subscriptions and databases -- plans, backup, import, tagg
 |------|-------------|
 | `cloud_raw_api` | Execute arbitrary Redis Cloud REST API requests |
 
-## Enterprise Toolset (92 tools)
+## Enterprise Toolset (85 tools)
 
 Redis Enterprise cluster management tools. Select with `--tools enterprise` or target specific sub-modules.
 
-### `enterprise:cluster` (24 tools)
+### `enterprise:cluster` (23 tools)
 
 Cluster-level configuration -- license management, cluster policies, maintenance mode, TLS certificates, services, and node lifecycle.
 
@@ -107,24 +107,23 @@ Cluster-level configuration -- license management, cluster policies, maintenance
 | `list_nodes` | List all cluster nodes |
 | `get_node` | Get node details |
 
-### `enterprise:databases` (20 tools)
+### `enterprise:databases` (19 tools)
 
-Database and Active-Active CRDB management -- CRUD, backup/import/export/restore, stats, endpoints, alerts, and version upgrades.
+Database and Active-Active CRDB management -- CRUD, backup/import/export/restore, stats, alerts, and version upgrades.
 
 | Representative Tools | Description |
 |---------------------|-------------|
 | `list_enterprise_databases` | List all databases |
 | `get_enterprise_database` | Get database details |
 | `get_database_stats` | Get database statistics |
-| `get_database_endpoints` | Get database endpoints |
 | `create_enterprise_database` | Create a database *(write)* |
 | `update_enterprise_database` | Update database config *(write)* |
 | `backup_enterprise_database` | Trigger backup *(write)* |
 | `list_enterprise_crdbs` | List Active-Active databases |
 
-### `enterprise:rbac` (20 tools)
+### `enterprise:rbac` (19 tools)
 
-Role-based access control -- users, roles, ACL rules, built-in roles, and LDAP configuration.
+Role-based access control -- users, roles, ACL rules, and LDAP configuration.
 
 | Representative Tools | Description |
 |---------------------|-------------|
@@ -137,9 +136,9 @@ Role-based access control -- users, roles, ACL rules, built-in roles, and LDAP c
 | `list_enterprise_acls` | List ACL rules |
 | `get_enterprise_ldap_config` | Get LDAP configuration |
 
-### `enterprise:observability` (16 tools)
+### `enterprise:observability` (13 tools)
 
-Monitoring -- alerts, audit logs, aggregate stats for nodes/databases/shards, debug info, and module listing.
+Monitoring -- alerts, audit logs, aggregate stats for nodes/databases/shards, and module listing.
 
 | Representative Tools | Description |
 |---------------------|-------------|
@@ -152,15 +151,14 @@ Monitoring -- alerts, audit logs, aggregate stats for nodes/databases/shards, de
 | `get_shard_stats` | Get shard statistics |
 | `list_modules` | List available modules |
 
-### `enterprise:proxy` (4 tools)
+### `enterprise:proxy` (3 tools)
 
-Proxy management -- list, inspect, stats, and configuration updates.
+Proxy management -- list, inspect, and configuration updates.
 
 | Tool | Description |
 |------|-------------|
 | `list_enterprise_proxies` | List all proxy instances |
 | `get_enterprise_proxy` | Get proxy details |
-| `get_enterprise_proxy_stats` | Get proxy statistics |
 | `update_enterprise_proxy` | Update proxy configuration *(write)* |
 
 ### `enterprise:services` (7 tools)
@@ -183,7 +181,7 @@ System service lifecycle -- list, inspect, start, stop, restart, and status chec
 |------|-------------|
 | `enterprise_raw_api` | Execute arbitrary Redis Enterprise REST API requests |
 
-## Database Toolset (139 tools)
+## Database Toolset (132 tools)
 
 Direct Redis database operations. Requires `--database-url` connection. Select with `--tools database` or target specific sub-modules.
 
@@ -202,7 +200,7 @@ Server-level operations -- connectivity, server info, client listing, slow log, 
 | `redis_config_get` | Get config values |
 | `redis_config_set` | Set config values *(write)* |
 
-### `database:keys` (33 tools)
+### `database:keys` (31 tools)
 
 Key-space operations -- listing, scanning, get/set, type inspection, TTL, existence checks, memory usage, key mutation, multi-key operations, atomic counters, and string manipulation.
 
@@ -222,7 +220,7 @@ Key-space operations -- listing, scanning, get/set, type inspection, TTL, existe
 | `redis_incr` | Increment integer value *(write)* |
 | `redis_decr` | Decrement integer value *(write)* |
 
-### `database:structures` (41 tools)
+### `database:structures` (42 tools)
 
 Data structure operations -- hashes, lists, sets, sorted sets, streams, pub/sub inspection, set algebra, and granular field/member accessors.
 
@@ -251,7 +249,7 @@ Data structure operations -- hashes, lists, sets, sorted sets, streams, pub/sub 
 | `redis_xlen` | Get stream length |
 | `redis_pubsub_channels` | List active pub/sub channels |
 
-### `database:diagnostics` (5 tools)
+### `database:diagnostics` (4 tools)
 
 Higher-level diagnostic tools that aggregate information from multiple Redis commands.
 
@@ -260,8 +258,7 @@ Higher-level diagnostic tools that aggregate information from multiple Redis com
 | `redis_health_check` | Comprehensive health check |
 | `redis_key_summary` | Key distribution summary |
 | `redis_hotkeys` | Hot key detection |
-| `redis_connection_summary` | Connection pool summary |
-| `redis_memory_doctor` | Memory usage analysis and recommendations |
+| `redis_connection_summary` | Client totals, top source IPs, and idle/blocked connection analysis |
 
 ### `database:json` (16 tools)
 
@@ -278,9 +275,9 @@ JSON document operations using RedisJSON -- get, set, merge, delete, increment, 
 | `redis_json_objkeys` | Get JSON object keys |
 | `redis_json_numincrby` | Increment numeric JSON value *(write)* |
 
-### `database:search` (19 tools)
+### `database:search` (18 tools)
 
-Full-text and vector search via RediSearch -- index management, FT.SEARCH, FT.AGGREGATE, suggest, explain, profile, and cursor-based result iteration.
+Full-text and vector search via RediSearch -- index management, aliases, dictionaries, synonyms, FT.SEARCH, FT.AGGREGATE, explain, and profile.
 
 | Representative Tools | Description |
 |---------------------|-------------|
@@ -291,7 +288,7 @@ Full-text and vector search via RediSearch -- index management, FT.SEARCH, FT.AG
 | `redis_ft_list` | List all search indexes |
 | `redis_ft_explain` | Explain query execution plan |
 | `redis_ft_profile` | Profile query execution |
-| `redis_ft_sugadd` | Add suggestion to index *(write)* |
+| `redis_ft_aliasupdate` | Atomically repoint an index alias *(write)* |
 
 ### `database:aliases` (4 tools)
 
@@ -304,18 +301,14 @@ Session-scoped command aliases -- save, list, run, and delete named command sequ
 | `redis_alias_run` | Execute a saved alias |
 | `redis_alias_delete` | Delete a saved alias *(write)* |
 
-### `database:bulk` (6 tools)
+### `database:bulk` (2 tools)
 
-Bulk and batch operations -- multi-key get/delete, TTL management, key migration, and pattern-based bulk operations.
+Bulk data generation and loading for repeatable prototyping and test workflows.
 
-| Representative Tools | Description |
-|---------------------|-------------|
-| `redis_bulk_get` | Get multiple keys by pattern |
-| `redis_bulk_delete` | Delete keys by pattern *(write)* |
-| `redis_bulk_expire` | Set TTL on multiple keys *(write)* |
-| `redis_bulk_copy` | Copy keys to another database *(write)* |
-| `redis_pipeline_exec` | Execute a batch of commands *(write)* |
-| `redis_bulk_ttl_report` | Report TTL distribution |
+| Tool | Description |
+|------|-------------|
+| `redis_bulk_load` | Execute a bounded batch of Redis commands *(write)* |
+| `redis_seed` | Generate representative Redis data structures *(write)* |
 
 ### `database:raw` (1 tool)
 
@@ -342,12 +335,12 @@ Profile and configuration management tools. Always compiled in; no sub-modules.
 
 | Toolset | Sub-modules | Tools |
 |---------|-------------|-------|
-| Cloud | `subscriptions` (36), `account` (35), `networking` (52), `fixed` (27), `raw` (1) | **151** |
-| Enterprise | `cluster` (24), `databases` (20), `rbac` (20), `observability` (16), `proxy` (4), `services` (7), `raw` (1) | **92** |
-| Database | `server` (14), `keys` (33), `structures` (41), `diagnostics` (5), `json` (16), `search` (19), `aliases` (4), `bulk` (6), `raw` (1) | **139** |
+| Cloud | `subscriptions` (36), `account` (33), `networking` (51), `fixed` (27), `raw` (1) | **148** |
+| Enterprise | `cluster` (23), `databases` (19), `rbac` (19), `observability` (13), `proxy` (3), `services` (7), `raw` (1) | **85** |
+| Database | `server` (14), `keys` (31), `structures` (42), `diagnostics` (4), `json` (16), `search` (18), `aliases` (4), `bulk` (2), `raw` (1) | **132** |
 | App | *(flat)* | **8** |
 | System | *(always on)* | **2** |
-| **Total** | | **392** |
+| **Total** | | **375** |
 
 ## Example Tool Usage
 

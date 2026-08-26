@@ -1,6 +1,8 @@
 #![cfg(feature = "enterprise")]
 //! Integration tests for Redis Enterprise MCP tools using mock server
 
+mod support;
+
 use std::sync::Arc;
 
 use redis_enterprise::testing::{
@@ -12,23 +14,13 @@ use tower_mcp::Tool;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
-// Import the tools and state from the MCP crate
-use redisctl_mcp::policy::{Policy, PolicyConfig, SafetyTier};
-use redisctl_mcp::state::AppState;
+use redisctl_mcp::AppState;
 use redisctl_mcp::tools::enterprise;
+use support::{state_full, state_write};
 
 /// Build an AppState with a full-tier policy so destructive tools are permitted.
 fn full_policy_state(client: redis_enterprise::EnterpriseClient) -> Arc<AppState> {
-    let mut state = AppState::with_enterprise_client(client);
-    state.policy = Arc::new(Policy::new(
-        PolicyConfig {
-            tier: SafetyTier::Full,
-            ..Default::default()
-        },
-        std::collections::HashMap::new(),
-        "test-full".to_string(),
-    ));
-    Arc::new(state)
+    state_full(AppState::with_enterprise_client(client))
 }
 
 /// Helper to call a tool and get text result
@@ -139,13 +131,21 @@ async fn test_get_license_usage() {
     let server = MockEnterpriseServer::start().await;
 
     Mock::given(method("GET"))
-        .and(path("/v1/license/usage"))
+        .and(path("/v1/license"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "shards_limit": 100,
-            "shards_used": 45,
             "nodes_limit": 10,
-            "nodes_used": 3,
             "ram_limit": 107374182400_i64,
+            "expired": false,
+            "expiration_date": "2030-01-01T00:00:00Z"
+        })))
+        .mount(server.inner())
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/cluster"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "shards_used": 45,
+            "nodes_count": 3,
             "ram_used": 34359738368_i64
         })))
         .mount(server.inner())
@@ -157,8 +157,9 @@ async fn test_get_license_usage() {
 
     let result = call_tool_json(&tool, json!({})).await;
 
-    assert_eq!(result["shards_limit"], 100);
-    assert_eq!(result["shards_used"], 45);
+    assert_eq!(result["shards"]["limit"], 100);
+    assert_eq!(result["shards"]["used"], 45);
+    assert_eq!(result["nodes"]["used"], 3);
 }
 
 // ============================================================================
@@ -452,7 +453,7 @@ async fn test_get_database_stats() {
     let server = MockEnterpriseServer::start().await;
 
     Mock::given(method("GET"))
-        .and(path("/v1/bdbs/1/stats/last"))
+        .and(path("/v1/bdbs/stats/last/1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "avg_latency": 0.3,
             "total_req": 5000,
@@ -641,7 +642,7 @@ async fn test_get_database_stats_historical() {
     let server = MockEnterpriseServer::start().await;
 
     Mock::given(method("GET"))
-        .and(path("/v1/bdbs/1/stats"))
+        .and(path("/v1/bdbs/stats/1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "intervals": [
                 {"time": "2024-01-15T10:00:00Z", "metrics": {"avg_latency": 0.5}},
@@ -674,7 +675,7 @@ async fn test_get_node_stats_historical() {
     let server = MockEnterpriseServer::start().await;
 
     Mock::given(method("GET"))
-        .and(path("/v1/nodes/1/stats"))
+        .and(path("/v1/nodes/stats/1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "intervals": [
                 {"time": "2024-01-15T10:00:00Z", "metrics": {"cpu_usage": 45.0}},
@@ -701,74 +702,6 @@ async fn test_get_node_stats_historical() {
     assert!(result.get("intervals").is_some());
     let intervals = result["intervals"].as_array().unwrap();
     assert_eq!(intervals.len(), 2);
-}
-
-// ============================================================================
-// Debug Info Tests
-// ============================================================================
-
-#[tokio::test]
-async fn test_list_debug_info_tasks() {
-    let server = MockEnterpriseServer::start().await;
-
-    Mock::given(method("GET"))
-        .and(path("/v1/debuginfo"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-            {
-                "task_id": "debug-123",
-                "status": "completed",
-                "progress": 100.0,
-                "download_url": "https://example.com/download/debug-123.tar.gz"
-            },
-            {
-                "task_id": "debug-456",
-                "status": "running",
-                "progress": 45.0
-            }
-        ])))
-        .mount(server.inner())
-        .await;
-
-    let client = server.client();
-    let state = Arc::new(AppState::with_enterprise_client(client));
-    let tool = enterprise::list_debug_info_tasks(state);
-
-    let result = call_tool_json(&tool, json!({})).await;
-
-    assert_eq!(result["count"], 2);
-    let tasks = result["tasks"].as_array().unwrap();
-    assert_eq!(tasks.len(), 2);
-    assert_eq!(tasks[0]["task_id"], "debug-123");
-    assert_eq!(tasks[0]["status"], "completed");
-    assert_eq!(tasks[1]["task_id"], "debug-456");
-    assert_eq!(tasks[1]["status"], "running");
-}
-
-#[tokio::test]
-async fn test_get_debug_info_status() {
-    let server = MockEnterpriseServer::start().await;
-
-    Mock::given(method("GET"))
-        .and(path("/v1/debuginfo/debug-123"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "task_id": "debug-123",
-            "status": "completed",
-            "progress": 100.0,
-            "download_url": "https://example.com/download/debug-123.tar.gz"
-        })))
-        .mount(server.inner())
-        .await;
-
-    let client = server.client();
-    let state = Arc::new(AppState::with_enterprise_client(client));
-    let tool = enterprise::get_debug_info_status(state);
-
-    let result = call_tool_json(&tool, json!({"task_id": "debug-123"})).await;
-
-    assert_eq!(result["task_id"], "debug-123");
-    assert_eq!(result["status"], "completed");
-    assert_eq!(result["progress"], 100.0);
-    assert!(result.get("download_url").is_some());
 }
 
 // ============================================================================
@@ -904,31 +837,6 @@ async fn test_get_enterprise_proxy() {
 }
 
 #[tokio::test]
-async fn test_get_enterprise_proxy_stats() {
-    let server = MockEnterpriseServer::start().await;
-
-    Mock::given(method("GET"))
-        .and(path("/v1/proxies/1/stats"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "uid": 1,
-            "intervals": [
-                {"interval": "1sec", "timestamps": [1705314600], "values": [5000]}
-            ]
-        })))
-        .mount(server.inner())
-        .await;
-
-    let client = server.client();
-    let state = Arc::new(AppState::with_enterprise_client(client));
-    let tool = enterprise::get_proxy_stats(state);
-
-    let result = call_tool_json(&tool, json!({"uid": 1})).await;
-
-    assert_eq!(result["uid"], 1);
-    assert!(result.get("intervals").is_some());
-}
-
-#[tokio::test]
 async fn test_update_enterprise_proxy() {
     let server = MockEnterpriseServer::start().await;
 
@@ -944,7 +852,7 @@ async fn test_update_enterprise_proxy() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_proxy(state);
 
@@ -1047,7 +955,7 @@ async fn test_update_enterprise_service() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_service(state);
 
@@ -1078,7 +986,7 @@ async fn test_start_enterprise_service() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::start_service(state);
 
@@ -1101,7 +1009,7 @@ async fn test_stop_enterprise_service() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::stop_service(state);
 
@@ -1124,7 +1032,7 @@ async fn test_restart_enterprise_service() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::restart_service(state);
 
@@ -1138,43 +1046,11 @@ async fn test_restart_enterprise_service() {
 // ============================================================================
 
 #[tokio::test]
-async fn test_get_database_endpoints() {
-    let server = MockEnterpriseServer::start().await;
-
-    Mock::given(method("GET"))
-        .and(path("/v1/bdbs/1/endpoints"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-            {
-                "uid": "1:1",
-                "addr": ["10.0.0.1"],
-                "port": 12000,
-                "dns_name": "redis-12000.cluster.local",
-                "addr_type": "external"
-            }
-        ])))
-        .mount(server.inner())
-        .await;
-
-    let client = server.client();
-    let state = Arc::new(AppState::with_enterprise_client(client));
-    let tool = enterprise::get_database_endpoints(state);
-
-    let result = call_tool_json(&tool, json!({"uid": 1})).await;
-
-    let endpoints = result["endpoints"]
-        .as_array()
-        .expect("expected endpoints array");
-    assert_eq!(endpoints.len(), 1);
-    assert_eq!(endpoints[0]["port"], 12000);
-    assert_eq!(endpoints[0]["dns_name"], "redis-12000.cluster.local");
-}
-
-#[tokio::test]
 async fn test_list_database_alerts() {
     let server = MockEnterpriseServer::start().await;
 
     Mock::given(method("GET"))
-        .and(path("/v1/bdbs/1/alerts"))
+        .and(path("/v1/bdbs/alerts/1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([
             {
                 "uid": "alert-1",
@@ -1219,14 +1095,12 @@ async fn test_create_enterprise_database() {
         .await;
 
     let client = server.client();
-    let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
-    let state = Arc::new(state);
+    let state = state_write(AppState::with_enterprise_client(client));
     let tool = enterprise::create_enterprise_database(state);
 
     let result = call_tool_json(
         &tool,
-        json!({"name": "new-db", "memory_size": 1073741824u64}),
+        json!({"name": "new-db", "memory_size": "1073741824"}),
     )
     .await;
 
@@ -1269,7 +1143,7 @@ async fn test_update_enterprise_database() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_enterprise_database(state);
 
@@ -1309,7 +1183,7 @@ async fn test_backup_enterprise_database() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::backup_enterprise_database(state);
 
@@ -1345,7 +1219,7 @@ async fn test_import_enterprise_database() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::import_enterprise_database(state);
 
@@ -1379,7 +1253,7 @@ async fn test_export_enterprise_database() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::export_enterprise_database(state);
 
@@ -1406,7 +1280,7 @@ async fn test_restore_enterprise_database() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::restore_enterprise_database(state);
 
@@ -1430,7 +1304,7 @@ async fn test_upgrade_enterprise_database_redis() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::upgrade_enterprise_database_redis(state);
 
@@ -1594,11 +1468,13 @@ async fn test_get_enterprise_crdb() {
 async fn test_get_enterprise_crdb_tasks() {
     let server = MockEnterpriseServer::start().await;
 
-    // CRDB tasks live under the per-CRDB route, not /v1/crdbs/tasks.
+    // Redis Software exposes CRDB tasks as a global collection. The client
+    // filters that collection by CRDB GUID.
     Mock::given(method("GET"))
-        .and(path("/v1/crdbs/crdb-guid-1/tasks"))
+        .and(path("/v1/crdb_tasks"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-            {"id": "task-1", "status": "completed"}
+            {"id": "task-1", "crdb_guid": "crdb-guid-1", "status": "completed"},
+            {"id": "task-2", "crdb_guid": "other-guid", "status": "completed"}
         ])))
         .mount(server.inner())
         .await;
@@ -1630,7 +1506,7 @@ async fn test_create_enterprise_crdb() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::create_enterprise_crdb(state);
 
@@ -1663,7 +1539,7 @@ async fn test_update_enterprise_crdb() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_enterprise_crdb(state);
 
@@ -1718,7 +1594,6 @@ async fn test_delete_enterprise_crdb_blocked_in_read_only() {
 // NOTE: several paths differ from the #989 issue text; these tests follow the
 // actual `redis-enterprise` handler source:
 //   - update_enterprise_cluster_certificates -> PUT /v1/cluster/update_cert
-//   - validate_enterprise_license            -> POST /v1/license/validate
 //   - get_enterprise_cluster_services        -> GET /v1/cluster/services_configuration
 //   - maintenance mode tools                 -> PUT /v1/cluster (block_cluster_changes)
 //   - update_enterprise_license              -> PUT /v1/license then GET /v1/license
@@ -1738,7 +1613,7 @@ async fn test_update_enterprise_cluster() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_cluster(state);
 
@@ -1806,7 +1681,7 @@ async fn test_update_enterprise_cluster_policy() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_cluster_policy(state);
 
@@ -1835,7 +1710,7 @@ async fn test_enable_enterprise_maintenance_mode() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::enable_maintenance_mode(state);
 
@@ -1859,7 +1734,7 @@ async fn test_disable_enterprise_maintenance_mode() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::disable_maintenance_mode(state);
 
@@ -1904,7 +1779,7 @@ async fn test_rotate_enterprise_cluster_certificates() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::rotate_cluster_certificates(state);
 
@@ -1926,7 +1801,7 @@ async fn test_update_enterprise_cluster_certificates() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_cluster_certificates(state);
 
@@ -1989,7 +1864,7 @@ async fn test_update_enterprise_license() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_license(state);
 
@@ -2014,31 +1889,6 @@ async fn test_update_enterprise_license_blocked_in_read_only() {
     );
 }
 
-#[tokio::test]
-async fn test_validate_enterprise_license() {
-    let server = MockEnterpriseServer::start().await;
-
-    // validate() POSTs the candidate key to /v1/license/validate.
-    Mock::given(method("POST"))
-        .and(path("/v1/license/validate"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "expired": false,
-            "type": "commercial",
-            "shards_limit": 100
-        })))
-        .mount(server.inner())
-        .await;
-
-    let client = server.client();
-    let state = Arc::new(AppState::with_enterprise_client(client));
-    let tool = enterprise::validate_license(state);
-
-    let result = call_tool_json(&tool, json!({"license_key": "SOME-LICENSE-KEY"})).await;
-
-    assert_eq!(result["expired"], false);
-    assert_eq!(result["type"], "commercial");
-}
-
 // ============================================================================
 // Node Write Tools
 // ============================================================================
@@ -2058,7 +1908,7 @@ async fn test_enable_enterprise_node_maintenance() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::enable_node_maintenance(state);
 
@@ -2084,7 +1934,7 @@ async fn test_disable_enterprise_node_maintenance() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::disable_node_maintenance(state);
 
@@ -2110,7 +1960,7 @@ async fn test_rebalance_enterprise_node() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::rebalance_node(state);
 
@@ -2136,7 +1986,7 @@ async fn test_drain_enterprise_node() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::drain_node(state);
 
@@ -2161,7 +2011,7 @@ async fn test_update_enterprise_node() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_enterprise_node(state);
 
@@ -2198,8 +2048,8 @@ async fn test_update_enterprise_node_blocked_in_read_only() {
 async fn test_remove_enterprise_node() {
     let server = MockEnterpriseServer::start().await;
 
-    Mock::given(method("DELETE"))
-        .and(path("/v1/nodes/1"))
+    Mock::given(method("POST"))
+        .and(path("/v1/nodes/1/actions/remove"))
         .respond_with(ResponseTemplate::new(200))
         .mount(server.inner())
         .await;
@@ -2236,7 +2086,6 @@ async fn test_remove_enterprise_node_blocked_in_read_only() {
 // NOTE: several paths differ from the #992 issue text; these tests follow the
 // actual `redis-enterprise` handler source:
 //   - get_enterprise_user_permissions -> GET  /v1/users/permissions
-//   - get_enterprise_builtin_roles    -> GET  /v1/roles/builtin
 //   - LDAP config tools               -> GET/PUT /v1/cluster/ldap
 //   - validate_enterprise_acl is a read_only tool (POST /v1/redis_acls/validate)
 
@@ -2257,7 +2106,7 @@ async fn test_create_enterprise_user() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::create_enterprise_user(state);
 
@@ -2314,7 +2163,7 @@ async fn test_update_enterprise_user() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_enterprise_user(state);
 
@@ -2461,7 +2310,7 @@ async fn test_create_enterprise_role() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::create_enterprise_role(state);
 
@@ -2506,7 +2355,7 @@ async fn test_update_enterprise_role() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_enterprise_role(state);
 
@@ -2553,32 +2402,6 @@ async fn test_delete_enterprise_role_blocked_in_read_only() {
         result.is_error,
         "delete role should be blocked under read-only policy"
     );
-}
-
-#[tokio::test]
-async fn test_get_enterprise_builtin_roles() {
-    let server = MockEnterpriseServer::start().await;
-
-    // The handler reads GET /v1/roles/builtin (not /v1/roles/built_in_roles).
-    Mock::given(method("GET"))
-        .and(path("/v1/roles/builtin"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-            {"uid": 1, "name": "admin", "management": "admin"},
-            {"uid": 2, "name": "db_viewer", "management": "db_viewer"}
-        ])))
-        .mount(server.inner())
-        .await;
-
-    let client = server.client();
-    let state = Arc::new(AppState::with_enterprise_client(client));
-    let tool = enterprise::get_enterprise_builtin_roles(state);
-
-    let result = call_tool_json(&tool, json!({})).await;
-
-    assert_eq!(result["count"], 2);
-    let roles = result["roles"].as_array().expect("expected roles array");
-    assert_eq!(roles.len(), 2);
-    assert_eq!(roles[0]["name"], "admin");
 }
 
 // ============================================================================
@@ -2652,7 +2475,7 @@ async fn test_create_enterprise_acl() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::create_enterprise_acl(state);
 
@@ -2699,7 +2522,7 @@ async fn test_update_enterprise_acl() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_enterprise_acl(state);
 
@@ -2818,7 +2641,7 @@ async fn test_update_enterprise_ldap_config() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_enterprise_ldap_config(state);
 
@@ -2936,10 +2759,12 @@ async fn test_list_shards_by_database() {
 async fn test_list_shards_by_node() {
     let server = MockEnterpriseServer::start().await;
 
-    // ShardHandler::list_by_node() uses a path segment: GET /v1/nodes/{node_uid}/shards
+    // Redis Software has no node-scoped shard route. The client filters the
+    // global collection by node UID.
     Mock::given(method("GET"))
-        .and(path("/v1/nodes/2/shards"))
+        .and(path("/v1/shards"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"uid": "1", "bdb_uid": 1, "node_uid": "1", "role": "master", "status": "active"},
             {"uid": "2", "bdb_uid": 1, "node_uid": "2", "role": "slave", "status": "active"}
         ])))
         .mount(server.inner())
@@ -2973,7 +2798,7 @@ async fn test_acknowledge_enterprise_alert() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::acknowledge_enterprise_alert(state);
 
@@ -2995,50 +2820,5 @@ async fn test_acknowledge_enterprise_alert_blocked_in_read_only() {
     assert!(
         result.is_error,
         "acknowledge alert should be blocked under read-only policy"
-    );
-}
-
-// ============================================================================
-// Debug Info Write Tests
-// ============================================================================
-
-#[tokio::test]
-async fn test_create_debug_info() {
-    let server = MockEnterpriseServer::start().await;
-
-    Mock::given(method("POST"))
-        .and(path("/v1/debuginfo"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "task_id": "debug-789",
-            "status": "queued"
-        })))
-        .mount(server.inner())
-        .await;
-
-    let client = server.client();
-    let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
-    let state = Arc::new(state);
-    let tool = enterprise::create_debug_info(state);
-
-    let result = call_tool_json(&tool, json!({})).await;
-
-    assert!(result.get("task_id").is_some());
-    assert_eq!(result["task_id"], "debug-789");
-    assert_eq!(result["status"], "queued");
-}
-
-#[tokio::test]
-async fn test_create_debug_info_blocked_in_read_only() {
-    let server = MockEnterpriseServer::start().await;
-
-    let state = Arc::new(AppState::with_enterprise_client(server.client()));
-    let tool = enterprise::create_debug_info(state);
-
-    let result = tool.call(json!({})).await;
-
-    assert!(
-        result.is_error,
-        "create debug info should be blocked under read-only policy"
     );
 }

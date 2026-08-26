@@ -1,5 +1,6 @@
 //! Application state and credential resolution
 
+#[cfg(any(feature = "cloud", feature = "enterprise", feature = "database"))]
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -10,60 +11,57 @@ use anyhow::Result;
 use redis_cloud::CloudClient;
 #[cfg(feature = "enterprise")]
 use redis_enterprise::EnterpriseClient;
+#[cfg(any(feature = "cloud", feature = "enterprise"))]
+use redisctl_core::ClientResolver;
 use redisctl_core::Config;
+#[cfg(any(feature = "cloud", feature = "enterprise", feature = "database"))]
 use tokio::sync::RwLock;
 
 use crate::policy::{Policy, SafetyTier};
 
-#[cfg(feature = "cloud")]
-fn cloud_api_secret_from_env() -> Result<String> {
-    std::env::var("REDIS_CLOUD_SECRET_KEY")
-        .or_else(|_| std::env::var("REDIS_CLOUD_API_SECRET"))
-        .context("REDIS_CLOUD_SECRET_KEY or REDIS_CLOUD_API_SECRET not set")
-}
+#[cfg(any(feature = "cloud", feature = "enterprise"))]
+/// The Cloud API recognises the `redisctl/` prefix as a trusted client for some operations, so the
+/// MCP server sends the shared string rather than a name of its own.
+const REDISCTL_MCP_USER_AGENT: &str = redisctl_core::USER_AGENT;
 
 /// How credentials are resolved
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
+#[non_exhaustive]
 pub enum CredentialSource {
     /// Resolve from redisctl profiles (local mode)
     /// Empty vec means use default profiles from config
     Profiles(Vec<String>),
-    /// Resolve from OAuth token claims (HTTP mode)
-    OAuth {
-        issuer: Option<String>,
-        audience: Option<String>,
-    },
 }
 
 /// Cached API clients and connections (per-profile for multi-cluster support)
-pub struct CachedClients {
+#[cfg(any(feature = "cloud", feature = "enterprise", feature = "database"))]
+pub(crate) struct CachedClients {
     #[cfg(feature = "cloud")]
-    pub cloud: HashMap<String, CloudClient>,
+    pub(crate) cloud: HashMap<String, CloudClient>,
     #[cfg(feature = "enterprise")]
-    pub enterprise: HashMap<String, EnterpriseClient>,
+    pub(crate) enterprise: HashMap<String, EnterpriseClient>,
     #[cfg(feature = "database")]
-    pub database: HashMap<String, crate::tools::redis::RedisConnection>,
+    pub(crate) database: HashMap<String, crate::tools::redis::RedisConnection>,
 }
 
 /// Shared application state
 pub struct AppState {
     /// Credential source configuration
-    pub credential_source: CredentialSource,
+    pub(crate) credential_source: CredentialSource,
     /// Resolved policy for granular tool access control
-    pub policy: Arc<Policy>,
+    pub(crate) policy: Arc<Policy>,
     /// Optional Redis database URL for direct connections
-    pub database_url: Option<String>,
+    pub(crate) database_url: Option<String>,
     /// Enable Redis Cluster mode (handles MOVED/ASK redirections)
-    pub cluster: bool,
+    pub(crate) cluster: bool,
     /// Client name for CLIENT SETNAME (identifies connections in CLIENT LIST)
-    pub client_name: Option<String>,
+    pub(crate) client_name: Option<String>,
     /// redisctl config (for profile-based auth)
     config: Option<Config>,
     /// Configured profiles (for multi-cluster support)
     profiles: Vec<String>,
     /// Cached API clients (keyed by profile name, "_default" for default)
-    #[allow(dead_code)]
+    #[cfg(any(feature = "cloud", feature = "enterprise", feature = "database"))]
     clients: RwLock<CachedClients>,
     /// Session-scoped command aliases (name → list of command arg arrays)
     #[cfg(feature = "database")]
@@ -80,16 +78,11 @@ impl AppState {
         client_name: Option<String>,
     ) -> Result<Self> {
         // Extract profiles list
-        let profiles = match &credential_source {
-            CredentialSource::Profiles(p) => p.clone(),
-            CredentialSource::OAuth { .. } => vec![],
-        };
+        let CredentialSource::Profiles(profiles) = &credential_source;
+        let profiles = profiles.clone();
 
-        // Load config if using profile-based auth
-        let config = match &credential_source {
-            CredentialSource::Profiles(_) => Config::load().ok(),
-            CredentialSource::OAuth { .. } => None,
-        };
+        // Load config from profiles
+        let config = Config::load().ok();
 
         Ok(Self {
             credential_source,
@@ -99,6 +92,7 @@ impl AppState {
             client_name,
             config,
             profiles,
+            #[cfg(any(feature = "cloud", feature = "enterprise", feature = "database"))]
             clients: RwLock::new(CachedClients {
                 #[cfg(feature = "cloud")]
                 cloud: HashMap::new(),
@@ -112,8 +106,32 @@ impl AppState {
         })
     }
 
+    /// Return the credential source used to resolve platform clients.
+    pub fn credential_source(&self) -> &CredentialSource {
+        &self.credential_source
+    }
+
+    /// Return the resolved safety policy installed on this state.
+    pub fn policy(&self) -> &Arc<Policy> {
+        &self.policy
+    }
+
+    /// Return the configured direct Redis URL, if any.
+    pub fn database_url(&self) -> Option<&str> {
+        self.database_url.as_deref()
+    }
+
+    /// Return whether Redis Cluster redirection handling is enabled.
+    pub fn cluster_mode(&self) -> bool {
+        self.cluster
+    }
+
+    /// Return the Redis client name used by direct database connections.
+    pub fn client_name(&self) -> Option<&str> {
+        self.client_name.as_deref()
+    }
+
     /// Get the list of configured profiles
-    #[allow(dead_code)]
     pub fn available_profiles(&self) -> &[String] {
         &self.profiles
     }
@@ -147,7 +165,6 @@ impl AppState {
 
     /// Get or create Cloud API client (uses default profile)
     #[cfg(feature = "cloud")]
-    #[allow(dead_code)]
     pub async fn cloud_client(&self) -> Result<CloudClient> {
         self.cloud_client_for_profile(None).await
     }
@@ -184,7 +201,6 @@ impl AppState {
 
     /// Get or create Enterprise API client (uses default profile)
     #[cfg(feature = "enterprise")]
-    #[allow(dead_code)]
     pub async fn enterprise_client(&self) -> Result<EnterpriseClient> {
         self.enterprise_client_for_profile(None).await
     }
@@ -204,43 +220,10 @@ impl AppState {
                     .map(|s| s.to_string())
                     .or_else(|| profiles.first().cloned());
 
-                // Resolve the profile name
-                let resolved_profile_name = config
-                    .resolve_cloud_profile(profile_to_use.as_deref())
-                    .context("Failed to resolve cloud profile")?;
-
-                // Get the profile
-                let profile = config
-                    .profiles
-                    .get(&resolved_profile_name)
-                    .with_context(|| format!("Profile '{}' not found", resolved_profile_name))?;
-
-                // Get credentials
-                let (api_key, api_secret, base_url) = profile
-                    .resolve_cloud_credentials()
-                    .context("Failed to resolve cloud credentials")?
-                    .context("No cloud credentials in profile")?;
-
-                CloudClient::builder()
-                    .api_key(api_key)
-                    .api_secret(api_secret)
-                    .base_url(&base_url)
-                    .user_agent(redisctl_core::USER_AGENT)
-                    .build()
-                    .context("Failed to build Cloud client")
-            }
-            CredentialSource::OAuth { .. } => {
-                // In OAuth mode, credentials come from environment variables
-                let api_key =
-                    std::env::var("REDIS_CLOUD_API_KEY").context("REDIS_CLOUD_API_KEY not set")?;
-                let api_secret = cloud_api_secret_from_env()?;
-
-                CloudClient::builder()
-                    .api_key(api_key)
-                    .api_secret(api_secret)
-                    .user_agent(redisctl_core::USER_AGENT)
-                    .build()
-                    .context("Failed to build Cloud client")
+                ClientResolver::new(config)
+                    .user_agent(REDISCTL_MCP_USER_AGENT)
+                    .build_cloud_client(profile_to_use.as_deref())
+                    .context("Failed to resolve Redis Cloud client")
             }
         }
     }
@@ -260,59 +243,10 @@ impl AppState {
                     .map(|s| s.to_string())
                     .or_else(|| profiles.first().cloned());
 
-                // Resolve the profile name
-                let resolved_profile_name = config
-                    .resolve_enterprise_profile(profile_to_use.as_deref())
-                    .context("Failed to resolve enterprise profile")?;
-
-                // Get the profile
-                let profile_config = config
-                    .profiles
-                    .get(&resolved_profile_name)
-                    .with_context(|| format!("Profile '{}' not found", resolved_profile_name))?;
-
-                // Get credentials
-                let (url, username, password, insecure, ca_cert) = profile_config
-                    .resolve_enterprise_credentials()
-                    .context("Failed to resolve enterprise credentials")?
-                    .context("No enterprise credentials in profile")?;
-
-                let mut builder = EnterpriseClient::builder()
-                    .base_url(&url)
-                    .username(&username)
-                    .insecure(insecure);
-
-                if let Some(pwd) = password {
-                    builder = builder.password(&pwd);
-                }
-
-                if let Some(cert_path) = ca_cert {
-                    builder = builder.ca_cert(&cert_path);
-                }
-
-                builder.build().context("Failed to build Enterprise client")
-            }
-            CredentialSource::OAuth { .. } => {
-                // In OAuth mode, credentials come from environment variables
-                let url = std::env::var("REDIS_ENTERPRISE_URL")
-                    .context("REDIS_ENTERPRISE_URL not set")?;
-                let username = std::env::var("REDIS_ENTERPRISE_USER")
-                    .context("REDIS_ENTERPRISE_USER not set")?;
-                let password = std::env::var("REDIS_ENTERPRISE_PASSWORD").ok();
-                let insecure = std::env::var("REDIS_ENTERPRISE_INSECURE")
-                    .map(|v| v == "true" || v == "1")
-                    .unwrap_or(false);
-
-                let mut builder = EnterpriseClient::builder()
-                    .base_url(&url)
-                    .username(&username)
-                    .insecure(insecure);
-
-                if let Some(pwd) = password {
-                    builder = builder.password(&pwd);
-                }
-
-                builder.build().context("Failed to build Enterprise client")
+                ClientResolver::new(config)
+                    .user_agent(REDISCTL_MCP_USER_AGENT)
+                    .build_enterprise_client(profile_to_use.as_deref())
+                    .context("Failed to resolve Redis Enterprise client")
             }
         }
     }
@@ -447,7 +381,6 @@ impl AppState {
     ///
     /// Returns `true` for `ReadWrite` and `Full` tiers.
     /// Used for defense-in-depth in non-destructive write tool handlers.
-    #[allow(dead_code)]
     pub fn is_write_allowed(&self) -> bool {
         matches!(
             self.policy.global_tier(),
@@ -459,7 +392,6 @@ impl AppState {
     ///
     /// Returns `true` only for `Full` tier.
     /// Used for defense-in-depth in destructive tool handlers.
-    #[allow(dead_code)]
     pub fn is_destructive_allowed(&self) -> bool {
         matches!(self.policy.global_tier(), SafetyTier::Full)
     }
@@ -506,6 +438,7 @@ impl Clone for AppState {
             client_name: self.client_name.clone(),
             config: self.config.clone(),
             profiles: self.profiles.clone(),
+            #[cfg(any(feature = "cloud", feature = "enterprise", feature = "database"))]
             clients: RwLock::new(CachedClients {
                 #[cfg(feature = "cloud")]
                 cloud: HashMap::new(),
@@ -521,8 +454,14 @@ impl Clone for AppState {
 }
 
 /// Test helpers for creating AppState with pre-configured clients
-#[allow(dead_code)]
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
 impl AppState {
+    /// Replace the active policy in integration tests.
+    pub fn set_test_policy(&mut self, policy: Arc<Policy>) {
+        self.policy = policy;
+    }
+
     /// Create a default read-only policy for tests
     pub fn test_policy() -> Arc<Policy> {
         Arc::new(Policy::new(
@@ -537,6 +476,18 @@ impl AppState {
         Arc::new(Policy::new(
             crate::policy::PolicyConfig {
                 tier: SafetyTier::ReadWrite,
+                ..Default::default()
+            },
+            std::collections::HashMap::new(),
+            "test".to_string(),
+        ))
+    }
+
+    /// Create a full policy for tests that exercise destructive tools
+    pub fn test_full_policy() -> Arc<Policy> {
+        Arc::new(Policy::new(
+            crate::policy::PolicyConfig {
+                tier: SafetyTier::Full,
                 ..Default::default()
             },
             std::collections::HashMap::new(),
@@ -626,47 +577,6 @@ impl AppState {
             }),
             #[cfg(feature = "database")]
             aliases: RwLock::new(HashMap::new()),
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[cfg(feature = "cloud")]
-    use super::cloud_api_secret_from_env;
-
-    #[cfg(feature = "cloud")]
-    #[test]
-    #[serial_test::serial(cloud_secret_env)]
-    fn cloud_secret_env_prefers_canonical_name() {
-        unsafe {
-            std::env::set_var("REDIS_CLOUD_SECRET_KEY", "canonical-secret");
-            std::env::set_var("REDIS_CLOUD_API_SECRET", "alias-secret");
-        }
-
-        let result = cloud_api_secret_from_env().unwrap();
-        assert_eq!(result, "canonical-secret");
-
-        unsafe {
-            std::env::remove_var("REDIS_CLOUD_SECRET_KEY");
-            std::env::remove_var("REDIS_CLOUD_API_SECRET");
-        }
-    }
-
-    #[cfg(feature = "cloud")]
-    #[test]
-    #[serial_test::serial(cloud_secret_env)]
-    fn cloud_secret_env_falls_back_to_alias() {
-        unsafe {
-            std::env::remove_var("REDIS_CLOUD_SECRET_KEY");
-            std::env::set_var("REDIS_CLOUD_API_SECRET", "alias-secret");
-        }
-
-        let result = cloud_api_secret_from_env().unwrap();
-        assert_eq!(result, "alias-secret");
-
-        unsafe {
-            std::env::remove_var("REDIS_CLOUD_API_SECRET");
         }
     }
 }

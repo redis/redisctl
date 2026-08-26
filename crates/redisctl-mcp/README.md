@@ -60,8 +60,8 @@ redisctl-mcp
 # Use a specific profile
 redisctl-mcp --profile production
 
-# Read-only mode (disables write operations)
-redisctl-mcp --profile production --read-only
+# Enable write operations (read-only is the default)
+redisctl-mcp --profile production --read-only=false
 
 # With a direct Redis database connection
 redisctl-mcp --database-url redis://localhost:6379
@@ -69,19 +69,15 @@ redisctl-mcp --database-url redis://localhost:6379
 
 ### HTTP Transport
 
-For shared deployments accessible over the network:
+The HTTP transport is unauthenticated. Keep the default loopback bind for local
+use, or put shared deployments behind a trusted gateway or reverse proxy that
+provides authentication, authorization, and TLS.
 
 ```bash
-# Basic HTTP server
+# Local HTTP server
 redisctl-mcp --transport http --port 8080
 
-# With OAuth authentication
-redisctl-mcp --transport http --port 8080 \
-  --oauth \
-  --oauth-issuer https://accounts.google.com \
-  --oauth-audience my-app-id
-
-# With custom rate limiting
+# With custom concurrency and timeout limits
 redisctl-mcp --transport http --port 8080 \
   --max-concurrent 20 \
   --request-timeout-secs 60
@@ -92,7 +88,7 @@ redisctl-mcp --transport http --port 8080 \
 ### Redis Cloud
 
 | Tool | Description |
-|------|-------------|
+| --- | --- |
 | `list_subscriptions` | List all Redis Cloud subscriptions |
 | `get_subscription` | Get details of a specific subscription |
 | `list_databases` | List databases in a subscription |
@@ -101,7 +97,7 @@ redisctl-mcp --transport http --port 8080 \
 ### Redis Enterprise
 
 | Tool | Description |
-|------|-------------|
+| --- | --- |
 | `get_cluster` | Get cluster information (name, version, config) |
 | `list_enterprise_databases` | List all databases on the cluster |
 | `get_enterprise_database` | Get database details by UID |
@@ -110,7 +106,7 @@ redisctl-mcp --transport http --port 8080 \
 ### Direct Redis Operations
 
 | Tool | Description |
-|------|-------------|
+| --- | --- |
 | `redis_ping` | Test connectivity to a Redis database |
 | `redis_info` | Get Redis INFO output (optionally by section) |
 | `redis_keys` | List keys matching a pattern (uses SCAN) |
@@ -140,7 +136,8 @@ insecure = true
 
 ### Environment Variables
 
-For OAuth/HTTP mode or when not using profiles:
+For deployments that use environment-backed credentials instead of storing
+credential values directly in profiles:
 
 ```bash
 # Redis Cloud
@@ -159,24 +156,24 @@ export REDIS_URL=redis://localhost:6379
 
 ## Command Line Options
 
-```
+```text
 Options:
   -t, --transport <TRANSPORT>      Transport mode [default: stdio]
                                    - stdio: For CLI integrations
                                    - http: For web deployments
-  -p, --profile <PROFILE>          Profile name for credentials
-      --read-only                  Disable write operations
+  -p, --profile <PROFILE>          Profile name(s) for credentials; repeatable
+      --read-only <BOOL>           Read-only mode [default: true]
+      --policy <PATH>              TOML policy file
       --database-url <URL>         Redis URL for direct connections
+      --cluster                    Enable Redis Cluster mode
+      --client-name <NAME>         Redis client name [default: redisctl-mcp]
+      --tools <SPECS>              Toolsets or sub-modules to expose
+      --skills-dir <PATH>          Directory of SKILL.md prompt packages
 
   HTTP Options:
       --host <HOST>                Bind host [default: 127.0.0.1]
       --port <PORT>                Bind port [default: 8080]
-      --oauth                      Enable OAuth authentication
-      --oauth-issuer <URL>         OAuth issuer URL
-      --oauth-audience <AUD>       OAuth audience
-      --jwks-uri <URI>             JWKS URI (auto-discovered if not set)
       --max-concurrent <N>         Max concurrent requests [default: 10]
-      --rate-limit-ms <MS>         Rate limit interval [default: 100]
       --request-timeout-secs <S>   Request timeout [default: 30]
 
   Logging:
@@ -185,29 +182,33 @@ Options:
 
 ## Library Usage
 
-You can embed these tools in your own MCP server:
+You can build the same policy-filtered router used by the binary. The builder
+installs policy, visibility presets, system tools, prompts, skills, and server
+instructions as one unit:
 
 ```rust
-use std::sync::Arc;
-use redisctl_mcp::{AppState, CredentialSource, tools};
-use tower_mcp::McpRouter;
+use redisctl_mcp::{CredentialSource, McpServerBuilder, PolicyConfig};
 
-let state = Arc::new(AppState::new(
-    CredentialSource::Profile(Some("default".to_string())),
-    true, // read-only
-    None, // no database URL
-)?);
+fn build_router() -> anyhow::Result<tower_mcp::McpRouter> {
+    let server = McpServerBuilder::new(
+        CredentialSource::Profiles(vec!["default".to_string()]),
+        PolicyConfig::default(), // read-only by default
+        "embedded default",
+    )
+    .with_tool_specs(["cloud", "enterprise", "app"])?
+    .with_client_name(Some("my-embedded-server".to_string()))
+    .build()?;
 
-let router = McpRouter::new()
-    .tool(tools::cloud::list_subscriptions(state.clone()))
-    .tool(tools::cloud::get_subscription(state.clone()))
-    .tool(tools::enterprise::get_cluster(state.clone()))
-    .tool(tools::redis::ping(state.clone()));
+    Ok(server.into_router())
+}
 ```
+
+The `test-support` feature exposes unstable direct tool constructors for this
+repository's integration tests. It is not part of the supported 1.x Rust API.
 
 ## Security Considerations
 
-- Use `--read-only` mode in production to prevent accidental modifications
-- For HTTP transport, always enable OAuth in production environments
+- Keep the default read-only mode unless write tools are explicitly required
+- Keep HTTP bound to loopback or protect it with an authenticating gateway
 - Store credentials using environment variables or secure credential storage
 - The server respects profile-based credential isolation

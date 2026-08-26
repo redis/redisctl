@@ -17,58 +17,57 @@ For support tickets, use [support-package](support-package.md) instead.
 ### Cluster Debug Info
 
 ```bash
-redisctl enterprise debuginfo cluster
+redisctl enterprise debug-info all
 ```
 
 ### Node Debug Info
 
 ```bash
 # All nodes
-redisctl enterprise debuginfo node
+redisctl enterprise debug-info node
 
 # Specific node
-redisctl enterprise debuginfo node 1
+redisctl enterprise debug-info node --node-uid 1
 ```
 
 ### Database Debug Info
 
 ```bash
-redisctl enterprise debuginfo database 1
+redisctl enterprise debug-info database 1
 ```
 
 ## Options
 
 | Option | Description |
 |--------|-------------|
-| `-o, --output` | Output file path |
-| `--use-new-api` | Use new API endpoints (7.4+) |
+| `-f, --file` | Output file path |
 
 ## Examples
 
 ### Save to File
 
 ```bash
-redisctl enterprise debuginfo cluster -o cluster-debug.tar.gz
+redisctl enterprise debug-info all --file cluster-debug.tar.gz
 ```
 
 ### Collect for Specific Issue
 
 ```bash
 # Database issue
-redisctl enterprise debuginfo database 1 -o db1-debug.tar.gz
+redisctl enterprise debug-info database 1 --file db1-debug.tar.gz
 
 # Node issue
-redisctl enterprise debuginfo node 2 -o node2-debug.tar.gz
+redisctl enterprise debug-info node --node-uid 2 --file node2-debug.tar.gz
 ```
 
 ## Raw API Access
 
 ```bash
 # Cluster debug info
-redisctl api enterprise get /v1/debuginfo/all --output debug.tar.gz
+redisctl api enterprise get /v1/cluster/debuginfo
 
 # Node debug info
-redisctl api enterprise get /v1/debuginfo/node/1 --output node1.tar.gz
+redisctl api enterprise get /v1/nodes/1/debuginfo
 ```
 
 ## Debug Info vs Support Package

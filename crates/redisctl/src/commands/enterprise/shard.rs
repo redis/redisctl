@@ -60,7 +60,7 @@ pub enum ShardCommands {
         uid: u32,
 
         /// Force failover without confirmation
-        #[arg(short, long)]
+        #[arg(long)]
         force: bool,
     },
 
@@ -74,7 +74,7 @@ pub enum ShardCommands {
         target_node: u32,
 
         /// Force migration without confirmation
-        #[arg(short, long)]
+        #[arg(long)]
         force: bool,
     },
 
@@ -96,7 +96,7 @@ pub enum ShardCommands {
         #[arg(short, long, value_name = "FILE|JSON")]
         data: Option<String>,
         /// Force without confirmation
-        #[arg(short, long)]
+        #[arg(long)]
         force: bool,
     },
 
@@ -121,7 +121,7 @@ pub enum ShardCommands {
         #[arg(short, long, value_name = "FILE|JSON")]
         data: Option<String>,
         /// Force without confirmation
-        #[arg(short, long)]
+        #[arg(long)]
         force: bool,
     },
 
@@ -260,8 +260,8 @@ impl ShardCommands {
             }
 
             ShardCommands::Failover { uid, force } => {
-                if !force && !super::utils::confirm_action(&format!("Failover shard {}?", uid))? {
-                    return Ok(());
+                if !force {
+                    super::utils::confirm_action(&format!("Failover shard {}?", uid))?;
                 }
 
                 let _: serde_json::Value = client
@@ -280,13 +280,11 @@ impl ShardCommands {
                 target_node,
                 force,
             } => {
-                if !force
-                    && !super::utils::confirm_action(&format!(
+                if !force {
+                    super::utils::confirm_action(&format!(
                         "Migrate shard {} to node {}?",
                         uid, target_node
-                    ))?
-                {
-                    return Ok(());
+                    ))?;
                 }
 
                 let migrate_data = serde_json::json!({
@@ -309,8 +307,8 @@ impl ShardCommands {
                 data,
                 force,
             } => {
-                if !force && !super::utils::confirm_action("Perform bulk shard failover?")? {
-                    return Ok(());
+                if !force {
+                    super::utils::confirm_action("Perform bulk shard failover?")?;
                 }
 
                 // Start with JSON from --data if provided, otherwise empty object
@@ -342,8 +340,8 @@ impl ShardCommands {
                 data,
                 force,
             } => {
-                if !force && !super::utils::confirm_action("Perform bulk shard migration?")? {
-                    return Ok(());
+                if !force {
+                    super::utils::confirm_action("Perform bulk shard migration?")?;
                 }
 
                 // Start with JSON from --data if provided, otherwise empty object

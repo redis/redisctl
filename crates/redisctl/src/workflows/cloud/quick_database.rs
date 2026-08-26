@@ -187,7 +187,7 @@ async fn run(
 fn client_setup_error(err: RedisCtlError) -> QuickDatabaseError {
     match err {
         RedisCtlError::MissingCredentials { .. }
-        | RedisCtlError::NoProfileConfigured
+        | RedisCtlError::NoProfileConfigured { .. }
         | RedisCtlError::ProfileNotFound { .. }
         | RedisCtlError::AuthenticationFailed { .. } => QuickDatabaseError::NotAuthenticated(
             format!("{err}. Run `redisctl cloud auth login` first."),

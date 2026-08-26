@@ -6,6 +6,7 @@ use crate::cli::OutputFormat;
 use crate::connection::ConnectionManager;
 use crate::error::Result as CliResult;
 use anyhow::Context;
+use redis_enterprise::crdb_tasks::CrdbTasksHandler;
 use serde_json::Value;
 
 use super::utils::*;
@@ -170,9 +171,8 @@ pub async fn delete_crdb(
     output_format: OutputFormat,
     query: Option<&str>,
 ) -> CliResult<()> {
-    if !force && !confirm_action(&format!("Delete CRDB {}?", id))? {
-        println!("Operation cancelled");
-        return Ok(());
+    if !force {
+        confirm_action(&format!("Delete CRDB {}?", id))?;
     }
 
     let client = conn_mgr.create_enterprise_client(profile_name).await?;
@@ -284,9 +284,8 @@ pub async fn remove_cluster_from_crdb(
     output_format: OutputFormat,
     query: Option<&str>,
 ) -> CliResult<()> {
-    if !force && !confirm_action(&format!("Remove cluster {} from CRDB {}?", cluster_id, id))? {
-        println!("Operation cancelled");
-        return Ok(());
+    if !force {
+        confirm_action(&format!("Remove cluster {} from CRDB {}?", cluster_id, id))?;
     }
 
     let client = conn_mgr.create_enterprise_client(profile_name).await?;
@@ -410,14 +409,11 @@ pub async fn flush_crdb_instance(
     output_format: OutputFormat,
     query: Option<&str>,
 ) -> CliResult<()> {
-    if !force
-        && !confirm_action(&format!(
+    if !force {
+        confirm_action(&format!(
             "Flush data for instance {} in CRDB {}? This will delete all data!",
             instance_id, crdb_id
-        ))?
-    {
-        println!("Operation cancelled");
-        return Ok(());
+        ))?;
     }
 
     let client = conn_mgr.create_enterprise_client(profile_name).await?;
@@ -546,10 +542,20 @@ pub async fn get_crdb_tasks(
     query: Option<&str>,
 ) -> CliResult<()> {
     let client = conn_mgr.create_enterprise_client(profile_name).await?;
-    let response = client
-        .get_raw(&format!("/v1/crdbs/{}/tasks", id))
+    let crdb = client
+        .get_raw(&format!("/v1/crdbs/{id}"))
         .await
-        .context(format!("Failed to get tasks for CRDB {}", id))?;
+        .with_context(|| format!("Failed to get CRDB {id}"))?;
+    let guid = crdb
+        .get("guid")
+        .or_else(|| crdb.get("crdb_guid"))
+        .and_then(Value::as_str)
+        .with_context(|| format!("CRDB {id} response did not include its GUID"))?;
+    let tasks = CrdbTasksHandler::new(client)
+        .list_by_crdb(guid)
+        .await
+        .with_context(|| format!("Failed to get tasks for CRDB {id}"))?;
+    let response = serde_json::to_value(tasks).context("Failed to serialize CRDB tasks")?;
 
     let data = handle_output(response, output_format, query)?;
     print_formatted_output(data, output_format)?;
@@ -566,39 +572,11 @@ pub async fn get_crdb_task(
     query: Option<&str>,
 ) -> CliResult<()> {
     let client = conn_mgr.create_enterprise_client(profile_name).await?;
-    let response = client
-        .get_raw(&format!("/v1/crdbs/{}/tasks/{}", crdb_id, task_id))
+    let task = CrdbTasksHandler::new(client)
+        .get(&task_id)
         .await
-        .context(format!(
-            "Failed to get task {} for CRDB {}",
-            task_id, crdb_id
-        ))?;
-
-    let data = handle_output(response, output_format, query)?;
-    print_formatted_output(data, output_format)?;
-    Ok(())
-}
-
-/// Retry failed CRDB task
-pub async fn retry_crdb_task(
-    conn_mgr: &ConnectionManager,
-    profile_name: Option<&str>,
-    crdb_id: u32,
-    task_id: String,
-    output_format: OutputFormat,
-    query: Option<&str>,
-) -> CliResult<()> {
-    let client = conn_mgr.create_enterprise_client(profile_name).await?;
-    let response = client
-        .post_raw(
-            &format!("/v1/crdbs/{}/tasks/{}/retry", crdb_id, task_id),
-            Value::Null,
-        )
-        .await
-        .context(format!(
-            "Failed to retry task {} for CRDB {}",
-            task_id, crdb_id
-        ))?;
+        .with_context(|| format!("Failed to get task {task_id} for CRDB {crdb_id}"))?;
+    let response = serde_json::to_value(task).context("Failed to serialize CRDB task")?;
 
     let data = handle_output(response, output_format, query)?;
     print_formatted_output(data, output_format)?;
@@ -615,16 +593,15 @@ pub async fn cancel_crdb_task(
     query: Option<&str>,
 ) -> CliResult<()> {
     let client = conn_mgr.create_enterprise_client(profile_name).await?;
-    let response = client
-        .post_raw(
-            &format!("/v1/crdbs/{}/tasks/{}/cancel", crdb_id, task_id),
-            Value::Null,
-        )
+    CrdbTasksHandler::new(client)
+        .cancel(&task_id)
         .await
-        .context(format!(
-            "Failed to cancel task {} for CRDB {}",
-            task_id, crdb_id
-        ))?;
+        .with_context(|| format!("Failed to cancel task {task_id} for CRDB {crdb_id}"))?;
+    let response = serde_json::json!({
+        "cancelled": true,
+        "crdb_id": crdb_id,
+        "task_id": task_id,
+    });
 
     let data = handle_output(response, output_format, query)?;
     print_formatted_output(data, output_format)?;

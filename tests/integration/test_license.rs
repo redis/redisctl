@@ -114,46 +114,6 @@ async fn test_license_get() {
     assert_eq!(result["owner"], "Acme Corporation");
 }
 
-/// Test getting license usage statistics
-/// 
-/// This test demonstrates:
-/// - Checking current resource usage against limits
-/// - Monitoring shard and node consumption
-/// - Understanding memory usage patterns
-#[tokio::test]
-async fn test_license_usage() {
-    let (mock_server, client) = setup_mock_server().await;
-
-    let mock_response = json!({
-        "shards_used": 25,
-        "shards_limit": 1000,
-        "nodes_used": 3,
-        "nodes_limit": 50,
-        "ram_used": 17179869184u64,  // 16 GB in bytes
-        "ram_limit": 107374182400u64  // 100 GB in bytes
-    });
-
-    Mock::given(method("GET"))
-        .and(path("/v1/license/usage"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(&mock_response))
-        .mount(&mock_server)
-        .await;
-
-    let command = LicenseCommands::Usage;
-    let result = handle_license_command(&client, command).await.unwrap();
-
-    assert_eq!(result["shards_used"], 25);
-    assert_eq!(result["shards_limit"], 1000);
-    assert_eq!(result["nodes_used"], 3);
-    assert_eq!(result["nodes_limit"], 50);
-    
-    // Calculate usage percentages for verification
-    let shard_usage_percent = (25.0 / 1000.0) * 100.0;
-    let node_usage_percent = (3.0 / 50.0) * 100.0;
-    assert_eq!(shard_usage_percent, 2.5);
-    assert_eq!(node_usage_percent, 6.0);
-}
-
 /// Test updating license with key string
 /// 
 /// This test demonstrates:
@@ -256,52 +216,6 @@ async fn test_license_update_from_file() {
     assert_eq!(result["shards_limit"], 500);
     assert_eq!(result["node_limit"], 25);
     assert_eq!(result["features"].as_array().unwrap().len(), 3);
-}
-
-/// Test validating a license key
-/// 
-/// This test demonstrates:
-/// - Testing license validity before installation
-/// - Understanding license validation responses
-/// - Pre-flight checks for license updates
-#[tokio::test]
-async fn test_license_validate() {
-    let (mock_server, client) = setup_mock_server().await;
-
-    let license_key = "VALIDATE-TEST-2024-GHI789...";
-    let expected_request = json!({
-        "license": license_key
-    });
-
-    let mock_response = json!({
-        "license_key": license_key,
-        "type_": "trial",
-        "expired": false,
-        "expiration_date": "2024-12-31T23:59:59Z",
-        "shards_limit": 100,
-        "node_limit": 10,
-        "features": ["RediSearch", "RedisJSON"],
-        "owner": "Trial User"
-    });
-
-    Mock::given(method("POST"))
-        .and(path("/v1/license/validate"))
-        .and(body_json(&expected_request))
-        .respond_with(ResponseTemplate::new(200).set_body_json(&mock_response))
-        .mount(&mock_server)
-        .await;
-
-    let command = LicenseCommands::Validate {
-        key: Some(license_key.to_string()),
-        file: None,
-    };
-    let result = handle_license_command(&client, command).await.unwrap();
-
-    assert_eq!(result["license_key"], license_key);
-    assert_eq!(result["type_"], "trial");
-    assert_eq!(result["expired"], false);
-    assert_eq!(result["shards_limit"], 100);
-    assert_eq!(result["node_limit"], 10);
 }
 
 /// Test getting cluster license configuration

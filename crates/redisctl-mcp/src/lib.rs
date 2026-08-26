@@ -1,3 +1,5 @@
+#![cfg_attr(not(feature = "test-support"), deny(missing_docs))]
+
 //! MCP (Model Context Protocol) server for Redis Cloud and Enterprise
 //!
 //! This crate provides an MCP server that exposes Redis Cloud and Enterprise
@@ -14,58 +16,59 @@
 //! # Multiple profiles for multi-cluster support
 //! redisctl-mcp --profile cluster-west --profile cluster-east --profile cluster-central
 //!
-//! # HTTP transport with OAuth (for shared deployments)
-//! redisctl-mcp --transport http --port 8080 --oauth --oauth-issuer https://accounts.google.com
-//!
 //! # Enable only specific toolsets
 //! redisctl-mcp --tools cloud,app
 //! ```
 //!
 //! ## Library Usage
 //!
-//! You can also embed the tools in your own MCP server using sub-routers:
+//! You can also build the same policy-filtered router used by the binary:
 //!
 //! ```no_run
-//! use std::sync::Arc;
-//! use redisctl_mcp::{AppState, CredentialSource, tools};
-//! use redisctl_mcp::policy::{Policy, PolicyConfig};
-//! use tower_mcp::McpRouter;
+//! use redisctl_mcp::{CredentialSource, McpServerBuilder, PolicyConfig};
 //!
 //! # async fn example() -> anyhow::Result<()> {
-//! let policy = Arc::new(Policy::new(
-//!     PolicyConfig::default(), // read-only
-//!     std::collections::HashMap::new(),
-//!     "default".to_string(),
-//! ));
-//! let state = Arc::new(AppState::new(
+//! let server = McpServerBuilder::new(
 //!     CredentialSource::Profiles(vec!["default".to_string()]),
-//!     policy,
-//!     None, // no database URL
-//!     false, // cluster mode
-//!     Some("redisctl-mcp".to_string()), // client name
-//! )?);
-//!
-//! // Use merge to compose sub-routers
-//! let router = McpRouter::new()
-//!     .merge(tools::cloud::router(state.clone()))
-//!     .merge(tools::enterprise::router(state.clone()))
-//!     .merge(tools::profile::router(state.clone()));
+//!     PolicyConfig::default(), // read-only by default
+//!     "embedded default",
+//! )
+//! .with_tool_specs(["cloud", "enterprise", "app"])?
+//! .with_client_name(Some("my-embedded-server".to_string()))
+//! .build()?;
+//! let router = server.into_router();
+//! # let _ = router;
 //! # Ok(())
 //! # }
 //! ```
 
-pub mod audit;
-pub mod error;
-pub mod policy;
-pub mod presets;
-pub mod prompts;
-pub mod resources;
-pub mod serde_helpers;
-pub mod state;
+mod audit;
+mod policy;
+mod presets;
+mod prompts;
+mod resources;
+mod serde_helpers;
+mod server;
+mod state;
+
+#[cfg(not(feature = "test-support"))]
+mod tools;
+/// Unstable direct tool constructors used by redisctl's integration tests.
+///
+/// This module is not part of the supported redisctl-mcp Rust API. Use
+/// [`McpServerBuilder`] to embed the server safely.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
 pub mod tools;
 
-pub use error::McpError;
+pub use audit::{AuditConfig, AuditLayer, AuditLevel, AuditService};
+pub use policy::{Policy, PolicyConfig, SafetyTier, ToolsetKind, ToolsetPolicy};
+pub use presets::ToolsConfig;
+pub use server::{McpServer, McpServerBuilder};
 pub use state::{AppState, CredentialSource};
+
+#[cfg(test)]
+mod catalog_contract;
 
 #[cfg(test)]
 mod tests {
@@ -74,42 +77,20 @@ mod tests {
 
     #[test]
     fn test_credential_source_profiles() {
-        let source = CredentialSource::Profiles(vec!["test".to_string()]);
-        match source {
-            CredentialSource::Profiles(profiles) => assert_eq!(profiles, vec!["test".to_string()]),
-            _ => panic!("Expected Profiles variant"),
-        }
+        let CredentialSource::Profiles(profiles) =
+            CredentialSource::Profiles(vec!["test".to_string()]);
+        assert_eq!(profiles, vec!["test".to_string()]);
     }
 
     #[test]
     fn test_credential_source_multiple_profiles() {
-        let source = CredentialSource::Profiles(vec![
+        let CredentialSource::Profiles(profiles) = CredentialSource::Profiles(vec![
             "cluster-west".to_string(),
             "cluster-east".to_string(),
         ]);
-        match source {
-            CredentialSource::Profiles(profiles) => {
-                assert_eq!(profiles.len(), 2);
-                assert_eq!(profiles[0], "cluster-west");
-                assert_eq!(profiles[1], "cluster-east");
-            }
-            _ => panic!("Expected Profiles variant"),
-        }
-    }
-
-    #[test]
-    fn test_credential_source_oauth() {
-        let source = CredentialSource::OAuth {
-            issuer: Some("https://example.com".to_string()),
-            audience: Some("my-api".to_string()),
-        };
-        match source {
-            CredentialSource::OAuth { issuer, audience } => {
-                assert_eq!(issuer, Some("https://example.com".to_string()));
-                assert_eq!(audience, Some("my-api".to_string()));
-            }
-            _ => panic!("Expected OAuth variant"),
-        }
+        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles[0], "cluster-west");
+        assert_eq!(profiles[1], "cluster-east");
     }
 
     #[test]
@@ -166,10 +147,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            state.database_url,
-            Some("redis://localhost:6379".to_string())
-        );
+        assert_eq!(state.database_url(), Some("redis://localhost:6379"));
     }
 
     #[test]
@@ -289,11 +267,6 @@ mod tests {
         let _ = tools::enterprise::get_shard(state.clone());
         let _ = tools::enterprise::get_shard_stats(state.clone());
         let _ = tools::enterprise::get_all_shards_stats(state.clone());
-        // Endpoints
-        let _ = tools::enterprise::get_database_endpoints(state.clone());
-        // Debug info
-        let _ = tools::enterprise::list_debug_info_tasks(state.clone());
-        let _ = tools::enterprise::get_debug_info_status(state.clone());
         // Modules
         let _ = tools::enterprise::list_modules(state.clone());
         let _ = tools::enterprise::get_module(state.clone());

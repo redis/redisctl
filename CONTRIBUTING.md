@@ -39,7 +39,7 @@ Each issue has detailed guidance in the comments. Don't hesitate to ask question
    cd redisctl
    ```
 
-2. **Install Rust toolchain (1.89+)**
+2. **Install Rust toolchain (1.90+)**
    ```bash
    rustup update stable
    ```
@@ -51,10 +51,14 @@ Each issue has detailed guidance in the comments. Don't hesitate to ask question
    cargo fmt --all -- --check
    ```
 
-4. **Start local Redis Enterprise for testing**
+4. **Start local Redis Enterprise for the live test suites**
    ```bash
-   docker compose up -d
+   docker compose -f docker/docker-compose.enterprise-demo.yml up -d
    ```
+
+   These suites are `#[ignore]`d and are not needed for most changes. See
+   [TESTING.md](TESTING.md) for the full picture: local test tiers, Docker prerequisites,
+   and what CI enforces.
 
 ### Making Changes
 
@@ -128,6 +132,9 @@ Each issue has detailed guidance in the comments. Don't hesitate to ask question
 - Test both success and error cases
 - Mock external API calls
 
+[TESTING.md](TESTING.md) covers the test tiers, the Docker-gated live suites, and the CI gates
+in detail.
+
 ### Documentation
 
 - Update README.md for user-facing changes
@@ -155,6 +162,24 @@ Each issue has detailed guidance in the comments. Don't hesitate to ask question
 5. When complete and green, mark the PR “Ready for review”.
 6. Prefer “Squash and merge” to produce a clean, single commit on `main`.
 7. Reference and close related issues in the PR description.
+8. When updating a full-SHA GitHub Action pin, keep its trailing release-version annotation in sync.
+
+### Compatibility Review
+
+Changes to documented commands, configuration, machine-readable output, exit codes, MCP tools, or
+public Rust APIs must be reviewed against the
+[compatibility and support policy](docs/docs/reference/compatibility.md). State whether the change
+is additive, breaking, preview-only, internal, or a safety correction, and add a contract test or a
+recorded exception where applicable.
+
+For MCP tool changes, run the catalog contract test before updating its fixture:
+
+```bash
+cargo test -p redisctl-mcp --all-features mcp_catalog_matches_1_0_baseline
+```
+
+The [MCP Compatibility and Catalog](docs/docs/mcp/compatibility.md) page explains how to review and
+record an intentional additive change. Never refresh the fixture solely to make the test pass.
 
 ## Release Process
 

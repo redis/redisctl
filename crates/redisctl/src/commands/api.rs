@@ -2,7 +2,7 @@
 
 use crate::cli::{HttpMethod, OutputFormat};
 use crate::connection::ConnectionManager;
-use crate::error::Result as CliResult;
+use crate::error::{RedisCtlError, Result as CliResult};
 use crate::output::print_output;
 use anyhow::Context;
 use redisctl_core::{Config, DeploymentType};
@@ -53,14 +53,14 @@ pub async fn handle_api_command(params: ApiCommandParams) -> CliResult<()> {
             )
             .await
         }
-        DeploymentType::Database => Err(anyhow::anyhow!(
-            "Raw API access is not supported for database profiles. Database profiles are for direct Redis connections."
-        ).into()),
+        DeploymentType::Database => Err(RedisCtlError::UnsupportedDeploymentType {
+            deployment_type: "database".to_string(),
+        }),
     }
 }
 
 /// Handle Cloud API calls
-#[allow(dead_code, clippy::too_many_arguments)] // Used by binary target
+#[allow(clippy::too_many_arguments)]
 async fn handle_cloud_api(
     connection_manager: ConnectionManager,
     profile_name: Option<&str>,
@@ -132,7 +132,7 @@ async fn handle_cloud_api(
 }
 
 /// Handle Enterprise API calls
-#[allow(dead_code, clippy::too_many_arguments)] // Used by binary target
+#[allow(clippy::too_many_arguments)]
 async fn handle_enterprise_api(
     connection_manager: ConnectionManager,
     profile_name: Option<&str>,

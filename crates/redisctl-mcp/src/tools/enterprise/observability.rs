@@ -1,6 +1,5 @@
 //! Alerts, logs, aggregate stats, shards, debug info, and module tools
 
-use redis_enterprise::debuginfo::{DebugInfoHandler, DebugInfoRequest};
 use redis_enterprise::logs::{LogsHandler, LogsQuery};
 use tower_mcp::{CallToolResult, ResultExt};
 
@@ -18,9 +17,6 @@ mcp_module! {
     get_shard => "get_shard",
     list_shards_by_database => "list_shards_by_database",
     list_shards_by_node => "list_shards_by_node",
-    list_debug_info_tasks => "list_debug_info_tasks",
-    get_debug_info_status => "get_debug_info_status",
-    create_debug_info => "create_debug_info",
     list_modules => "list_modules",
     get_module => "get_module",
 }
@@ -241,68 +237,6 @@ enterprise_tool!(read_only, list_shards_by_node, "list_shards_by_node",
             .tool_context("Failed to list shards by node")?;
 
         CallToolResult::from_list("shards", &shards)
-    }
-);
-
-// ============================================================================
-// Debug Info tools
-// ============================================================================
-
-enterprise_tool!(read_only, list_debug_info_tasks, "list_debug_info_tasks",
-    "List all debug info collection tasks and their statuses.",
-    {} => |client, _input| {
-        let handler = DebugInfoHandler::new(client);
-        let tasks = handler
-            .list()
-            .await
-            .tool_context("Failed to list debug info tasks")?;
-
-        CallToolResult::from_list("tasks", &tasks)
-    }
-);
-
-enterprise_tool!(read_only, get_debug_info_status, "get_debug_info_status",
-    "Get the status of a debug info collection task by ID.",
-    {
-        /// The task ID returned when debug info collection was started
-        pub task_id: String,
-    } => |client, input| {
-        let handler = DebugInfoHandler::new(client);
-        let status = handler
-            .status(&input.task_id)
-            .await
-            .tool_context("Failed to get debug info status")?;
-
-        CallToolResult::from_serialize(&status)
-    }
-);
-
-enterprise_tool!(write, create_debug_info, "create_debug_info",
-    "Start a debug info collection task. Optionally scope to specific nodes or databases.",
-    {
-        /// List of node UIDs to collect debug info from (if not specified, collects from all nodes)
-        #[serde(default)]
-        pub node_uids: Option<Vec<u32>>,
-        /// List of database UIDs to collect debug info for (if not specified, collects for all databases)
-        #[serde(default)]
-        pub bdb_uids: Option<Vec<u32>>,
-    } => |client, input| {
-        let request = DebugInfoRequest {
-            node_uids: input.node_uids,
-            bdb_uids: input.bdb_uids,
-            include_logs: None,
-            include_metrics: None,
-            include_configs: None,
-            time_range: None,
-        };
-
-        let handler = DebugInfoHandler::new(client);
-        let status = handler
-            .create(request)
-            .await
-            .tool_context("Failed to create debug info collection")?;
-
-        CallToolResult::from_serialize(&status)
     }
 );
 

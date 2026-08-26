@@ -67,6 +67,39 @@ impl CliDiagnostic {
     }
 }
 
+/// Process exit codes, so a script can branch on the kind of failure rather
+/// than on the text of the message.
+///
+/// `USAGE` is 2 to match clap, which already exits 2 when argument parsing
+/// fails: both mean the invocation itself was wrong. `GENERIC` stays 1 so
+/// anything not yet classified keeps the previous behavior.
+pub mod exit_code {
+    /// An error with no more specific classification.
+    pub const GENERIC: i32 = 1;
+    /// The command was invoked incorrectly.
+    pub const USAGE: i32 = 2;
+    /// Local configuration or profile problem.
+    pub const CONFIG: i32 = 3;
+    /// Credentials were rejected by the server.
+    pub const AUTH: i32 = 4;
+    /// The requested resource does not exist.
+    pub const NOT_FOUND: i32 = 5;
+    /// Input was well-formed but not valid.
+    pub const VALIDATION: i32 = 6;
+    /// The request conflicts with the current server state.
+    pub const CONFLICT: i32 = 7;
+    /// The server failed to service an otherwise valid request.
+    pub const UPSTREAM: i32 = 8;
+    /// The server is rate limiting; retry later.
+    pub const RATE_LIMITED: i32 = 9;
+    /// The server could not be reached.
+    pub const NETWORK: i32 = 10;
+    /// The operation did not complete in time.
+    pub const TIMEOUT: i32 = 11;
+    /// The operation was not confirmed, so nothing was done.
+    pub const CANCELLED: i32 = 12;
+}
+
 /// Main error type for the redisctl application
 #[derive(Error, Debug)]
 pub enum RedisCtlError {
@@ -87,14 +120,12 @@ pub enum RedisCtlError {
         available_profiles: Vec<String>,
     },
 
-    // Intended error types that no code path constructs yet: the CLI currently
-    // reports these conditions with generic errors instead. Kept (with their
-    // messages and suggestions) to be wired up rather than cut; see #1049.
-    #[allow(dead_code)]
-    #[error("No profile configured. Use 'redisctl profile set' to configure a profile.")]
-    NoProfileConfigured,
+    #[error("No {deployment_type} profiles configured. {suggestion}")]
+    NoProfileConfigured {
+        deployment_type: String,
+        suggestion: String,
+    },
 
-    #[allow(dead_code)]
     #[error("Missing credentials for profile '{name}': {missing_fields}")]
     MissingCredentials {
         name: String,
@@ -113,12 +144,9 @@ pub enum RedisCtlError {
     #[error("Invalid input: {message}")]
     InvalidInput { message: String },
 
-    #[error(
-        "Confirmation required: {prompt} Re-run with --force to proceed in a non-interactive session."
-    )]
+    #[error("Cancelled at the confirmation prompt: {prompt}")]
     Cancelled { prompt: String },
 
-    #[allow(dead_code)] // intended but not yet produced by any code path; see #1049
     #[error("Command not supported for deployment type '{deployment_type}'")]
     UnsupportedDeploymentType { deployment_type: String },
     #[error("File error for '{path}': {message}")]
@@ -152,9 +180,13 @@ impl RedisCtlError {
                 format!("Create profile '{}': redisctl profile set {}", name, name),
                 format!("Check profile name spelling"),
             ],
-            RedisCtlError::NoProfileConfigured => vec![
+            RedisCtlError::NoProfileConfigured {
+                deployment_type, ..
+            } => vec![
                 "Run the setup wizard: redisctl profile init".to_string(),
-                "Or create manually: redisctl profile set <name> --type <cloud|enterprise|database> ...".to_string(),
+                format!(
+                    "Or create manually: redisctl profile set <name> --type {deployment_type} ..."
+                ),
                 "View profile help: redisctl profile set --help".to_string(),
             ],
             RedisCtlError::MissingCredentials { name, .. } => vec![
@@ -174,21 +206,30 @@ impl RedisCtlError {
                     "Refresh credentials: redisctl profile set {} --type <type> ... (preserves other settings)",
                     profile_name,
                 ));
-                suggestions.push(
-                    "Test connectivity: redisctl profile validate --connect".to_string(),
-                );
+                suggestions
+                    .push("Test connectivity: redisctl profile validate --connect".to_string());
                 suggestions
             }
-            RedisCtlError::ConnectionError { message } if message.contains("certificate") || message.contains("SSL") || message.contains("tls") => vec![
-                "For self-signed certificates, recreate profile with --insecure".to_string(),
-                "Or provide a CA cert: --ca-cert /path/to/ca.pem".to_string(),
-                "Verify the URL uses the correct port (9443 for Enterprise admin)".to_string(),
-            ],
-            RedisCtlError::ConnectionError { message } if message.contains("Connection refused") => vec![
-                "The server is not accepting connections on this address/port".to_string(),
-                "Verify the URL: redisctl profile show <profile>".to_string(),
-                "Check that the server is running and the port is correct".to_string(),
-            ],
+            RedisCtlError::ConnectionError { message }
+                if message.contains("certificate")
+                    || message.contains("SSL")
+                    || message.contains("tls") =>
+            {
+                vec![
+                    "For self-signed certificates, recreate profile with --insecure".to_string(),
+                    "Or provide a CA cert: --ca-cert /path/to/ca.pem".to_string(),
+                    "Verify the URL uses the correct port (9443 for Enterprise admin)".to_string(),
+                ]
+            }
+            RedisCtlError::ConnectionError { message }
+                if message.contains("Connection refused") =>
+            {
+                vec![
+                    "The server is not accepting connections on this address/port".to_string(),
+                    "Verify the URL: redisctl profile show <profile>".to_string(),
+                    "Check that the server is running and the port is correct".to_string(),
+                ]
+            }
             RedisCtlError::ConnectionError { message } if message.contains("timed out") => vec![
                 "The server did not respond in time".to_string(),
                 "Check network connectivity and firewall rules".to_string(),
@@ -245,6 +286,7 @@ impl RedisCtlError {
             RedisCtlError::Cancelled { .. } => vec![
                 "Re-run with --force to skip the confirmation prompt".to_string(),
                 "Confirmation prompts require an interactive terminal".to_string(),
+                "A declined or unanswerable prompt is a failure, not a no-op".to_string(),
             ],
             RedisCtlError::Configuration(_) => vec![
                 "Check the profile: redisctl profile show <name>".to_string(),
@@ -263,7 +305,7 @@ impl RedisCtlError {
             RedisCtlError::Other(_) => "error",
             RedisCtlError::ProfileNotFound { .. } => "profile_not_found",
             RedisCtlError::ProfileTypeMismatch { .. } => "profile_type_mismatch",
-            RedisCtlError::NoProfileConfigured => "no_profile_configured",
+            RedisCtlError::NoProfileConfigured { .. } => "no_profile_configured",
             RedisCtlError::MissingCredentials { .. } => "missing_credentials",
             RedisCtlError::AuthenticationFailed { .. } => "authentication_failed",
             RedisCtlError::ApiError { .. } => "api_error",
@@ -279,11 +321,70 @@ impl RedisCtlError {
         }
     }
 
+    /// The process exit code for this error.
+    ///
+    /// Exhaustive on purpose: a new variant must declare its code. Several
+    /// variants share one code, because the taxonomy classifies what a script
+    /// should do about the failure, not which variant produced it.
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            // Local configuration: the profile is missing, incomplete, or the
+            // wrong type for the command.
+            RedisCtlError::Configuration(_)
+            | RedisCtlError::ProfileNotFound { .. }
+            | RedisCtlError::ProfileTypeMismatch { .. }
+            | RedisCtlError::NoProfileConfigured { .. }
+            | RedisCtlError::MissingCredentials { .. } => exit_code::CONFIG,
+
+            RedisCtlError::AuthenticationFailed { .. } => exit_code::AUTH,
+
+            // The only variant that carries a server status, so it is the only
+            // place not-found, conflict and rate-limited can come from. The
+            // status is recovered from the message, as `suggestions` already
+            // does for 404.
+            RedisCtlError::ApiError { message } => {
+                if message.contains("404") {
+                    exit_code::NOT_FOUND
+                } else if message.contains("409") {
+                    exit_code::CONFLICT
+                } else if message.contains("429") {
+                    exit_code::RATE_LIMITED
+                } else {
+                    exit_code::UPSTREAM
+                }
+            }
+
+            RedisCtlError::InvalidInput { .. } => exit_code::VALIDATION,
+            RedisCtlError::Cancelled { .. } => exit_code::CANCELLED,
+
+            // The command does not apply to this deployment, or names a file
+            // that could not be read: in both cases the invocation was wrong.
+            RedisCtlError::UnsupportedDeploymentType { .. } | RedisCtlError::FileError { .. } => {
+                exit_code::USAGE
+            }
+
+            RedisCtlError::ConnectionError { .. } => exit_code::NETWORK,
+            RedisCtlError::Timeout { .. } => exit_code::TIMEOUT,
+
+            // `Other` is the anyhow catch-all and `OutputError` covers
+            // serialization and IO; neither is classified yet.
+            RedisCtlError::Other(_) | RedisCtlError::OutputError { .. } => exit_code::GENERIC,
+
+            // The agent-native surface publishes its own 1-4 contract (see
+            // docs/reference/agent-error-codes.md), where `retryable` is defined as exactly the
+            // exit-3 class. Those numbers are carried through unchanged so a caller branching on
+            // them keeps working. NOTE: 3 and 4 therefore mean something different here than in
+            // the taxonomy above (CONFIG and AUTH) — reconciling the two is a separate decision.
+            RedisCtlError::Structured(se) => se.exit_code as i32,
+        }
+    }
+
     /// The structured error object emitted under -o json/-o yaml.
     fn envelope(&self) -> serde_json::Value {
         serde_json::json!({
             "error": {
                 "code": self.code(),
+                "exit_code": self.exit_code(),
                 "message": self.to_string(),
                 "tips": self.suggestions(),
             }
@@ -425,7 +526,50 @@ impl From<redisctl_core::AuthError> for RedisCtlError {
 
 impl From<redisctl_core::ConfigError> for RedisCtlError {
     fn from(err: redisctl_core::ConfigError) -> Self {
-        RedisCtlError::Configuration(err.to_string())
+        match err {
+            redisctl_core::ConfigError::ProfileNotFound { name } => {
+                RedisCtlError::ProfileNotFound { name }
+            }
+            redisctl_core::ConfigError::NoProfilesOfType {
+                deployment_type,
+                suggestion,
+            } => RedisCtlError::NoProfileConfigured {
+                deployment_type,
+                suggestion,
+            },
+            other => RedisCtlError::Configuration(other.to_string()),
+        }
+    }
+}
+
+impl From<redisctl_core::ClientResolutionError> for RedisCtlError {
+    fn from(err: redisctl_core::ClientResolutionError) -> Self {
+        match err {
+            redisctl_core::ClientResolutionError::Config(config_error) => config_error.into(),
+            redisctl_core::ClientResolutionError::ProfileTypeMismatch {
+                name,
+                actual_type,
+                expected_type,
+                available_profiles,
+            } => RedisCtlError::ProfileTypeMismatch {
+                name,
+                actual_type: actual_type.to_string(),
+                expected_type: expected_type.to_string(),
+                available_profiles,
+            },
+            redisctl_core::ClientResolutionError::MissingCredentials {
+                profile_name,
+                missing_fields,
+                ..
+            } => RedisCtlError::MissingCredentials {
+                name: profile_name,
+                missing_fields,
+            },
+            redisctl_core::ClientResolutionError::CloudClient(cloud_error) => cloud_error.into(),
+            redisctl_core::ClientResolutionError::EnterpriseClient(enterprise_error) => {
+                enterprise_error.into()
+            }
+        }
     }
 }
 
@@ -447,5 +591,153 @@ impl From<redisctl_core::error::CoreError> for RedisCtlError {
                 RedisCtlError::from(enterprise_err)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn api(message: &str) -> RedisCtlError {
+        RedisCtlError::ApiError {
+            message: message.to_string(),
+        }
+    }
+
+    #[test]
+    fn variants_map_to_their_taxonomy_codes() {
+        assert_eq!(
+            RedisCtlError::Configuration("bad".into()).exit_code(),
+            exit_code::CONFIG
+        );
+        assert_eq!(
+            RedisCtlError::ProfileNotFound { name: "p".into() }.exit_code(),
+            exit_code::CONFIG
+        );
+        assert_eq!(
+            RedisCtlError::AuthenticationFailed {
+                message: "no".into(),
+                profile_name: "p".into(),
+            }
+            .exit_code(),
+            exit_code::AUTH
+        );
+        assert_eq!(
+            RedisCtlError::InvalidInput {
+                message: "no".into(),
+            }
+            .exit_code(),
+            exit_code::VALIDATION
+        );
+        assert_eq!(
+            RedisCtlError::Cancelled {
+                prompt: "delete?".into(),
+            }
+            .exit_code(),
+            exit_code::CANCELLED
+        );
+        assert_eq!(
+            RedisCtlError::FileError {
+                path: "/nope".into(),
+                message: "missing".into(),
+            }
+            .exit_code(),
+            exit_code::USAGE
+        );
+        assert_eq!(
+            RedisCtlError::ConnectionError {
+                message: "refused".into(),
+            }
+            .exit_code(),
+            exit_code::NETWORK
+        );
+        assert_eq!(
+            RedisCtlError::Timeout {
+                message: "slow".into(),
+            }
+            .exit_code(),
+            exit_code::TIMEOUT
+        );
+        assert_eq!(
+            RedisCtlError::Other("unclassified".into()).exit_code(),
+            exit_code::GENERIC
+        );
+    }
+
+    #[test]
+    fn api_errors_split_by_status() {
+        assert_eq!(
+            api("404 Not Found: no such database").exit_code(),
+            exit_code::NOT_FOUND
+        );
+        assert_eq!(
+            api("HTTP 409: database already exists").exit_code(),
+            exit_code::CONFLICT
+        );
+        assert_eq!(
+            api("HTTP 429: slow down").exit_code(),
+            exit_code::RATE_LIMITED
+        );
+        assert_eq!(
+            api("Server error (5xx): boom").exit_code(),
+            exit_code::UPSTREAM
+        );
+    }
+
+    // The envelope is the script-facing contract: it must carry the same exit
+    // code the process actually returns.
+    #[test]
+    fn envelope_carries_the_exit_code() {
+        let err = RedisCtlError::Timeout {
+            message: "slow".into(),
+        };
+        let envelope = err.envelope();
+        assert_eq!(envelope["error"]["exit_code"], exit_code::TIMEOUT);
+        assert_eq!(envelope["error"]["code"], "timeout");
+    }
+
+    // Nothing is allowed to collapse back to a bare 1 except the two variants
+    // that are explicitly unclassified.
+    #[test]
+    fn classified_variants_do_not_return_generic() {
+        for err in [
+            RedisCtlError::NoProfileConfigured {
+                deployment_type: "cloud".into(),
+                suggestion: "create one".into(),
+            },
+            RedisCtlError::MissingCredentials {
+                name: "p".into(),
+                missing_fields: "api_key".into(),
+            },
+            RedisCtlError::UnsupportedDeploymentType {
+                deployment_type: "cloud".into(),
+            },
+            api("HTTP 500: boom"),
+        ] {
+            assert_ne!(err.exit_code(), exit_code::GENERIC, "{err}");
+        }
+    }
+
+    #[test]
+    fn config_errors_keep_actionable_profile_types() {
+        let missing = RedisCtlError::from(redisctl_core::ConfigError::ProfileNotFound {
+            name: "missing".into(),
+        });
+        assert!(matches!(
+            missing,
+            RedisCtlError::ProfileNotFound { ref name } if name == "missing"
+        ));
+
+        let empty = RedisCtlError::from(redisctl_core::ConfigError::NoProfilesOfType {
+            deployment_type: "cloud".into(),
+            suggestion: "create one".into(),
+        });
+        assert!(matches!(
+            empty,
+            RedisCtlError::NoProfileConfigured {
+                ref deployment_type,
+                ref suggestion,
+            } if deployment_type == "cloud" && suggestion == "create one"
+        ));
     }
 }

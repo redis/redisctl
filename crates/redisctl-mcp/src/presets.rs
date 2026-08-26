@@ -27,6 +27,7 @@ use crate::policy::ToolsetKind;
 /// ```
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct ToolsConfig {
     /// Preset name. `"all"` (default) loads every tool; `"essentials"` loads
     /// a curated subset per enabled toolset.
@@ -84,7 +85,6 @@ pub const ENTERPRISE_ESSENTIALS: &[&str] = &[
     "list_enterprise_databases",
     "get_enterprise_database",
     "get_database_stats",
-    "get_database_endpoints",
     "list_enterprise_users",
     "get_enterprise_user",
     "list_enterprise_roles",

@@ -237,10 +237,8 @@ impl BdbGroupCommands {
             }
 
             BdbGroupCommands::Delete { uid, force } => {
-                if !force
-                    && !super::utils::confirm_action(&format!("Delete database group {}?", uid))?
-                {
-                    return Ok(());
+                if !force {
+                    super::utils::confirm_action(&format!("Delete database group {}?", uid))?;
                 }
 
                 client

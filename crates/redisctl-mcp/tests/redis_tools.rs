@@ -14,7 +14,8 @@
 //! REUSE_CONTAINERS=1 cargo test -p redisctl-mcp --test redis_tools --all-features -- --ignored --nocapture
 //! ```
 
-use std::collections::HashMap;
+mod support;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -24,9 +25,9 @@ use serde_json::json;
 use tokio::sync::OnceCell;
 use tower_mcp::Tool;
 
-use redisctl_mcp::policy::{Policy, PolicyConfig, SafetyTier};
-use redisctl_mcp::state::AppState;
+use redisctl_mcp::AppState;
 use redisctl_mcp::tools::redis;
+use support::{database_state_full, database_state_readonly, database_state_write};
 
 // ============================================================================
 // Test infrastructure
@@ -78,63 +79,15 @@ fn redis_url(port: u16) -> String {
 }
 
 fn make_state(port: u16) -> Arc<AppState> {
-    let policy = Arc::new(Policy::new(
-        PolicyConfig::default(),
-        HashMap::new(),
-        "test".to_string(),
-    ));
-    Arc::new(
-        AppState::new(
-            redisctl_mcp::state::CredentialSource::Profiles(vec![]),
-            policy,
-            Some(redis_url(port)),
-            false,
-            None,
-        )
-        .unwrap(),
-    )
+    database_state_readonly(redis_url(port))
 }
 
 fn make_rw_state(port: u16) -> Arc<AppState> {
-    let policy = Arc::new(Policy::new(
-        PolicyConfig {
-            tier: SafetyTier::ReadWrite,
-            ..Default::default()
-        },
-        HashMap::new(),
-        "test".to_string(),
-    ));
-    Arc::new(
-        AppState::new(
-            redisctl_mcp::state::CredentialSource::Profiles(vec![]),
-            policy,
-            Some(redis_url(port)),
-            false,
-            None,
-        )
-        .unwrap(),
-    )
+    database_state_write(redis_url(port))
 }
 
 fn make_full_state(port: u16) -> Arc<AppState> {
-    let policy = Arc::new(Policy::new(
-        PolicyConfig {
-            tier: SafetyTier::Full,
-            ..Default::default()
-        },
-        HashMap::new(),
-        "test".to_string(),
-    ));
-    Arc::new(
-        AppState::new(
-            redisctl_mcp::state::CredentialSource::Profiles(vec![]),
-            policy,
-            Some(redis_url(port)),
-            false,
-            None,
-        )
-        .unwrap(),
-    )
+    database_state_full(redis_url(port))
 }
 
 async fn call_tool_text(tool: &Tool, input: serde_json::Value) -> String {
@@ -150,6 +103,18 @@ async fn call_tool_text(tool: &Tool, input: serde_json::Value) -> String {
 async fn get_conn(port: u16) -> ::redis::aio::MultiplexedConnection {
     let client = ::redis::Client::open(redis_url(port)).unwrap();
     client.get_multiplexed_async_connection().await.unwrap()
+}
+
+#[test]
+fn test_set_input_accepts_string_expiry() {
+    let input: redis::SetInput = serde_json::from_value(json!({
+        "key": "coercion-test",
+        "value": "value",
+        "ex": "3600"
+    }))
+    .expect("string expiry should deserialize");
+
+    assert_eq!(input.ex, Some(3600));
 }
 
 /// Clean up keys matching a prefix (for test isolation)
@@ -585,7 +550,7 @@ async fn test_key_write_tools() {
     // redis_set with EX
     let text = call_tool_text(
         &redis::set(state.clone()),
-        json!({"key": format!("{p}k_ex"), "value": "v", "ex": 3600}),
+        json!({"key": format!("{p}k_ex"), "value": "v", "ex": "3600"}),
     )
     .await;
     assert!(text.contains("OK"), "set ex: {}", text);
@@ -1600,24 +1565,7 @@ async fn test_flushdb_tool() {
     // Use a dedicated DB (SELECT 1) to avoid interfering with other tests on DB 0.
     // But since tool handlers use their own connections via URL, we pass db=1 in URL.
     let url_db1 = format!("redis://localhost:{}/1", ctx.port);
-    let policy = Arc::new(Policy::new(
-        PolicyConfig {
-            tier: SafetyTier::Full,
-            ..Default::default()
-        },
-        HashMap::new(),
-        "test".to_string(),
-    ));
-    let db1_state = Arc::new(
-        AppState::new(
-            redisctl_mcp::state::CredentialSource::Profiles(vec![]),
-            policy,
-            Some(url_db1.clone()),
-            false,
-            None,
-        )
-        .unwrap(),
-    );
+    let db1_state = database_state_full(url_db1.clone());
 
     // Switch our direct connection to DB 1 too
     let _: () = ::redis::cmd("SELECT")

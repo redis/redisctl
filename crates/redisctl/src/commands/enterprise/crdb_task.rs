@@ -67,7 +67,7 @@ pub enum CrdbTaskCommands {
         task_id: String,
 
         /// Force cancellation without confirmation
-        #[arg(short, long)]
+        #[arg(long)]
         force: bool,
     },
 
@@ -268,8 +268,8 @@ impl CrdbTaskCommands {
             }
 
             CrdbTaskCommands::Cancel { task_id, force } => {
-                if !force && !super::utils::confirm_action(&format!("Cancel task {}?", task_id))? {
-                    return Ok(());
+                if !force {
+                    super::utils::confirm_action(&format!("Cancel task {}?", task_id))?;
                 }
 
                 // Cancel the task

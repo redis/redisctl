@@ -2,6 +2,12 @@
 
 Technical reference documentation.
 
+## Compatibility and support
+
+| Topic | Description |
+| --- | --- |
+| [Compatibility and Support Policy](compatibility.md) | Stable, preview, and internal surfaces; SemVer and deprecation rules |
+
 ## Configuration
 
 | Topic | Description |

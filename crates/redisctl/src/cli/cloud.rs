@@ -275,8 +275,8 @@ pub enum PscCommands {
         /// Subscription ID
         subscription_id: i32,
         /// Skip confirmation prompt
-        #[arg(short, long)]
-        yes: bool,
+        #[arg(long, alias = "yes", short_alias = 'y')]
+        force: bool,
         #[command(flatten)]
         async_ops: crate::commands::cloud::async_utils::AsyncOperationArgs,
     },
@@ -394,8 +394,8 @@ pub enum PscCommands {
         /// Endpoint ID
         endpoint_id: i32,
         /// Skip confirmation prompt
-        #[arg(short, long)]
-        yes: bool,
+        #[arg(long, alias = "yes", short_alias = 'y')]
+        force: bool,
         #[command(flatten)]
         async_ops: crate::commands::cloud::async_utils::AsyncOperationArgs,
     },
@@ -449,8 +449,8 @@ pub enum PscCommands {
         /// Region ID
         region_id: i32,
         /// Skip confirmation prompt
-        #[arg(short, long)]
-        yes: bool,
+        #[arg(long, alias = "yes", short_alias = 'y')]
+        force: bool,
         #[command(flatten)]
         async_ops: crate::commands::cloud::async_utils::AsyncOperationArgs,
     },
@@ -530,8 +530,8 @@ pub enum PscCommands {
         /// Endpoint ID
         endpoint_id: i32,
         /// Skip confirmation prompt
-        #[arg(short, long)]
-        yes: bool,
+        #[arg(long, alias = "yes", short_alias = 'y')]
+        force: bool,
         #[command(flatten)]
         async_ops: crate::commands::cloud::async_utils::AsyncOperationArgs,
     },
@@ -636,8 +636,8 @@ pub enum TgwCommands {
         /// Attachment ID
         attachment_id: String,
         /// Skip confirmation prompt
-        #[arg(short, long)]
-        yes: bool,
+        #[arg(long, alias = "yes", short_alias = 'y')]
+        force: bool,
         #[command(flatten)]
         async_ops: crate::commands::cloud::async_utils::AsyncOperationArgs,
     },
@@ -762,8 +762,8 @@ pub enum TgwCommands {
         /// Attachment ID
         attachment_id: String,
         /// Skip confirmation prompt
-        #[arg(short, long)]
-        yes: bool,
+        #[arg(long, alias = "yes", short_alias = 'y')]
+        force: bool,
         #[command(flatten)]
         async_ops: crate::commands::cloud::async_utils::AsyncOperationArgs,
     },
@@ -1120,8 +1120,8 @@ pub enum CloudFixedDatabaseCommands {
         /// Database ID (format: subscription_id:database_id)
         id: String,
         /// Skip confirmation prompt
-        #[arg(short, long)]
-        yes: bool,
+        #[arg(long, alias = "yes", short_alias = 'y')]
+        force: bool,
         /// Async operation options
         #[command(flatten)]
         async_ops: crate::commands::cloud::async_utils::AsyncOperationArgs,
@@ -1434,8 +1434,8 @@ pub enum CloudFixedSubscriptionCommands {
         /// Subscription ID
         id: i32,
         /// Skip confirmation prompt
-        #[arg(short, long)]
-        yes: bool,
+        #[arg(long, alias = "yes", short_alias = 'y')]
+        force: bool,
         /// Async operation options
         #[command(flatten)]
         async_ops: crate::commands::cloud::async_utils::AsyncOperationArgs,

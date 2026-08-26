@@ -693,14 +693,8 @@ pub async fn delete_database(
     }
 
     // Confirmation prompt unless --force is used
-    if !force
-        && !super::utils::confirm_action(&format!(
-            "Are you sure you want to delete database {}?",
-            id
-        ))?
-    {
-        println!("Database deletion cancelled");
-        return Ok(());
+    if !force {
+        super::utils::confirm_action(&format!("Are you sure you want to delete database {}?", id))?;
     }
 
     // Use Layer 2 workflow when --wait is specified
@@ -1726,14 +1720,11 @@ pub async fn flush_database(
     let (subscription_id, database_id) = parse_database_id(id)?;
 
     // Confirmation prompt unless --force is used
-    if !force
-        && !super::utils::confirm_action(&format!(
+    if !force {
+        super::utils::confirm_action(&format!(
             "Are you sure you want to flush database {}? This will delete all data!",
             id
-        ))?
-    {
-        println!("Flush operation cancelled");
-        return Ok(());
+        ))?;
     }
 
     let client = conn_mgr.create_cloud_client(profile_name).await?;
@@ -1830,14 +1821,11 @@ pub async fn flush_crdb(
     let (subscription_id, database_id) = parse_database_id(id)?;
 
     // Confirmation prompt unless --force is used
-    if !force
-        && !super::utils::confirm_action(&format!(
+    if !force {
+        super::utils::confirm_action(&format!(
             "Are you sure you want to flush Active-Active database {}? This will delete all data!",
             id
-        ))?
-    {
-        println!("Flush operation cancelled");
-        return Ok(());
+        ))?;
     }
 
     let client = conn_mgr.create_cloud_client(profile_name).await?;

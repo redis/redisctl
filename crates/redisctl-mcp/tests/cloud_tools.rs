@@ -1,6 +1,8 @@
 #![cfg(feature = "cloud")]
 //! Integration tests for Redis Cloud MCP tools using mock server
 
+mod support;
+
 use std::sync::Arc;
 
 use redis_cloud::testing::{
@@ -17,24 +19,13 @@ use wiremock::ResponseTemplate;
 // `body_partial_json`, which does a genuine partial (subset) match.
 use wiremock::matchers::body_partial_json;
 
-// Import the tools and state from the MCP crate
-use redisctl_mcp::policy::{Policy, PolicyConfig, SafetyTier};
-use redisctl_mcp::state::AppState;
+use redisctl_mcp::AppState;
 use redisctl_mcp::tools::cloud;
+use support::state_full;
 
 /// Create an AppState with full-tier policy for testing write/destructive tools.
-#[cfg(feature = "cloud")]
 fn full_policy_state(client: redis_cloud::CloudClient) -> Arc<AppState> {
-    let mut state = AppState::with_cloud_client(client);
-    state.policy = Arc::new(Policy::new(
-        PolicyConfig {
-            tier: SafetyTier::Full,
-            ..Default::default()
-        },
-        std::collections::HashMap::new(),
-        "test-full".to_string(),
-    ));
-    Arc::new(state)
+    state_full(AppState::with_cloud_client(client))
 }
 
 /// Helper to call a tool and get text result
@@ -122,7 +113,7 @@ async fn test_get_subscription() {
     let state = Arc::new(AppState::with_cloud_client(client));
     let tool = cloud::get_subscription(state);
 
-    let result = call_tool_json(&tool, json!({"subscription_id": 123})).await;
+    let result = call_tool_json(&tool, json!({"subscription_id": "123"})).await;
 
     assert_eq!(result["id"], 123);
     assert_eq!(result["name"], "Production");

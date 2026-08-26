@@ -4,6 +4,7 @@
 //!
 //! This crate provides:
 //! - **Unified error handling** - CoreError wrapping both platform errors
+//! - **Client resolution** - Shared profile, credential, endpoint, and TLS handling
 //! - **Progress callbacks** - For Cloud's async task polling
 //! - **Module resolution** - Validate Enterprise modules before creation
 //! - **Workflows** - Multi-step operations (create + wait, etc.)
@@ -28,6 +29,7 @@
 //! ┌─────────────────────────────────────────────────────────────────┐
 //! │                 Layer 2: redisctl-core                          │
 //! │  - Unified errors (CoreError)                                   │
+//! │  - Client resolution (ClientResolver)                           │
 //! │  - Progress callbacks (poll_task)                               │
 //! │  - Module resolution (resolve_modules)                          │
 //! │  - Workflows (create_and_wait, etc.)                            │
@@ -73,6 +75,7 @@
 pub const USER_AGENT: &str = concat!("redisctl/", env!("CARGO_PKG_VERSION"));
 
 pub mod auth;
+pub mod clients;
 pub mod config;
 pub mod error;
 pub mod progress;
@@ -89,9 +92,12 @@ pub use error::{CoreError, Result};
 pub use progress::{ProgressCallback, ProgressEvent, poll_task};
 
 // Re-export config types for convenience
+pub use clients::{
+    ClientResolutionError, ClientResolver, ResolvedCloudConnection, ResolvedEnterpriseConnection,
+};
 pub use config::{
     CloudAuthConfig, Config, ConfigError, CredentialStorage, CredentialStore, DeploymentType,
-    Profile, ProfileCredentials,
+    EnvironmentOverrides, Profile, ProfileCredentials,
 };
 
 // Re-export Layer 1 for convenience (but consumers can also import directly)

@@ -747,12 +747,13 @@ pub struct CreateProfileInput {
     /// Redis Cloud API secret (required for cloud profiles)
     #[serde(default)]
     pub api_secret: Option<String>,
-    /// Redis Cloud API URL (defaults to https://api.redislabs.com/v1)
+    /// Redis Cloud API URL (defaults to <https://api.redislabs.com/v1>)
     #[serde(default)]
     pub api_url: Option<String>,
 
     // Enterprise credentials
-    /// Enterprise cluster URL, e.g. https://cluster.example.com:9443 (required for enterprise profiles)
+    /// Enterprise cluster URL, for example <https://cluster.example.com:9443>
+    /// (required for enterprise profiles)
     #[serde(default)]
     pub url: Option<String>,
     /// Enterprise admin username (required for enterprise profiles)

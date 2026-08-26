@@ -323,7 +323,8 @@ database_tool!(read_only, ft_aggregate, "redis_ft_aggregate",
         /// Number of results to return
         #[serde(default, deserialize_with = "serde_helpers::string_or_opt_u64::deserialize")]
         pub limit_num: Option<u64>,
-        /// Additional raw arguments for complex pipelines (e.g. ["GROUPBY", "1", "@city", "REDUCE", "COUNT", "0", "AS", "count"])
+        /// Additional raw arguments for complex pipelines (for example,
+        /// `["GROUPBY", "1", "@city", "REDUCE", "COUNT", "0", "AS", "count"]`)
         #[serde(default)]
         pub raw_args: Option<Vec<String>>,
     } => |conn, input| {

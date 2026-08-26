@@ -17,17 +17,24 @@ This page covers all three, with emphasis on `--tools` for controlling the tool 
 | `--read-only` | -- | -- | `true` | Read-only mode; use `--read-only=false` for writes. Ignored when a policy file is active |
 | `--policy` | -- | `REDISCTL_MCP_POLICY` | -- | Path to TOML policy file for granular access control. Overrides `--read-only` |
 | `--database-url` | -- | `REDIS_URL` | -- | Redis URL for direct database connections |
+| `--cluster` | -- | `REDIS_CLUSTER` | `false` | Enable Redis Cluster mode for direct database connections |
+| `--client-name` | -- | `REDIS_CLIENT_NAME` | `redisctl-mcp` | Client name shown in Redis `CLIENT LIST` |
 | `--tools` | -- | -- | -- | Comma-delimited toolset/sub-module selection (see below) |
+| `--skills-dir` | -- | `REDISCTL_MCP_SKILLS_DIR` | -- | Directory containing Agent Skills to expose as MCP prompts |
 | `--host` | -- | -- | `127.0.0.1` | HTTP bind host (HTTP transport only) |
 | `--port` | -- | -- | `8080` | HTTP bind port (HTTP transport only) |
-| `--oauth` | -- | -- | `false` | Enable OAuth authentication (HTTP transport only) |
-| `--oauth-issuer` | -- | `OAUTH_ISSUER` | -- | OAuth issuer URL |
-| `--oauth-audience` | -- | `OAUTH_AUDIENCE` | -- | OAuth audience |
-| `--jwks-uri` | -- | `OAUTH_JWKS_URI` | -- | JWKS URI for token validation |
 | `--max-concurrent` | -- | -- | `10` | Maximum concurrent requests |
-| `--rate-limit-ms` | -- | -- | `100` | Rate limit interval in milliseconds |
 | `--request-timeout-secs` | -- | -- | `30` | Request timeout in seconds (HTTP transport only) |
 | `--log-level` | -- | `RUST_LOG` | `info` | Log level |
+
+!!! warning "HTTP transport is preview and does not provide built-in authentication"
+    Keep the default loopback bind unless the server is protected by a trusted
+    gateway or reverse proxy that provides authentication, authorization, and
+    TLS. Do not expose an unprotected `redisctl-mcp` HTTP endpoint to an
+    untrusted network.
+
+    Stdio is the stable 1.0 transport. See the
+    [MCP Compatibility and Catalog](compatibility.md) for the detailed MCP contract.
 
 ## The `--tools` Flag
 
@@ -65,9 +72,9 @@ The server resolves which toolsets to load in this order:
 
 | Toolset | Sub-modules | Total Tools |
 |---------|-------------|-------------|
-| `cloud` | `subscriptions`, `account`, `networking`, `fixed`, `raw` | 151 |
-| `enterprise` | `cluster`, `databases`, `rbac`, `observability`, `proxy`, `services`, `raw` | 92 |
-| `database` | `server`, `keys`, `structures`, `diagnostics`, `json`, `search`, `aliases`, `bulk`, `raw` | 139 |
+| `cloud` | `subscriptions`, `account`, `networking`, `fixed`, `raw` | 148 |
+| `enterprise` | `cluster`, `databases`, `rbac`, `observability`, `proxy`, `services`, `raw` | 85 |
+| `database` | `server`, `keys`, `structures`, `diagnostics`, `json`, `search`, `aliases`, `bulk`, `raw` | 132 |
 | `app` | *(none -- flat toolset)* | 8 |
 | *(system)* | *(always loaded)* | 2 |
 
@@ -75,7 +82,7 @@ The two system tools (`list_available_tools` and `show_policy`) are always regis
 
 ### Examples
 
-**Cloud only** -- all Cloud sub-modules (151 tools + system):
+**Cloud only** -- all Cloud sub-modules (148 tools + system):
 
 ```bash
 redisctl-mcp --profile my-cloud --tools cloud
@@ -87,13 +94,13 @@ redisctl-mcp --profile my-cloud --tools cloud
 redisctl-mcp --profile my-cloud --tools cloud:subscriptions,cloud:networking
 ```
 
-**Enterprise monitoring** -- cluster info + observability (40 tools + system):
+**Enterprise monitoring** -- cluster info + observability (36 tools + system):
 
 ```bash
 redisctl-mcp --profile my-re --tools enterprise:cluster,enterprise:observability
 ```
 
-**Database only** -- direct Redis operations (139 tools + system):
+**Database only** -- direct Redis operations (132 tools + system):
 
 ```bash
 redisctl-mcp --database-url redis://localhost:6379 --tools database

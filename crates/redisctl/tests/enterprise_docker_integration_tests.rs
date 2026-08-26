@@ -3,9 +3,9 @@
 //! These tests require a running Redis Enterprise cluster via Docker Compose:
 //!
 //! ```bash
-//! docker compose up -d
+//! docker compose -f docker/docker-compose.enterprise-demo.yml up -d
 //! # Wait for initialization
-//! docker compose logs -f redis-enterprise-init
+//! docker compose -f docker/docker-compose.enterprise-demo.yml logs -f redis-enterprise-init
 //! ```
 //!
 //! Run tests with:
@@ -13,7 +13,7 @@
 //! cargo test --test enterprise_docker_integration_tests -- --ignored
 //! ```
 //!
-//! Environment variables (set by docker-compose.yml):
+//! Environment variables (set by docker/docker-compose.enterprise-demo.yml):
 //! - REDIS_ENTERPRISE_URL: https://localhost:9443
 //! - REDIS_ENTERPRISE_USER: admin@redis.local
 //! - REDIS_ENTERPRISE_PASSWORD: Redis123!
@@ -1263,42 +1263,4 @@ fn test_enterprise_support_package_cluster_help() {
         .stdout(predicate::str::contains("--file"))
         .stdout(predicate::str::contains("--optimize"))
         .stdout(predicate::str::contains("--upload"));
-}
-
-// =============================================================================
-// DEBUG INFO TESTS (Alternative to support package)
-// =============================================================================
-
-#[test]
-#[ignore = "Requires Docker Redis Enterprise cluster"]
-fn test_enterprise_debug_info_list() {
-    if !docker_available() {
-        eprintln!("Skipping: Docker Redis Enterprise not available");
-        return;
-    }
-
-    let temp_dir = TempDir::new().unwrap();
-    create_enterprise_profile(&temp_dir).unwrap();
-
-    // This may or may not exist depending on the API version
-    let result = test_cmd(&temp_dir)
-        .arg("enterprise")
-        .arg("debug-info")
-        .arg("list")
-        .output();
-
-    match result {
-        Ok(output) => {
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                if stderr.contains("404") || stderr.contains("not found") {
-                    eprintln!("Skipping: Debug info endpoint not available");
-                }
-            }
-            // If we get here, the command worked or was skipped
-        }
-        Err(e) => {
-            eprintln!("Skipping: Command failed: {}", e);
-        }
-    }
 }

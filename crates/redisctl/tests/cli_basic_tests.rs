@@ -2923,18 +2923,6 @@ fn test_enterprise_cluster_audit_log_help() {
 }
 
 #[test]
-fn test_enterprise_cluster_debug_info_help() {
-    redisctl()
-        .arg("enterprise")
-        .arg("cluster")
-        .arg("debug-info")
-        .arg("--help")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("debug"));
-}
-
-#[test]
 fn test_enterprise_cluster_get_license_help() {
     redisctl()
         .arg("enterprise")

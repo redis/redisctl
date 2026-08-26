@@ -2,6 +2,11 @@
 
 Use the Redis API client libraries in your own Rust or Python projects.
 
+The documented public Rust APIs of `redisctl-core` and `redisctl-mcp` become supported SemVer
+surfaces at the redisctl 1.0 baseline. See the
+[Compatibility and Support Policy](../reference/compatibility.md) for the boundary between stable
+library APIs and implementation details.
+
 ## Available Crates
 
 | Crate | Description | docs.rs | Repository |
@@ -9,6 +14,7 @@ Use the Redis API client libraries in your own Rust or Python projects.
 | `redis-cloud` | Redis Cloud API client | [docs](https://docs.rs/redis-cloud) | [redis-cloud-rs](https://github.com/redis-developer/redis-cloud-rs) |
 | `redis-enterprise` | Redis Enterprise API client | [docs](https://docs.rs/redis-enterprise) | [redis-enterprise-rs](https://github.com/redis-developer/redis-enterprise-rs) |
 | `redisctl-core` | Profile and credential management | [docs](https://docs.rs/redisctl-core) | [redisctl](https://github.com/redis/redisctl) |
+| `redisctl-mcp` | Embeddable MCP server and tool routers | [docs](https://docs.rs/redisctl-mcp) | [redisctl](https://github.com/redis/redisctl) |
 
 **Note:** `redis-cloud` and `redis-enterprise` are maintained in separate repositories and also provide Python bindings via PyPI.
 
