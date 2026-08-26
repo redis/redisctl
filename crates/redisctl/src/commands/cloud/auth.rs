@@ -19,7 +19,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use redisctl_core::AuthError;
-use redisctl_core::auth::{CloudAuthenticator, LoginAccount, LoginFlow, MintedCredentials};
+use redisctl_core::auth::{
+    AccountChoice, CloudAuthenticator, LoginAccount, LoginFlow, MintedCredentials,
+};
 use redisctl_core::{CloudAuthConfig, Config, CredentialStore, DeviceAuthorization, TokenSet};
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -65,6 +67,7 @@ pub async fn handle_auth_command(
             )
             .await
         }
+        CloudAuthCommands::Switch { account } => switch(conn_mgr, profile, *account, output).await,
         CloudAuthCommands::Status { wait, timeout } => {
             status(conn_mgr, profile, *wait, *timeout, output).await
         }
@@ -155,12 +158,157 @@ async fn login(
             } else {
                 LoginFlow::Loopback
             },
-            account,
+            account: match account {
+                Some(id) => AccountChoice::Id(id),
+                None => AccountChoice::Current,
+            },
             allow_plaintext,
         },
     )
     .await?;
     emit_signed_in(&creds, &profile_name, output)
+}
+
+/// Switch the profile's key to another account, reusing the sign-in stored at login.
+///
+/// An API key is scoped to one account, so this mints a key for the chosen account and replaces
+/// the profile's current one. The refresh token saved at login stands in for the browser; minting
+/// itself cannot be avoided, because the key is per-account.
+async fn switch(
+    conn_mgr: &ConnectionManager,
+    profile: Option<&str>,
+    account: Option<u64>,
+    output: OutputFormat,
+) -> CliResult<()> {
+    let (profile_name, authenticator, auth_cfg) = prepare(conn_mgr, profile)?;
+
+    // Choosing from a list needs somewhere to ask. Checked before signing in, so a
+    // non-interactive caller fails immediately rather than after doing the work.
+    let interactive = std::io::stderr().is_terminal() && std::io::stdin().is_terminal();
+    if account.is_none() && !interactive {
+        return Err(RedisCtlError::Structured(Box::new(
+            StructuredError::account_required(
+                "there is no terminal to choose an account on; pass the id instead \
+                 (`redisctl cloud auth switch <ID>`). A completed login reports the accounts you \
+                 belong to in its `accounts` field.",
+            ),
+        )));
+    }
+
+    let store = CredentialStore::new();
+    let refresh_token = store
+        .get_credential(&format!("keyring:{profile_name}-okta-refresh"), None)
+        .map_err(|_| {
+            RedisCtlError::Structured(Box::new(StructuredError::not_authenticated(format!(
+                "there is no stored sign-in for profile '{profile_name}' to switch with \
+                 (credentials saved with --allow-plaintext cannot be reused this way). Run \
+                 `redisctl cloud auth login --account <ID>` instead."
+            ))))
+        })?;
+
+    // The browser is only ever needed to obtain a refresh token in the first place.
+    let tokens = authenticator.refresh(&refresh_token).await.map_err(|_| {
+        RedisCtlError::Structured(Box::new(StructuredError::not_authenticated(format!(
+            "the stored sign-in for profile '{profile_name}' is no longer usable — refresh tokens \
+             expire and are rotated. Run `redisctl cloud auth login --account <ID>`."
+        ))))
+    })?;
+
+    let creds = complete_and_persist(
+        conn_mgr,
+        &profile_name,
+        &authenticator,
+        &tokens,
+        auth_cfg,
+        LoginRun {
+            flow: LoginFlow::Loopback,
+            account: match account {
+                Some(id) => AccountChoice::Id(id),
+                None => AccountChoice::Prompt(Box::new(prompt_account)),
+            },
+            // A refresh token only exists on the keyring path, so this is never plaintext.
+            allow_plaintext: false,
+        },
+    )
+    .await?;
+
+    let which = creds
+        .account_id
+        .as_deref()
+        .and_then(|id| id.parse::<u64>().ok())
+        .and_then(|id| creds.accounts.iter().find(|a| a.id == id))
+        .map(LoginAccount::label)
+        .unwrap_or_else(|| "the selected account".to_string());
+    eprintln!("\n\u{2713} Profile '{profile_name}' now uses {which}.");
+    print_formatted_output(
+        serde_json::json!({
+            "status": "ok",
+            "profile": profile_name,
+            "account_id": creds.account_id,
+            "account_name": creds.account_name,
+            "email": creds.email,
+        }),
+        output,
+    )
+}
+
+/// Ask which account to switch to, listing them with the current one marked.
+///
+/// Only reached on a terminal (the caller checks). An error abandons the switch before anything
+/// is minted or written.
+fn prompt_account(accounts: &[LoginAccount], current: Option<u64>) -> Result<u64, AuthError> {
+    if accounts.len() < 2 {
+        return Err(AuthError::Protocol(
+            "this login belongs to a single Redis Cloud account, so there is nothing to switch to"
+                .into(),
+        ));
+    }
+    eprintln!("\nAccounts you belong to:");
+    for (i, a) in accounts.iter().enumerate() {
+        let marker = if Some(a.id) == current {
+            "  (current)"
+        } else {
+            ""
+        };
+        eprintln!("  {}) {}{}", i + 1, a.label(), marker);
+    }
+    eprint!("Switch to which? [1-{}]: ", accounts.len());
+    use std::io::Write;
+    let _ = std::io::stderr().flush();
+
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|e| AuthError::Protocol(format!("could not read a choice: {e}")))?;
+    resolve_account_choice(accounts, &line)
+}
+
+/// Map what the user typed onto an account id. Split out from the prompt so the selection rules
+/// are testable without a terminal.
+fn resolve_account_choice(accounts: &[LoginAccount], input: &str) -> Result<u64, AuthError> {
+    let typed = input.trim();
+    // An id is accepted as well as a list position: it is what the listing shows, so typing one
+    // back is the obvious thing to try.
+    if let Ok(id) = typed.parse::<u64>()
+        && let Some(a) = accounts.iter().find(|a| a.id == id)
+    {
+        return Ok(a.id);
+    }
+    let choice: usize = typed.parse().map_err(|_| {
+        AuthError::Protocol(format!(
+            "'{typed}' is not one of 1-{} or an account id",
+            accounts.len()
+        ))
+    })?;
+    accounts
+        .get(choice.wrapping_sub(1))
+        .map(|a| a.id)
+        .ok_or_else(|| {
+            AuthError::Protocol(format!(
+                "{choice} is not one of 1-{} or an account id",
+                accounts.len()
+            ))
+        })
 }
 
 /// Sign-in instructions for the device flow. `verification_uri_complete` pre-fills the code on the
@@ -287,8 +435,8 @@ fn prompt_mfa_code(factors: &[String], attempt: u32) -> Result<Option<String>, A
 /// positional arguments.
 struct LoginRun {
     flow: LoginFlow,
-    /// `--account`: mint for this account rather than the session's current one.
-    account: Option<u64>,
+    /// Which account to mint for: the session's current one, an explicit id, or a picker.
+    account: AccountChoice,
     allow_plaintext: bool,
 }
 
@@ -429,7 +577,10 @@ async fn status(
                         flow: LoginFlow::Device,
                         // Whatever the initiating `login --device --account` asked for; `None`
                         // (no flag) keeps the session's current account.
-                        account: pending.account,
+                        account: match pending.account {
+                            Some(id) => AccountChoice::Id(id),
+                            None => AccountChoice::Current,
+                        },
                         allow_plaintext: pending.allow_plaintext,
                     },
                 )
@@ -635,4 +786,60 @@ fn open_browser(url: &str) -> std::io::Result<()> {
         .stderr(Stdio::null())
         .spawn()
         .map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn accounts() -> Vec<LoginAccount> {
+        vec![
+            LoginAccount {
+                id: 316941,
+                name: Some("Acme".to_string()),
+            },
+            LoginAccount {
+                id: 481022,
+                name: None,
+            },
+        ]
+    }
+
+    /// The listing shows both a position and an id, so both have to be accepted — and anything
+    /// else has to be refused rather than resolving to some account by accident.
+    #[test]
+    fn account_choice_accepts_a_position_or_an_id() {
+        assert_eq!(resolve_account_choice(&accounts(), "1").unwrap(), 316941);
+        assert_eq!(resolve_account_choice(&accounts(), " 2\n").unwrap(), 481022);
+        // An id the user copied out of the list.
+        assert_eq!(
+            resolve_account_choice(&accounts(), "481022").unwrap(),
+            481022
+        );
+    }
+
+    #[test]
+    fn account_choice_refuses_anything_else() {
+        for input in ["", "0", "3", "999999", "abc", "1.5", "-1"] {
+            assert!(
+                resolve_account_choice(&accounts(), input).is_err(),
+                "{input:?} should not resolve to an account"
+            );
+        }
+    }
+
+    /// A single-account user has nothing to switch to; saying so beats offering a list of one.
+    #[test]
+    fn prompt_refuses_when_there_is_only_one_account() {
+        let one = vec![LoginAccount {
+            id: 316941,
+            name: Some("Acme".to_string()),
+        }];
+        // Does not read stdin: it returns before prompting.
+        let err = prompt_account(&one, Some(316941)).unwrap_err();
+        assert!(
+            matches!(err, AuthError::Protocol(ref m) if m.contains("single Redis Cloud account")),
+            "got {err:?}"
+        );
+    }
 }

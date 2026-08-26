@@ -42,6 +42,35 @@ pub struct MintedCredentials {
     pub accounts: Vec<LoginAccount>,
 }
 
+/// How the account to mint for is decided.
+///
+/// [`AccountChoice::Prompt`] exists because a picker cannot run before the exchange: listing the
+/// accounts needs a session, and re-logging-in to act on the answer would mean a second sign-in
+/// (and a second MFA challenge). The callback is invoked mid-exchange instead, on the one session.
+pub enum AccountChoice {
+    /// Whatever account the session is already on.
+    Current,
+    /// A specific account id.
+    Id(u64),
+    /// Decide once the accounts are known. Called with every account the user belongs to and the
+    /// id of the current one, when the API reports it.
+    Prompt(AccountPrompt),
+}
+
+/// Callback for [`AccountChoice::Prompt`]: pick an account id, or fail with the reason.
+pub type AccountPrompt =
+    Box<dyn Fn(&[LoginAccount], Option<u64>) -> Result<u64, AuthError> + Send + Sync>;
+
+impl std::fmt::Debug for AccountChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Current => f.write_str("Current"),
+            Self::Id(id) => write!(f, "Id({id})"),
+            Self::Prompt(_) => f.write_str("Prompt(..)"),
+        }
+    }
+}
+
 /// One account the signed-in user belongs to, as reported during login.
 #[derive(Debug, Clone)]
 pub struct LoginAccount {
@@ -147,7 +176,7 @@ impl CloudAuthenticator {
         tokens: &TokenSet,
         key_name: &str,
         flow: LoginFlow,
-        account: Option<u64>,
+        account: AccountChoice,
     ) -> Result<MintedCredentials, AuthError> {
         self.complete_login_with_mfa(tokens, key_name, flow, account, |_, _| Ok(None))
             .await
@@ -165,7 +194,7 @@ impl CloudAuthenticator {
         tokens: &TokenSet,
         key_name: &str,
         flow: LoginFlow,
-        account: Option<u64>,
+        account: AccountChoice,
         mut mfa_prompt: F,
     ) -> Result<MintedCredentials, AuthError>
     where
@@ -183,7 +212,29 @@ impl CloudAuthenticator {
             Err(e) => return Err(e),
         }
         let mut user = sm.fetch_current_user().await?;
-        if let Some(want) = account {
+        let want = match account {
+            AccountChoice::Current => None,
+            AccountChoice::Id(id) => Some(id),
+            // The picker needs the list, so fetch it here; `switch_account` re-reads it to
+            // validate, which also covers ids that did not come from a picker.
+            AccountChoice::Prompt(choose) => {
+                let accounts: Vec<LoginAccount> = sm
+                    .fetch_accounts()
+                    .await?
+                    .into_iter()
+                    .map(|a| LoginAccount {
+                        id: a.id,
+                        name: a.name,
+                    })
+                    .collect();
+                let current = user
+                    .current_account_id
+                    .as_deref()
+                    .and_then(|s| s.parse::<u64>().ok());
+                Some(choose(&accounts, current)?)
+            }
+        };
+        if let Some(want) = want {
             user = self.switch_account(&sm, user, want).await?;
         }
         sm.ensure_capi_enabled().await?;
@@ -486,7 +537,12 @@ mod tests {
         };
 
         let creds = auth
-            .complete_login(&tokens, "redisctl-test", LoginFlow::Loopback, None)
+            .complete_login(
+                &tokens,
+                "redisctl-test",
+                LoginFlow::Loopback,
+                AccountChoice::Current,
+            )
             .await
             .unwrap();
         assert_eq!(creds.api_key, "ACCT-KEY");
@@ -602,7 +658,12 @@ mod tests {
             .await;
 
         let creds = authenticator(&server)
-            .complete_login(&tokens(), "redisctl-test", LoginFlow::Loopback, Some(222))
+            .complete_login(
+                &tokens(),
+                "redisctl-test",
+                LoginFlow::Loopback,
+                AccountChoice::Id(222),
+            )
             .await
             .unwrap();
         // The key, the reported id and the reported name all describe the requested account.
@@ -635,7 +696,7 @@ mod tests {
         // No /accounts/setcurrent/* mock is mounted: reaching one would 404 and surface as a
         // different error, which is itself the assertion that no switch was attempted.
         match authenticator(&server)
-            .complete_login(&tokens(), "k", LoginFlow::Loopback, Some(999))
+            .complete_login(&tokens(), "k", LoginFlow::Loopback, AccountChoice::Id(999))
             .await
         {
             Err(AuthError::UnknownAccount {
@@ -679,7 +740,7 @@ mod tests {
             .mount(&server)
             .await;
         let err = authenticator(&server)
-            .complete_login(&tokens(), "k", LoginFlow::Loopback, Some(222))
+            .complete_login(&tokens(), "k", LoginFlow::Loopback, AccountChoice::Id(222))
             .await
             .unwrap_err();
         assert!(
@@ -709,7 +770,7 @@ mod tests {
             .await;
         // Again, no setcurrent mount: if one were issued it would 404 and fail the login.
         let creds = authenticator(&server)
-            .complete_login(&tokens(), "k", LoginFlow::Loopback, Some(111))
+            .complete_login(&tokens(), "k", LoginFlow::Loopback, AccountChoice::Id(111))
             .await
             .unwrap();
         assert_eq!(creds.account_id, Some(111));
@@ -735,7 +796,7 @@ mod tests {
             expires_in: 3600,
         };
         assert!(matches!(
-            auth.complete_login(&tokens, "k", LoginFlow::Loopback, None)
+            auth.complete_login(&tokens, "k", LoginFlow::Loopback, AccountChoice::Current)
                 .await,
             Err(AuthError::Protocol(_))
         ));

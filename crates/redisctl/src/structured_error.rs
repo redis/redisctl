@@ -79,6 +79,9 @@ impl StructuredError {
     pub fn insufficient_permission(message: impl Into<String>) -> Self {
         Self::new("insufficient_permission", 2, false, message)
     }
+    pub fn account_required(message: impl Into<String>) -> Self {
+        Self::new("account_required", 2, false, message)
+    }
     pub fn capi_disabled(message: impl Into<String>) -> Self {
         Self::new("capi_disabled", 2, false, message)
     }
@@ -218,6 +221,7 @@ mod tests {
             StructuredError::keyring_unavailable("x"),
             StructuredError::insufficient_permission("x"),
             StructuredError::capi_disabled("x"),
+            StructuredError::account_required("x"),
             StructuredError::unknown_account("x"),
             StructuredError::migration_required(),
             StructuredError::mfa_required(),

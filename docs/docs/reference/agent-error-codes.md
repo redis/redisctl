@@ -41,6 +41,7 @@ keeps today's `0` / `1` exit behavior.
 | `migration_required` | 2 | no | The account signs in with a password and must be linked to Google/GitHub once in the Redis Cloud console. |
 | `insufficient_permission` | 2 | no | Your role on the account does not permit programmatic access. The message names the role that does — in practice the account owner. |
 | `capi_disabled` | 2 | no | API access is switched off for the whole account, so no role can mint a key. Only Redis can re-enable it. |
+| `account_required` | 2 | no | `cloud auth switch` needs an account id when there is no terminal to choose on. Pass the id. |
 | `unknown_account` | 2 | no | `--account` named an account you don't belong to. The message lists the accounts you do have. |
 | `mfa_required` | 2 | no | The account requires multi-factor authentication and there was no terminal to prompt on. Re-run `cloud auth login` interactively. |
 | `mfa_invalid_code` | 2 | no | The multi-factor code was rejected. Start login again. |

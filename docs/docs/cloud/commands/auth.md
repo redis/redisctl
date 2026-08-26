@@ -164,6 +164,47 @@ trip to the console. `account_id` and `accounts[].id` are both numbers, so they 
 redisctl cloud auth login -o json | jq -e '.account_id == 316941'
 ```
 
+## Switch Accounts
+
+```bash
+redisctl cloud auth switch
+```
+
+Changes which account the profile's key is for, **without opening a browser** — the sign-in stored
+at login is reused. With no argument it lists your accounts and asks:
+
+```
+Accounts you belong to:
+  1) Acme (#316941)  (current)
+  2) Contoso (#481022)
+Switch to which? [1-2]: 2
+
+✓ Profile 'cloud' now uses Contoso (#481022).
+```
+
+Either a list position or an account id is accepted. Pass the id to skip the prompt:
+
+```bash
+redisctl cloud auth switch 481022
+```
+
+!!! note "Switching replaces the profile's key"
+    An API key is scoped to one account, so switching mints a key for the account you pick and
+    replaces the profile's current one — the previous account is no longer usable through this
+    profile until you switch back. To use several accounts at once, keep one profile per account
+    and log in to each ([above](#which-account-the-key-belongs-to)).
+
+Two cases where a full `login` is needed instead:
+
+- **Credentials stored with `--allow-plaintext`.** Reusing a sign-in needs the refresh token, which
+  is only kept in the OS keyring, so there is nothing to reuse. Exits `2` with `not_authenticated`.
+- **The stored sign-in has expired.** Refresh tokens are rotated and eventually expire. Same code,
+  and the message says so.
+
+Without a terminal to prompt on, the account id is required — otherwise `switch` exits `2` with
+`account_required` rather than blocking. Accounts with MFA still prompt for a code, since that
+challenge happens on sign-in.
+
 ### Password accounts need linking once
 
 Redis Cloud accounts that sign in with an email and password cannot be used by the CLI directly —
