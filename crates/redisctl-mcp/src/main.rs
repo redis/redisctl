@@ -151,6 +151,11 @@ fn resolve_policy_with_source_flags(
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Mixed rustls features need a provider; preserve a host choice and ignore install races.
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    }
+
     let args = Args::parse();
 
     // Resolve policy configuration (includes audit config)

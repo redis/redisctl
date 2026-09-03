@@ -2957,6 +2957,7 @@ dependencies = [
  "redis-cloud",
  "redis-enterprise",
  "redisctl-core",
+ "rustls",
  "schemars",
  "serde",
  "serde_json",

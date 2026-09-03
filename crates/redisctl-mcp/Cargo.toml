@@ -75,6 +75,7 @@ clap = { workspace = true }
 
 # HTTP middleware
 tower = { workspace = true }
+rustls = { workspace = true }
 
 [features]
 default = ["http", "cloud", "enterprise", "database", "secure-storage"]
