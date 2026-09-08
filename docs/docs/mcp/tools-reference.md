@@ -1,6 +1,6 @@
 # Tools Reference
 
-The redisctl MCP server exposes **375 tools** across 4 toolsets and 2 system tools for managing Redis Cloud, Redis Enterprise, and direct database operations. The machine-checked [MCP catalog](compatibility.md) is the compatibility source of truth.
+The redisctl MCP server exposes **377 tools** across 4 toolsets and 2 system tools for managing Redis Cloud, Redis Enterprise, and direct database operations. The machine-checked [MCP catalog](compatibility.md) is the compatibility source of truth.
 
 Tools are organized into **toolsets** (Cloud, Enterprise, Database, App) and further into **sub-modules** that can be selectively loaded with the [`--tools` flag](configuration.md#the-tools-flag).
 
@@ -18,7 +18,7 @@ These tools are always available regardless of `--tools` selection or visibility
 | `list_available_tools` | List all available tools grouped by toolset, showing active vs. hidden |
 | `show_policy` | Show the active safety tier, per-toolset overrides, and allow/deny lists |
 
-## Cloud Toolset (148 tools)
+## Cloud Toolset (150 tools)
 
 Redis Cloud management tools. Select with `--tools cloud` or target specific sub-modules.
 
@@ -81,6 +81,16 @@ Essentials/Fixed tier subscriptions and databases -- plans, backup, import, tagg
 | `get_fixed_database` | Get Essentials database details |
 | `create_fixed_database` | Create Essentials database *(write)* |
 | `get_fixed_database_backup_status` | Get backup status |
+
+### `cloud:provisioning` (2 tools)
+
+Agent-native provisioning: check whether a profile has usable credentials, and create or reuse a
+free database without a subscription of its own.
+
+| Tool | Description |
+|------|-------------|
+| `cloud_auth_status` | Report whether a profile has Redis Cloud credentials configured |
+| `cloud_quick_database` | Create or reuse a free database and write its connection string to a file *(write)* |
 
 ### `cloud:raw` (1 tool)
 
