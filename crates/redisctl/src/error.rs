@@ -175,9 +175,11 @@ impl From<redisctl_init::InitError> for RedisCtlError {
     fn from(err: redisctl_init::InitError) -> Self {
         use redisctl_init::InitError;
         match &err {
-            InitError::NoUrlInInput { .. } => RedisCtlError::InvalidInput {
-                message: err.to_string(),
-            },
+            InitError::NoUrlInInput { .. } | InitError::InvalidEnvValue { .. } => {
+                RedisCtlError::InvalidInput {
+                    message: err.to_string(),
+                }
+            }
             InitError::NotReady { .. } => RedisCtlError::ConnectionError {
                 message: err.to_string(),
             },

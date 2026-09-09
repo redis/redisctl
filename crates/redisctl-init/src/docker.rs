@@ -299,7 +299,13 @@ async fn connect(
     timeout: Duration,
 ) -> Result<redis::aio::MultiplexedConnection, String> {
     let client = redis::Client::open(url).map_err(|e| e.to_string())?;
-    match tokio::time::timeout(timeout, client.get_multiplexed_async_connection()).await {
+    let config = redis::AsyncConnectionConfig::new().set_response_timeout(timeout);
+    match tokio::time::timeout(
+        timeout,
+        client.get_multiplexed_async_connection_with_config(&config),
+    )
+    .await
+    {
         Ok(Ok(conn)) => Ok(conn),
         Ok(Err(e)) => Err(e.to_string()),
         Err(_) => Err(format!(

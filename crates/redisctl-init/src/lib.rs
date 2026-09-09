@@ -43,6 +43,9 @@ pub enum InitError {
     #[error("'{rel}' exists but cannot be read - refusing to overwrite it")]
     UnreadableFile { rel: String },
 
+    #[error("cannot safely quote {key} for .env; remove line breaks or encode quotes in the URL")]
+    InvalidEnvValue { key: String },
+
     #[error("cannot write '{rel}': {message}")]
     WriteFailed { rel: String, message: String },
 }
