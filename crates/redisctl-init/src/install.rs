@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use crate::change::{Change, Status};
-use crate::env::FileAction;
+use crate::env::{FileAction, read_for_planning};
 use crate::project::{Project, Runtime};
 use crate::util::{ending_with_newline, exists, has_bin, read_if, sh, sh_in};
 use crate::{Event, InitError};
@@ -27,7 +27,7 @@ pub(crate) enum InstallAction {
         label: String,
     },
     /// Append to a requirements-style manifest.
-    Append(FileAction),
+    Append { package: &'static str, note: String },
     /// Fetch redis-cli via the official installer (statically linked,
     /// checksum-verified, no-sudo ~/.local/bin fallback).
     InstallCli,
@@ -44,7 +44,9 @@ impl InstallAction {
                 Status::Planned,
                 format!("would run: {cmd} {}", args.join(" ")),
             ),
-            InstallAction::Append(action) => action.preview(),
+            InstallAction::Append { note, .. } => {
+                Change::new("requirements.txt", Status::Updated, note.clone())
+            }
             InstallAction::InstallCli => Change::new(
                 "redis-cli",
                 Status::Planned,
@@ -60,7 +62,19 @@ impl InstallAction {
     ) -> Result<Change, InitError> {
         match self {
             InstallAction::Report(change) => Ok(change.clone()),
-            InstallAction::Append(action) => action.perform(cwd),
+            InstallAction::Append { package, note } => {
+                let content = read_for_planning(cwd, "requirements.txt")?.unwrap_or_default();
+                if content.lines().any(|line| line.trim() == *package) {
+                    return Ok(Change::new("requirements.txt", Status::Unchanged, ""));
+                }
+                FileAction::Write {
+                    rel: "requirements.txt".to_string(),
+                    content: format!("{}{package}\n", ending_with_newline(&content)),
+                    status: Status::Updated,
+                    note: note.clone(),
+                }
+                .perform(cwd)
+            }
             InstallAction::Command {
                 cmd,
                 args,
@@ -219,13 +233,11 @@ fn decide_client(cwd: &Path, project: &Project, has: &dyn Fn(&str) -> bool) -> I
                     "client package",
                 );
             }
-            if let Some(reqs) = requirements {
-                return InstallAction::Append(FileAction::Write {
-                    rel: "requirements.txt".to_string(),
-                    content: format!("{}redis\n", ending_with_newline(&reqs)),
-                    status: Status::Updated,
+            if requirements.is_some() {
+                return InstallAction::Append {
+                    package: "redis",
                     note: "redis-py added - run pip install -r requirements.txt".to_string(),
-                });
+                };
             }
             skipped("add redis-py manually (pip install redis)")
         }
@@ -395,13 +407,11 @@ fn decide_product(
                     &label,
                 );
             }
-            if let Some(reqs) = requirements {
-                return InstallAction::Append(FileAction::Write {
-                    rel: "requirements.txt".to_string(),
-                    content: format!("{}{pkg}\n", ending_with_newline(&reqs)),
-                    status: Status::Updated,
+            if requirements.is_some() {
+                return InstallAction::Append {
+                    package: pkg,
                     note: format!("{pkg} added - run pip install -r requirements.txt"),
-                });
+                };
             }
             no_sdk(format!(
                 "install {pkg} for your runtime, or call the REST API directly"
@@ -520,12 +530,6 @@ mod tests {
     fn python_requirements_get_redis_appended() {
         let dir = dir_with(&[("requirements.txt", "flask\n")]);
         let action = decide_client(dir.path(), &project_in(dir.path()), &|_| false);
-        match &action {
-            InstallAction::Append(FileAction::Write { content, .. }) => {
-                assert_eq!(content, "flask\nredis\n");
-            }
-            other => panic!("expected an append, got {other:?}"),
-        }
         action.perform(dir.path(), &mut |_| {}).unwrap();
         assert_eq!(
             std::fs::read_to_string(dir.path().join("requirements.txt")).unwrap(),

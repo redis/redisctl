@@ -101,6 +101,156 @@ fn read(project: &std::path::Path, rel: &str) -> String {
     std::fs::read_to_string(project.join(rel)).unwrap_or_default()
 }
 
+#[test]
+fn unquotable_keys_fail_before_writing_files() {
+    let project = tempfile::tempdir().unwrap();
+    let repo = skills_fixture();
+    let (_shim, path_env) = npm_shim();
+    run_init(
+        project.path(),
+        &repo,
+        &path_env,
+        &[
+            "--context-retriever",
+            "https://mcp.example",
+            "--api-key",
+            "s3cret'$value",
+        ],
+    )
+    .assert()
+    .code(6)
+    .stderr(predicate::str::contains("CONTEXT_RETRIEVER_AGENT_KEY"))
+    .stderr(predicate::str::contains("s3cret").not());
+    assert!(!project.path().join(".env").exists());
+}
+
+#[test]
+fn python_product_dependencies_accumulate() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(project.path().join("requirements.txt"), "requests\n").unwrap();
+    let repo = skills_fixture();
+    let (_shim, path_env) = npm_shim();
+    let args = [
+        "--langcache",
+        "https://cache.example",
+        "--cache",
+        "cache-123",
+        "--context-retriever",
+        "https://mcp.example",
+    ];
+    for _ in 0..2 {
+        run_init(project.path(), &repo, &path_env, &args)
+            .assert()
+            .success();
+        assert_eq!(
+            read(project.path(), "requirements.txt"),
+            "requests\nlangcache\nredis-context-retriever\n"
+        );
+    }
+}
+
+#[test]
+fn commonjs_examples_can_be_loaded() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(
+        project.path().join("package.json"),
+        r#"{"type":"commonjs"}"#,
+    )
+    .unwrap();
+    let repo = skills_fixture();
+    let (_shim, path_env) = npm_shim();
+    run_init(
+        project.path(),
+        &repo,
+        &path_env,
+        &[
+            "--agent-memory",
+            "https://memory.example",
+            "--store",
+            "store-123",
+            "--langcache",
+            "https://cache.example",
+            "--cache",
+            "cache-123",
+        ],
+    )
+    .assert()
+    .success();
+    for (pkg, class) in [
+        ("@redis-iris/agent-memory", "AgentMemory"),
+        ("@redis-ai/langcache", "LangCache"),
+    ] {
+        let module = project.path().join("node_modules").join(pkg);
+        std::fs::create_dir_all(&module).unwrap();
+        std::fs::write(
+            module.join("index.js"),
+            format!("exports.{class} = class {{}};"),
+        )
+        .unwrap();
+    }
+    Command::new("node")
+        .current_dir(project.path())
+        .args([
+            "-e",
+            "require('./redis-agent-memory.js'); require('./redis-langcache.js');",
+        ])
+        .assert()
+        .success();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn product_validation_uses_the_retained_env_values() {
+    let project = tempfile::tempdir().unwrap();
+    let repo = skills_fixture();
+    let (_shim, path_env) = npm_shim();
+    let stored = product_api().await;
+    let supplied = product_api().await;
+    let env = format!(
+        "LANGCACHE_URL=\"{}\"\nLANGCACHE_CACHE_ID=\"stored-cache\"\nLANGCACHE_API_KEY=\"{KEY}\"\n",
+        stored.uri()
+    );
+    std::fs::write(project.path().join(".env"), &env).unwrap();
+    run_init(
+        project.path(),
+        &repo,
+        &path_env,
+        &["--langcache", &supplied.uri(), "--cache", "supplied-cache"],
+    )
+    .env("LANGCACHE_API_KEY", "different-exported-key")
+    .assert()
+    .success();
+    assert_eq!(read(project.path(), ".env"), env);
+    assert!(supplied.received_requests().await.unwrap().is_empty());
+    assert!(
+        stored
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .any(|r| r.url.path() == "/v1/caches/stored-cache/entries/search")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn exported_key_does_not_hide_a_retained_placeholder() {
+    let project = tempfile::tempdir().unwrap();
+    let repo = skills_fixture();
+    let (_shim, path_env) = npm_shim();
+    let api = product_api().await;
+    let env = format!(
+        "LANGCACHE_URL=\"{}\"\nLANGCACHE_CACHE_ID=\"cache-123\"\nLANGCACHE_API_KEY=\"<paste-from-redis-cloud>\"\n",
+        api.uri()
+    );
+    std::fs::write(project.path().join(".env"), &env).unwrap();
+    run_init(project.path(), &repo, &path_env, &["--complete"])
+        .env("LANGCACHE_API_KEY", KEY)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("waiting for LANGCACHE_API_KEY"));
+    assert_eq!(read(project.path(), ".env"), env);
+    assert!(api.received_requests().await.unwrap().is_empty());
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn both_products_wire_validate_and_never_leak_the_key() {
     let project = tempfile::tempdir().unwrap();

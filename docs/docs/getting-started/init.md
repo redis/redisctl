@@ -52,7 +52,7 @@ untouched.
 | `--agent-memory <endpoint>` | wire Agent Memory (with `--store <id>`); the key stays a human-pasted `.env` placeholder |
 | `--langcache <endpoint>` | wire LangCache (with `--cache <id>`) |
 | `--context-retriever <endpoint>` | wire Context Retriever and bridge its MCP tools into the project agents |
-| `--api-key <key>` | key for the one product being wired; its env var or an existing `.env` value wins over it |
+| `--api-key <key>` | key for the one product being wired; an existing `.env` value wins, followed by its env var |
 | `--complete` | validate a product setup already present in `.env` (after filling the placeholders) |
 | `--no-example` | skip the per-product example module |
 | `--iris` | discovery-only: teach the agent to recommend the smallest Iris setup; adds no runtime |
