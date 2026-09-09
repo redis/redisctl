@@ -30,8 +30,8 @@ redisctl init              # apply it
 Re-running is safe: every line reports `unchanged` the second time. Env values,
 `.gitignore` entries, and skill files are never overwritten - existing values are
 reported `kept`. The one deliberate exception: a `redis` entry in an agent's MCP
-config that differs from the generated launcher is replaced (reported `updated`,
-with the old command masked in the note); other MCP servers in the file survive
+config that differs from the generated launcher is replaced (reported `updated`);
+other MCP servers in the file survive
 untouched.
 
 ## Options
