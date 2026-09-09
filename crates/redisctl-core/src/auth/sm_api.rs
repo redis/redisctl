@@ -562,6 +562,56 @@ impl SmApiClient {
             .collect())
     }
 
+    /// `GET /accounts/cloud-api/cloudApiKeys`, as `(id, name)` pairs.
+    pub async fn fetch_capi_key_entries(&self) -> Result<Vec<(u64, String)>, AuthError> {
+        let body = self
+            .authed_get("accounts/cloud-api/cloudApiKeys")
+            .await?
+            .text()
+            .await?;
+        let value: serde_json::Value = serde_json::from_str(&body)
+            .map_err(|e| AuthError::Protocol(format!("could not parse cloudApiKeys list: {e}")))?;
+        let arr = value
+            .get("cloudApiKeys")
+            .and_then(|v| v.as_array())
+            .or_else(|| value.as_array())
+            .cloned()
+            .unwrap_or_default();
+        Ok(arr
+            .iter()
+            .filter_map(|k| {
+                let obj = k.get("cloudApiKey").unwrap_or(k);
+                let id = obj.get("id").and_then(|v| v.as_u64())?;
+                let name = obj.get("name").and_then(|v| v.as_str())?.to_string();
+                Some((id, name))
+            })
+            .collect())
+    }
+
+    /// `DELETE /accounts/cloud-api/cloudApiKeys/{id}` — revoke a minted key server-side.
+    pub async fn delete_capi_key(&self, id: u64) -> Result<(), AuthError> {
+        let s = self.session()?;
+        let resp = self
+            .http
+            .delete(endpoint(
+                &self.base_url,
+                &format!("accounts/cloud-api/cloudApiKeys/{id}"),
+            ))
+            .header(reqwest::header::COOKIE, &s.cookie)
+            .header("x-csrf-token", &s.csrf)
+            .send()
+            .await?;
+        if resp.status().is_success() {
+            return Ok(());
+        }
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        Err(AuthError::Protocol(format!(
+            "could not revoke API key {id} ({status}): {}",
+            truncate(&body)
+        )))
+    }
+
     fn session(&self) -> Result<&Session, AuthError> {
         self.session
             .as_ref()
@@ -742,6 +792,49 @@ mod tests {
         assert!(c.ensure_capi_enabled().await.is_ok());
     }
 
+    /// Revocation targets one key by id, so the id has to come out of the listing.
+    #[tokio::test]
+    async fn key_entries_carry_ids_and_delete_targets_one() {
+        let server = MockServer::start().await;
+        let c = logged_in(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/accounts/cloud-api/cloudApiKeys"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "cloudApiKeys": [
+                    {"id": 11, "name": "redisctl-one"},
+                    {"id": 22, "name": "someone-elses-key"}
+                ]
+            })))
+            .mount(&server)
+            .await;
+        let entries = c.fetch_capi_key_entries().await.unwrap();
+        assert_eq!(
+            entries,
+            vec![
+                (11, "redisctl-one".to_string()),
+                (22, "someone-elses-key".to_string())
+            ]
+        );
+
+        Mock::given(method("DELETE"))
+            .and(path("/accounts/cloud-api/cloudApiKeys/11"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        assert!(c.delete_capi_key(11).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn delete_capi_key_surfaces_a_refusal() {
+        let server = MockServer::start().await;
+        let c = logged_in(&server).await;
+        Mock::given(method("DELETE"))
+            .and(path("/accounts/cloud-api/cloudApiKeys/11"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("nope"))
+            .mount(&server)
+            .await;
+        assert!(c.delete_capi_key(11).await.is_err());
+    }
     /// Only an owner may enable programmatic access. SM says so precisely, but nests the code in a
     /// JSON-encoded string, so it is matched on the body — this pins that it is still classified.
     #[tokio::test]

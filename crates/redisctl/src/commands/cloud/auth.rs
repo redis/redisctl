@@ -74,7 +74,7 @@ pub async fn handle_auth_command(
         CloudAuthCommands::Status { wait, timeout } => {
             status(conn_mgr, profile, *wait, *timeout, output).await
         }
-        CloudAuthCommands::Logout => logout(conn_mgr, profile, output),
+        CloudAuthCommands::Logout => logout(conn_mgr, profile, output).await,
     }
 }
 
@@ -737,15 +737,19 @@ async fn poll_pending(
     }
 }
 
-fn logout(
+async fn logout(
     conn_mgr: &ConnectionManager,
     profile: Option<&str>,
     output: OutputFormat,
 ) -> CliResult<()> {
     let profile_name = target_profile(conn_mgr, profile);
-    // Clear locally-stored secrets (best effort). Note: the minted CAPI key still exists in
-    // the Redis Cloud console until revoked there — server-side revocation is a follow-up.
     let store = CredentialStore::new();
+
+    // Revoke server-side first, while the credentials to do it with still exist. Local removal
+    // happens either way: a logout that left the secrets on disk because the network was down
+    // would be worse than one that leaves a key to revoke in the console.
+    let revoked = revoke_remotely(conn_mgr, &profile_name, &store).await;
+
     for suffix in ["cloud-api-key", "cloud-api-secret", "okta-refresh"] {
         let _ = store.delete_credential(&format!("{profile_name}-{suffix}"));
     }
@@ -760,10 +764,85 @@ fn logout(
         config.cloud_auth.insert(profile_name.clone(), auth);
     }
     save_config(conn_mgr, &config)?;
+
+    match &revoked {
+        Revocation::Done { key } => eprintln!(
+            "\n\u{2713} Logged out of profile '{profile_name}'. Revoked the API key {key} and the \
+             stored sign-in."
+        ),
+        Revocation::Skipped(reason) => eprintln!(
+            "\n\u{2713} Logged out of profile '{profile_name}' locally.\n  note: {reason} Revoke \
+             the key in the Redis Cloud console (Access Management > API Keys)."
+        ),
+    }
     print_formatted_output(
-        serde_json::json!({ "status": "ok", "profile": profile_name, "logged_out": true }),
+        serde_json::json!({
+            "status": "ok",
+            "profile": profile_name,
+            "logged_out": true,
+            "revoked": matches!(revoked, Revocation::Done { .. }),
+        }),
         output,
     )
+}
+
+enum Revocation {
+    Done { key: String },
+    Skipped(String),
+}
+
+/// Revoke the minted key and the stored sign-in, or explain why it could not be done.
+///
+/// Every failure is reported rather than raised: logout has to finish locally regardless.
+async fn revoke_remotely(
+    conn_mgr: &ConnectionManager,
+    profile_name: &str,
+    store: &CredentialStore,
+) -> Revocation {
+    let auth_cfg = conn_mgr.config.resolve_cloud_auth(profile_name);
+    let Some(key_name) = auth_cfg.capi_key_name.clone() else {
+        return Revocation::Skipped(
+            "this profile does not record which API key it holds, so there is nothing to revoke              by name."
+                .to_string(),
+        );
+    };
+    let Ok(refresh_token) =
+        store.get_credential(&format!("keyring:{profile_name}-okta-refresh"), None)
+    else {
+        return Revocation::Skipped(format!(
+            "no stored sign-in for '{profile_name}', so the key {key_name} could not be revoked."
+        ));
+    };
+    let (_, authenticator, _) = match prepare(conn_mgr, Some(profile_name)) {
+        Ok(parts) => parts,
+        Err(_) => {
+            return Revocation::Skipped(format!(
+                "login endpoints are not configured, so the key {key_name} could not be revoked."
+            ));
+        }
+    };
+    let tokens = match authenticator.refresh(&refresh_token).await {
+        Ok(tokens) => tokens,
+        Err(_) => {
+            return Revocation::Skipped(format!(
+                "the stored sign-in is no longer valid, so the key {key_name} could not be revoked."
+            ));
+        }
+    };
+    match authenticator.revoke_capi_key(&tokens, &key_name).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return Revocation::Skipped(format!(
+                "the key {key_name} was not found on this account; it may already be revoked."
+            ));
+        }
+        Err(e) => return Revocation::Skipped(format!("could not revoke the key {key_name}: {e}.")),
+    }
+    // The refresh above rotated the token, so revoke the one we now hold; the previous value is
+    // already invalid at the IdP.
+    let newest = tokens.refresh_token.as_deref().unwrap_or(&refresh_token);
+    let _ = authenticator.revoke_refresh_token(newest).await;
+    Revocation::Done { key: key_name }
 }
 
 // ---- pending device-authorization store (bridges the non-blocking login and status --wait) ----
