@@ -2,7 +2,8 @@
 //! [`redisctl_core::cloud::quick_database`].
 //!
 //! This layer owns only CLI concerns: clap arg parsing, the terminal spinner, and wrapping
-//! the [`QuickDatabaseReport`] into a [`WorkflowResult`]. The provisioning logic itself lives
+//! the [`QuickDatabaseReport`](redisctl_core::cloud::quick_database::QuickDatabaseReport) into a
+//! [`WorkflowResult`]. The provisioning logic itself lives
 //! in `redisctl-core` so the MCP server reuses it directly. Error → exit-code mapping lives
 //! in [`crate::structured_error`].
 

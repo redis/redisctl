@@ -11,8 +11,8 @@
 //! prints/persists the returned [`DeviceAuthorization`] (which is `serde`-serializable), and
 //! returns. A later `status --wait` — possibly a *different* process — rebuilds the client from
 //! the issuer + client id, deserializes the [`DeviceAuthorization`], and calls
-//! [`poll`](DeviceFlowClient::poll). Refreshing a token is flow-agnostic and lives in
-//! [`super::oidc::refresh`].
+//! [`poll`](DeviceFlowClient::poll). Refreshing a token is flow-agnostic and lives on
+//! [`CloudAuthenticator::refresh`](super::authenticator::CloudAuthenticator::refresh).
 
 use std::time::Duration;
 
