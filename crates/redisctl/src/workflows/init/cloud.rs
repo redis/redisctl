@@ -3,8 +3,7 @@
 //! Inventory spans both tiers and reuse is strictly by name; the picker and the
 //! free-tier bookkeeping live here. Creation is delegated to the shared
 //! `quick_database` engine (which manages its own `redisctl-<name>` marker
-//! subscription), except under a `--cloud-subscription` pin, which creates
-//! directly in the pinned subscription.
+//! subscription). A pinned or available free subscription is created into directly.
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -143,8 +142,8 @@ pub(crate) async fn resolve(
         )));
     }
 
-    match pin {
-        Some(pin) => create_pinned(client, &db_name, pin, profile).await,
+    match inv.target {
+        Some(target) => create_pinned(client, &db_name, target, profile).await,
         None => create_free(client, &db_name, profile).await,
     }
 }
@@ -314,7 +313,7 @@ fn listing(inv: &Inventory) -> String {
     }
     lines.push("  Connect to one:  --cloud --name <its name>".to_string());
     let mut create = "  Create another:  --cloud --name <a new name>".to_string();
-    if inv.target.is_none() {
+    if inv.target.is_none() && inv.free_full.is_some() {
         create.push_str("   (the free plan is already used up)");
     }
     lines.push(create);
@@ -357,7 +356,7 @@ fn pick<'a>(inv: &'a Inventory, db_name: &str) -> Result<Pick<'a>, RedisCtlError
     // An unavailable create stays on the list carrying the reason (the wizard's
     // pattern); choosing it re-prompts instead of aborting the session.
     let mut create = "create a new free database".to_string();
-    if inv.target.is_none() {
+    if inv.target.is_none() && inv.free_full.is_some() {
         create.push_str("   (unavailable: the free plan is already used up)");
     }
     items.push(create);
@@ -375,7 +374,7 @@ fn pick<'a>(inv: &'a Inventory, db_name: &str) -> Result<Pick<'a>, RedisCtlError
                 });
             }
             Some(i) if i < inv.candidates.len() => return Ok(Pick::Existing(&inv.candidates[i])),
-            Some(_) if inv.target.is_none() => {
+            Some(_) if inv.target.is_none() && inv.free_full.is_some() => {
                 eprintln!(
                     "  The free plan is already used up - connect to an existing database, or press Esc and re-run with --cloud-subscription <id>."
                 );
@@ -584,8 +583,7 @@ async fn create_free(
     })
 }
 
-/// A pinned subscription is created into directly; the engine only manages its own
-/// marker subscription.
+/// Create directly in the selected Essentials subscription.
 async fn create_pinned(
     client: &CloudClient,
     db_name: &str,
