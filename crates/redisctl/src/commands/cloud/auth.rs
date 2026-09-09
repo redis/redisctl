@@ -106,6 +106,8 @@ fn prepare(
     }
     let issuer = parse_url(&auth_cfg.okta_issuer, "okta_issuer")?;
     let sm_api_url = parse_url(&auth_cfg.sm_api_url, "sm_api_url")?;
+    parse_url(&auth_cfg.capi_url, "capi_url")?;
+    validate_client_id(&auth_cfg.okta_client_id)?;
     let authenticator = CloudAuthenticator::new(
         issuer,
         &auth_cfg.okta_client_id,
@@ -920,9 +922,46 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::write(path, bytes)
 }
 
+/// The client id goes into the authorize URL that gets handed to a browser launcher, so keep it to
+/// the shape Okta actually issues rather than passing arbitrary text through.
+fn validate_client_id(client_id: &str) -> CliResult<()> {
+    if !client_id.is_empty()
+        && client_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Ok(());
+    }
+    Err(RedisCtlError::Configuration(format!(
+        "invalid okta_client_id ({client_id:?}): expected letters, digits, '-' or '_'"
+    )))
+}
+
+/// Parse a configured endpoint, requiring transport security.
+///
+/// A config file is a credential-bearing input: one that names the real identity provider but
+/// points `sm_api_url` somewhere else receives a live access token after an otherwise ordinary
+/// login. `http` is allowed only on loopback, where there is no network to intercept, which is
+/// also what RFC 8252 does for redirect URIs.
 fn parse_url(value: &str, field: &str) -> CliResult<Url> {
-    Url::parse(value)
-        .map_err(|e| RedisCtlError::Configuration(format!("invalid {field} ({value:?}): {e}")))
+    let reject =
+        |why: &str| RedisCtlError::Configuration(format!("invalid {field} ({value:?}): {why}"));
+    let url = Url::parse(value)
+        .map_err(|e| RedisCtlError::Configuration(format!("invalid {field} ({value:?}): {e}")))?;
+    let host = url.host_str().unwrap_or_default();
+    if host.is_empty() {
+        return Err(reject("no host"));
+    }
+    let loopback = matches!(host, "localhost" | "127.0.0.1" | "::1");
+    if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
+        return Err(reject(
+            "must use https (http is allowed only for localhost)",
+        ));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(reject("must not embed credentials"));
+    }
+    Ok(url)
 }
 
 fn save_config(conn_mgr: &ConnectionManager, config: &Config) -> CliResult<()> {
@@ -998,6 +1037,44 @@ mod tests {
                 name: None,
             },
         ]
+    }
+
+    /// A config file names where credentials are sent, so an endpoint that is not transport-secure
+    /// must be refused rather than used. `http` on loopback stays allowed — no network to
+    /// intercept, and the test harness and local mocks depend on it.
+    #[test]
+    fn endpoints_must_be_https_or_loopback() {
+        for ok in [
+            "https://auth.redis.com/oauth2/default",
+            "https://app.example.com/api/v1",
+            "http://127.0.0.1:8899/oauth2/default",
+            "http://localhost:1234/api/v1",
+        ] {
+            assert!(parse_url(ok, "f").is_ok(), "{ok} should be accepted");
+        }
+        for bad in [
+            "http://auth.redis.com/oauth2/default",
+            "https://user:pass@auth.redis.com/",
+            "https://user@auth.redis.com/",
+            "ftp://auth.redis.com/",
+            "not a url",
+            "file:///etc/passwd",
+            "https://",
+        ] {
+            assert!(parse_url(bad, "f").is_err(), "{bad:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn client_id_must_look_like_one() {
+        assert!(validate_client_id("0oaw90hjzrLoATW0q5d7").is_ok());
+        assert!(validate_client_id("client-id_1").is_ok());
+        for bad in ["", "a b", "a&b", "a|b", "a\"b", "a$(b)"] {
+            assert!(
+                validate_client_id(bad).is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
     }
 
     /// The pending record lands next to the config, in a directory that does not exist on a
