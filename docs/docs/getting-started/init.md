@@ -18,8 +18,8 @@ redisctl init              # apply it
    container from an earlier run (restarted if stopped), or a fresh local Docker
    container - or point it at any database with `--url` (a pasted Redis Cloud
    connect command works verbatim).
-3. **Wires the project**: `REDIS_URL` appended to `.env` (never clobbering an
-   existing value), a committed `.env.example` placeholder, a `.gitignore` guard,
+3. **Wires the project**: `REDIS_URL` written to `.env` (an explicit database
+   choice replaces an existing value), a committed `.env.example` placeholder, a `.gitignore` guard,
    the official Redis client for the detected runtime, and redis-cli when missing.
 4. **Teaches the agents**: the official [redis/agent-skills](https://github.com/redis/agent-skills)
    via the standard skills CLI, a generated `redis-project-setup` skill carrying this
@@ -27,9 +27,9 @@ redisctl init              # apply it
    per agent config.
 5. **Proves it works**: a live PING and SET/GET round trip.
 
-Re-running is safe: every line reports `unchanged` the second time. Env values,
-`.gitignore` entries, and skill files are never overwritten - existing values are
-reported `kept`. The one deliberate exception: a `redis` entry in an agent's MCP
+Re-running with the same choices preserves the existing setup. An explicit database
+choice replaces `REDIS_URL`; other env values are kept, including placeholders
+that need filling. A `redis` entry in an agent's MCP
 config that differs from the generated launcher is replaced (reported `updated`);
 other MCP servers in the file survive
 untouched.
