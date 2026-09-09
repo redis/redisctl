@@ -302,24 +302,21 @@ pub(crate) fn is_configured(value: &str) -> bool {
     !value.is_empty() && !(value.starts_with('<') && value.ends_with('>') && value.len() > 2)
 }
 
-/// The flag is the last resort by design: the env var and `.env` paths keep the
-/// key out of shell history, and a stored key must win so validation always tests
-/// the value `.env` actually holds (never-clobber would keep it anyway).
+/// Validate the stored value, including placeholders that still need filling.
 fn resolve_key(
     spec: &ProductSpec,
     api_key: Option<&str>,
     cwd: &Path,
     getenv: &dyn Fn(&str) -> Option<String>,
 ) -> String {
-    [
-        getenv(spec.env_key),
-        read_env_key(cwd, ".env", spec.env_key),
-        api_key.map(str::to_string),
-    ]
-    .into_iter()
-    .flatten()
-    .find(|value| is_configured(value))
-    .unwrap_or_else(|| SECRET_PLACEHOLDER.to_string())
+    if let Some(stored) = read_env_key(cwd, ".env", spec.env_key) {
+        return stored;
+    }
+    [getenv(spec.env_key), api_key.map(str::to_string)]
+        .into_iter()
+        .flatten()
+        .find(|value| is_configured(value))
+        .unwrap_or_else(|| SECRET_PLACEHOLDER.to_string())
 }
 
 /// Resolve the run's products: explicit requests first, and under `complete` the
@@ -336,17 +333,15 @@ pub(crate) fn wire(
     let mut wired = Vec::new();
     for spec in &SPECS {
         let request = requests.iter().find(|r| r.key == spec.key);
-        let url = request.map(|r| r.url.clone()).or_else(|| {
-            complete
-                .then(|| read_env_key(cwd, ".env", spec.env_url))
-                .flatten()
-        });
-        let id = request
-            .and_then(|r| r.id.clone())
-            .or_else(|| match spec.env_id {
-                Some(env_id) if complete => read_env_key(cwd, ".env", env_id),
-                _ => None,
-            });
+        if request.is_none() && !complete {
+            continue;
+        }
+        let url =
+            read_env_key(cwd, ".env", spec.env_url).or_else(|| request.map(|r| r.url.clone()));
+        let id = spec
+            .env_id
+            .and_then(|key| read_env_key(cwd, ".env", key))
+            .or_else(|| request.and_then(|r| r.id.clone()));
         let (url, id) = match (url, id) {
             (None, None) => continue,
             (Some(url), id) if spec.env_id.is_none() || id.is_some() => (url, id),
@@ -391,7 +386,7 @@ mod tests {
     }
 
     #[test]
-    fn key_resolution_prefers_env_var_then_env_file_then_flag() {
+    fn key_resolution_prefers_env_file_then_env_var_then_flag() {
         let none = |_: &str| None;
         let exported = |key: &str| (key == "LANGCACHE_API_KEY").then(|| "from-env-var".to_string());
         let dir = tempfile::tempdir().unwrap();
@@ -404,7 +399,7 @@ mod tests {
         // A stored key wins over the flag, so validation always tests what .env holds.
         assert_eq!(
             resolve_key(spec, Some("from-flag"), dir.path(), &exported),
-            "from-env-var"
+            "from-env-file"
         );
         assert_eq!(
             resolve_key(spec, Some("from-flag"), dir.path(), &none),
