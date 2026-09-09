@@ -56,7 +56,7 @@ const SAFE_ID_JS: &str = r#"// Session and actor ids accept only letters, digits
 const safeId = (value) => String(value).replace(/[^A-Za-z0-9-]+/g, '-');
 "#;
 
-const AGENT_MEMORY_NODE_SDK: &str = r#"import { AgentMemory } from '__PKG__';
+const AGENT_MEMORY_NODE_SDK: &str = r#"__IMPORT__
 
 // The SDK reads __KEY__ from the environment; the store id is passed in.
 const memory = new AgentMemory({
@@ -143,7 +143,7 @@ def recall_session(session_id):
 # the self-hosted Agent Memory Server, a different API - hence plain REST here.
 "#;
 
-const LANGCACHE_NODE_SDK: &str = r#"import { LangCache } from '__PKG__';
+const LANGCACHE_NODE_SDK: &str = r#"__IMPORT__
 
 const cache = new LangCache({
   serverURL: process.env.__URL__,
@@ -206,7 +206,18 @@ def cached_completion(prompt, generate, similarity_threshold=0.9):
 "#;
 
 fn fill(template: &str, product: &WiredProduct, pkg: &str, esm: bool) -> String {
+    let class = match product.spec.key {
+        ProductKey::AgentMemory => "AgentMemory",
+        ProductKey::LangCache => "LangCache",
+        ProductKey::ContextRetriever => "",
+    };
+    let import = if esm {
+        format!("import {{ {class} }} from '{pkg}';")
+    } else {
+        format!("const {{ {class} }} = require('{pkg}');")
+    };
     template
+        .replace("__IMPORT__", &import)
         .replace("__PKG__", pkg)
         .replace("__URL__", product.spec.env_url)
         .replace("__ID__", product.spec.env_id.unwrap_or_default())

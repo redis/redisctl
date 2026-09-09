@@ -185,7 +185,7 @@ pub(crate) fn plan_env_set_block(
             Some(_) => kept.push(key.as_str()),
             None => {
                 added.push(key.as_str());
-                lines.push(format!("{key}=\"{value}\""));
+                lines.push(env_assignment(key, value)?);
             }
         }
     }
