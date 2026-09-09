@@ -180,6 +180,96 @@ fn cloud_and_url_are_mutually_exclusive() {
         .stderr(predicates::str::contains("--url"));
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn creates_in_the_available_free_subscription() {
+    let cfg = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let repo = skills_fixture();
+    let server = MockServer::start().await;
+    write_cloud_profile(&cfg, &server.uri());
+    let endpoint = format!("127.0.0.1:{}", fake_redis());
+    for (route, body) in [
+        (
+            "/fixed/subscriptions",
+            json!({"subscriptions": [{"id": 7, "name": "my-free-subscription", "price": 0, "maximumDatabases": 1}]}),
+        ),
+        (
+            "/fixed/subscriptions/7/databases",
+            json!({"subscription": {"subscriptionId": 7, "databases": []}}),
+        ),
+        ("/subscriptions", json!({"subscriptions": []})),
+        (
+            "/tasks/create-db",
+            json!({"taskId": "create-db", "status": "processing-completed", "response": {"resourceId": 9}}),
+        ),
+        (
+            "/fixed/subscriptions/7/databases/9",
+            json!({"databaseId": 9, "name": "my-project", "publicEndpoint": endpoint, "security": {"enableTls": false, "password": MOCK_PASSWORD}}),
+        ),
+    ] {
+        Mock::given(method("GET"))
+            .and(path(route))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("POST"))
+        .and(path("/fixed/subscriptions/7/databases"))
+        .and(body_partial_json(json!({"name": "my-project"})))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({"taskId": "create-db"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/fixed/subscriptions"))
+        .respond_with(ResponseTemplate::new(400))
+        .expect(0)
+        .mount(&server)
+        .await;
+    run_init_cloud(
+        &cfg,
+        project.path(),
+        &repo,
+        &["--name", "my-project", "--defaults"],
+    )
+    .assert()
+    .success()
+    .stdout(predicate::str::contains(
+        "database 9 in Essentials subscription 7",
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn paid_databases_do_not_exhaust_the_free_plan() {
+    let cfg = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let repo = skills_fixture();
+    let server = MockServer::start().await;
+    write_cloud_profile(&cfg, &server.uri());
+    for (route, body) in [
+        ("/fixed/subscriptions", json!({"subscriptions": []})),
+        (
+            "/subscriptions",
+            json!({"subscriptions": [{"id": 2, "name": "paid"}]}),
+        ),
+        (
+            "/subscriptions/2/databases",
+            json!({"subscription": [{"subscriptionId": 2, "databases": [{"databaseId": 42, "name": "paid-db"}]}]}),
+        ),
+    ] {
+        Mock::given(method("GET"))
+            .and(path(route))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+    }
+    run_init_cloud(&cfg, project.path(), &repo, &[])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Create another:"))
+        .stderr(predicate::str::contains("the free plan is already used up").not());
+}
+
 #[test]
 fn cloud_subscription_requires_cloud() {
     Command::cargo_bin("redisctl")
