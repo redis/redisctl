@@ -27,6 +27,7 @@ fn qa_cloud_auth() -> CloudAuthConfig {
         sm_api_url: "https://sm.example.com/api/v1".to_string(),
         capi_url: "https://api.example.com/v1".to_string(),
         account_id: None,
+        capi_key_name: None,
     }
 }
 
@@ -132,6 +133,7 @@ fn apply_cloud_login_writes_profile_default_and_endpoints() {
     // cannot be derived later, since a key does not name its account.
     let expected = CloudAuthConfig {
         account_id: Some(112117),
+        capi_key_name: Some("redisctl-demo".to_string()),
         ..qa_cloud_auth()
     };
     assert_eq!(config.resolve_cloud_auth("qa"), expected);
