@@ -169,8 +169,9 @@ pub(crate) fn plan_env_replace(
                 regex::escape(key)
             ))
             .expect("escaped key regex");
+            let assignment = env_assignment(key, value)?;
             let replaced = re
-                .replace(&content, format!("{key}=\"{value}\""))
+                .replace(&content, regex::NoExpand(&assignment))
                 .into_owned();
             Ok(FileAction::Write {
                 rel: rel.to_string(),
