@@ -40,6 +40,7 @@ redisctl cloud auth login --allow-plaintext
 | `--device` | Use the device-authorization flow (print a URL + code) instead of opening a browser. |
 | `--wait` | With `--device`: block until approved (one-shot). Without it, `login --device` returns immediately and `auth status --wait` completes the login. |
 | `--allow-plaintext` | Store credentials in the config file when no OS keyring is available. |
+| `--account <ID>` | Mint the key for this Redis Cloud account id. Defaults to your current account. Carried through the device flow, so `login --device --account <id>` still applies when `auth status --wait` completes it. |
 
 ### Browser (loopback) flow
 
@@ -61,6 +62,7 @@ sequenceDiagram
     CLI->>OK: exchange code and PKCE verifier for tokens
     OK-->>CLI: access and refresh tokens
     CLI->>SM: sign in, enable programmatic access, mint an API key
+    Note over CLI,SM: if the account has MFA: prompt for a 6-digit code, retry on the same session
     SM-->>CLI: account API key and user secret
     CLI->>CFG: write cloud profile (secrets to keyring)
     CLI-->>U: signed in - profile ready
@@ -79,6 +81,7 @@ sequenceDiagram
     participant CLI as redisctl
     participant OK as Okta (OIDC)
     participant SM as Redis Cloud API
+    participant CFG as profile and keyring
     A->>CLI: cloud auth login --device
     CLI->>OK: request device authorization
     OK-->>CLI: user_code, verification_uri, device_code
@@ -89,9 +92,131 @@ sequenceDiagram
     CLI->>OK: poll for tokens until approved
     OK-->>CLI: access and refresh tokens
     CLI->>SM: sign in, enable access, mint an API key
+    Note over CLI,SM: if the account has MFA: needs a terminal, else exits mfa_required
     SM-->>CLI: account API key and user secret
+    CLI->>CFG: write cloud profile (secrets to keyring)
     CLI-->>A: authenticated and account_id
 ```
+
+### Multi-factor authentication
+
+If your Redis Cloud account has MFA enabled, `login` prompts for the 6-digit code from your
+authenticator app after you sign in, then completes normally:
+
+```
+✓ Authenticated as user@example.com
+This account requires multi-factor authentication.
+Enter the 6-digit code from your authenticator app:
+```
+
+You get three attempts per login.
+
+!!! note "MFA needs an interactive terminal"
+    A time-based code can't be supplied ahead of time, so MFA can't be completed
+    non-interactively. Piped or agent-driven runs exit `2` with `mfa_required`; re-run
+    `redisctl cloud auth login` in a terminal. For unattended automation, use a
+    pre-created API key instead of `auth login`.
+
+### Which account the key belongs to
+
+A Redis Cloud API key is scoped to **one account**. If you belong to several, `cloud auth login`
+mints the key for your **current** account — the one selected in the
+[Redis Cloud console](https://app.redislabs.com) — then names it and lists the alternatives, so you
+never have to look an account id up:
+
+```
+✓ Signed in as user@example.com. Credentials saved to profile 'cloud'.
+  note: the key is for Acme (#316941) — 1 of 3 accounts you belong to:
+    Acme (#316941) · Contoso (#481022) · Initech (#502113)
+  To use another: redisctl --profile cloud cloud auth login --account <id>
+```
+
+Use `--account` to pick one explicitly, without touching the console:
+
+```bash
+redisctl cloud auth login --account 316941
+```
+
+Naming an account you don't belong to exits `2` with `unknown_account`, and the message lists the
+ones you do have. You also need a role that can create API keys on whichever account you
+pick — your role on one account says nothing about your role on another, so `--account` can exit
+`2` with `insufficient_permission` even when a plain `login` succeeds. Keeping one profile per account works well:
+
+```bash
+redisctl --profile acme    cloud auth login --account 316941
+redisctl --profile contoso cloud auth login --account 481022
+```
+
+Re-using one profile is fine too, but each login replaces that profile's key, so only the most
+recent account stays usable.
+
+!!! note "A new profile name defaults to production"
+    A profile with no `[cloud_auth.<name>]` section falls back to the built-in **production**
+    endpoints. That is what you want for production, but when logging in to a non-production
+    environment, add the section first — otherwise the new profile silently signs you in to
+    production instead.
+
+`-o json` reports `account_id`, `account_name` and `account_count`, plus an `accounts` array of
+every `{id, name}` — so a script can confirm it got the account it expected, or pick one without a
+trip to the console. `account_id` and `accounts[].id` are both numbers, so they compare directly:
+
+```bash
+redisctl cloud auth login -o json | jq -e '.account_id == 316941'
+```
+
+### Password accounts need linking once
+
+Redis Cloud accounts that sign in with an email and password cannot be used by the CLI directly —
+the sign-in happens at the identity provider, which never held that password. Sign in to the
+[Redis Cloud console](https://app.redislabs.com) once with **Google or GitHub using the same email
+address** and accept the prompt to link the account; afterwards `cloud auth login` works normally.
+
+Until that's done, login exits `2` with `migration_required`.
+
+## Switch Accounts
+
+```bash
+redisctl cloud auth switch
+```
+
+Changes which account the profile's key is for, **without opening a browser** — the sign-in stored
+at login is reused. With no argument it lists your accounts and asks:
+
+```
+Accounts you belong to:
+  1) Acme (#316941)  (current)
+  2) Contoso (#481022)
+Switch to which? [1-2]: 2
+
+✓ Profile 'cloud' now uses Contoso (#481022).
+```
+
+Either a list position or an account id is accepted. Pass the id to skip the prompt:
+
+```bash
+redisctl cloud auth switch 481022
+```
+
+The account marked `(current)` is the one **this profile** is on, recorded when the key was minted.
+It is not read back from the server: switching is scoped to the sign-in session, so Redis Cloud
+still reports your usual default account and the console is unaffected by a CLI switch.
+
+!!! note "Switching replaces the profile's key"
+    An API key is scoped to one account, so switching mints a key for the account you pick and
+    replaces the profile's current one — the previous account is no longer usable through this
+    profile until you switch back. To use several accounts at once, keep one profile per account
+    and log in to each ([above](#which-account-the-key-belongs-to)).
+
+Two cases where a full `login` is needed instead:
+
+- **Credentials stored with `--allow-plaintext`.** Reusing a sign-in needs the refresh token, which
+  is only kept in the OS keyring, so there is nothing to reuse. Exits `2` with `not_authenticated`.
+- **The stored sign-in has expired.** Refresh tokens are rotated and eventually expire. Same code,
+  and the message says so.
+
+Without a terminal to prompt on, the account id is required — otherwise `switch` exits `2` with
+`account_required` rather than blocking. Accounts with MFA still prompt for a code, since that
+challenge happens on sign-in.
 
 ## Status
 
@@ -128,6 +253,35 @@ preserving the `[cloud_auth.<profile>]` login endpoints so you can log in again.
     The minted API key still exists in the Redis Cloud console until you revoke it there —
     server-side revocation on logout is a planned follow-up.
 
+## Who can use `cloud auth login`
+
+`cloud auth login` signs in through Redis Cloud's identity provider, so it works for accounts whose
+sign-in the identity provider can perform:
+
+| Account type | Supported | Notes |
+|---|---|---|
+| Google | ✅ | both flows |
+| GitHub | ✅ | both flows |
+| SSO / SAML | ❌ | the CLI cannot select an organization's own identity provider — use an API key |
+| Email + password | after linking | link the account to Google or GitHub once, in the console |
+| Marketplace (Heroku, GCP, Azure) | ❌ | sign-in is initiated by the marketplace; there is no Redis-side credential |
+
+!!! note "You need a role that can create API keys"
+    Whatever the sign-in method, `cloud auth login` also needs a role on the account that permits
+    programmatic access — in practice the **Owner** role today. Other roles (Member, Manager,
+    Viewer, Billing Admin, Logs Viewer) exit `2` with `insufficient_permission`, and the message
+    names the role that is required, so it stays accurate if Redis widens that set. Ask someone
+    with it to create a key and use it directly, as below.
+
+For anything unsupported — and for **unattended automation** of any kind — create an API key in the
+[Redis Cloud console](https://app.redislabs.com) and configure it directly:
+
+```bash
+redisctl profile set prod --deployment cloud --api-key "$KEY" --api-secret "$SECRET"
+```
+
+or set `REDIS_CLOUD_API_KEY` / `REDIS_CLOUD_API_SECRET` in the environment.
+
 ## Configuration
 
 `cloud auth login` reads its OIDC endpoints from a `[cloud_auth.<profile>]` section, falling back
@@ -154,7 +308,7 @@ of parsing prose:
 | Exit code | Meaning | Example codes |
 |-----------|---------|---------------|
 | `1` | unknown / backend failure | `sm_exchange_failed` |
-| `2` | usage / precondition to fix | `not_authenticated`, `auth_denied`, `keyring_unavailable` |
+| `2` | usage / precondition to fix | `not_authenticated`, `auth_denied`, `keyring_unavailable`, `migration_required`, `insufficient_permission`, `mfa_required` |
 | `3` | transient / retryable | `device_code_expired`, `transient_api_error`, `rate_limited` |
 
 Human (non-JSON) mode prints the usual diagnostic to stderr and keeps today's `0`/`1` exit behavior.

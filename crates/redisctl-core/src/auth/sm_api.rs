@@ -18,17 +18,133 @@ use url::Url;
 
 use super::{AuthError, default_http_client, endpoint, truncate};
 
+/// SM error code on the CAPI-enable call when the signed-in user is not the account owner. Note
+/// this endpoint nests its errors as a JSON-encoded string, so it is matched on the body rather
+/// than through the `/login` error envelope.
+const INSUFFICIENT_PERMISSION_CODE: &str = "insufficient-permission";
+/// SM error code when the *account* cannot have programmatic access at all. On this flow the
+/// caller has already passed the role gate and mints for themselves, so the remaining cause is
+/// the account's `IsApiEnabled` flag being off — which only Redis can change.
+const FORBIDDEN_REQUEST_CODE: &str = "forbidden-request";
+/// SM error code returned when a password-only account must be linked to social sign-in before it
+/// can authenticate this way. The consent step is console-only.
+const SOCIAL_MIGRATION_REQUIRED_CODE: &str = "user-agreement-for-social-login-migration-missing";
+/// SM error code for an MFA challenge on `/login`.
+const MFA_REQUIRED_CODE: &str = "user-mfa-required";
+/// SM error code for a rejected MFA code.
+const MFA_INVALID_CODE: &str = "mfa-invalid-code";
+/// SM error code for an `mfa_type` it does not recognise — a client bug, not a user error.
+const MFA_INVALID_TYPE_CODE: &str = "mfa-invalid-type";
+/// SM error code for too many MFA attempts.
+const MFA_QUOTA_EXCEEDED_CODE: &str = "mfa-quota-exceeded";
+/// The only MFA type we submit. SM also knows SMS and Email, but TOTP is what a CLI can prompt for.
+///
+/// Case matters: SM resolves this with `EnumMFAType.toEnum`, which compares against the enum
+/// constant name (`SMS`, `Totp`, `Email`) verbatim — there is no custom `toString`. Sending
+/// `"totp"` is rejected with `mfa-invalid-type`. RedisInsight sends the same `"Totp"`.
+const MFA_TYPE_TOTP: &str = "Totp";
+
+/// Attribution sent on `POST /login`, mirroring what RedisInsight sends. SM records these on the
+/// signup path (`registerOktaUser` → `buildRegistrationItem`), so without them a user whose first
+/// contact with Redis Cloud is `cloud auth login` is registered with no originating tool.
+const UTM_SOURCE: &str = "redisctl";
+/// Coarse channel, kept stable so dashboards can group on it; the flow goes in `utm_campaign`.
+const UTM_MEDIUM: &str = "cli";
+
+/// Which login flow produced the tokens. Reported as `utm_campaign`, so interactive and
+/// agent-driven sign-ins can be told apart in analytics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginFlow {
+    /// Browser on the same machine, redirect caught on loopback.
+    Loopback,
+    /// Device-authorization grant — headless machines and agents.
+    Device,
+    /// `cloud auth switch`: no browser at all, a stored refresh token stands in for the sign-in.
+    Switch,
+}
+
+impl LoginFlow {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Loopback => "loopback",
+            Self::Device => "device",
+            Self::Switch => "switch",
+        }
+    }
+}
+
 /// SM API client. Stateless until [`SmApiClient::login`] establishes a session.
 pub struct SmApiClient {
     base_url: Url,
     http: reqwest::Client,
     session: Option<Session>,
+    /// Which flow produced the tokens, reported to SM as `utm_campaign`.
+    flow: LoginFlow,
+    /// JSESSIONID from an MFA-challenged `/login`. SM keeps the challenge state in that session,
+    /// so [`SmApiClient::complete_mfa`] must reuse this exact cookie — a fresh session has no
+    /// challenge to verify against.
+    pending_mfa_cookie: Option<String>,
 }
 
 struct Session {
     /// Full cookie header value, e.g. `JSESSIONID=abc123`.
     cookie: String,
     csrf: String,
+}
+
+/// SM's error envelope: `{"errors": {"status": 401, "code": "…", "params": …}}`.
+#[derive(Debug, Default, Deserialize)]
+struct SmErrorEnvelope {
+    errors: Option<SmError>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct SmError {
+    code: Option<String>,
+    /// Free-form; for MFA it carries the offered factors. Shape is not contractual, so it is
+    /// parsed best-effort and never allowed to fail the classification.
+    params: Option<serde_json::Value>,
+}
+
+/// Pull the error code out of an SM response body, if it has the usual envelope.
+fn sm_error_code(body: &str) -> Option<(String, Option<serde_json::Value>)> {
+    let env: SmErrorEnvelope = serde_json::from_str(body).ok()?;
+    let err = env.errors?;
+    Some((err.code?, err.params))
+}
+
+/// Best-effort extraction of MFA factor names from SM's `params`. Returns an empty list rather
+/// than failing: the factor list is cosmetic (it only enriches the prompt).
+fn mfa_factors(params: Option<&serde_json::Value>) -> Vec<String> {
+    fn strings(v: &serde_json::Value, out: &mut Vec<String>) {
+        match v {
+            serde_json::Value::String(s) => {
+                // `params` is sometimes a JSON-encoded string; try one level of nesting.
+                if let Ok(inner) = serde_json::from_str::<serde_json::Value>(s) {
+                    strings(&inner, out);
+                } else if !s.is_empty() {
+                    out.push(s.clone());
+                }
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|i| strings(i, out)),
+            serde_json::Value::Object(map) => {
+                for key in ["type", "factorType", "mfaType"] {
+                    if let Some(serde_json::Value::String(s)) = map.get(key) {
+                        out.push(s.clone());
+                        return;
+                    }
+                }
+                map.values().for_each(|v| strings(v, out));
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    if let Some(p) = params {
+        strings(p, &mut out);
+    }
+    out.dedup();
+    out
 }
 
 /// The authenticated user (`GET /users/me`), trimmed to what the bootstrap needs.
@@ -97,32 +213,165 @@ struct AccountsEnvelope {
     accounts: Vec<SmAccount>,
 }
 
+/// Every `error_code` in an SM error body, in order.
+///
+/// Same nesting as [`allowed_roles`]: `errors` is a JSON-encoded string holding the list. Used to
+/// classify on the *set* of codes present rather than on a substring, so a generic code cannot be
+/// matched out of an unrelated envelope.
+fn sm_error_codes(body: &str) -> Vec<String> {
+    fn codes(errors: &serde_json::Value) -> Vec<String> {
+        errors
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|e| {
+                        e.get("error_code")
+                            .or_else(|| e.get("code"))?
+                            .as_str()
+                            .map(str::to_string)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| {
+            let errors = v.get("errors")?.clone();
+            Some(match errors {
+                serde_json::Value::String(inner) => {
+                    codes(&serde_json::from_str::<serde_json::Value>(&inner).ok()?)
+                }
+                other => codes(&other),
+            })
+        })
+        .unwrap_or_default()
+}
+
+/// Roles SM named as sufficient in an `insufficient-permission` body, formatted for a message.
+///
+/// SM nests its error list as a JSON-encoded *string*, so reaching the params means parsing the
+/// body and then parsing `errors` again. Walking the decoded structure — rather than scanning the
+/// raw text — keeps this independent of key order inside each param object and of how role names
+/// are spelled. Falls back to `owner`, the only role that has ever held this permission, when
+/// nothing is parseable, so the message is never empty.
+fn allowed_roles(body: &str) -> String {
+    fn from_params(errors: &serde_json::Value) -> Option<Vec<String>> {
+        for err in errors.as_array()? {
+            for param in err.get("params")?.as_array()? {
+                if param.get("key")?.as_str()? != "allowed-roles" {
+                    continue;
+                }
+                let roles: Vec<String> = match param.get("value")? {
+                    serde_json::Value::Array(items) => items
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .map(str::to_string)
+                        .collect(),
+                    serde_json::Value::String(one) => vec![one.clone()],
+                    _ => continue,
+                };
+                if !roles.is_empty() {
+                    return Some(roles);
+                }
+            }
+        }
+        None
+    }
+
+    let roles = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| {
+            let errors = v.get("errors")?.clone();
+            // `errors` is normally a JSON-encoded string; tolerate it arriving already decoded.
+            match errors {
+                serde_json::Value::String(inner) => {
+                    from_params(&serde_json::from_str::<serde_json::Value>(&inner).ok()?)
+                }
+                other => from_params(&other),
+            }
+        })
+        .unwrap_or_default();
+    match roles.len() {
+        // Only ever `owner` in practice; phrase both cases so the message reads correctly if the
+        // set widens (SM has feature flags for exactly that).
+        0 => "the owner role".to_string(),
+        1 => format!("the {} role", roles[0]),
+        _ => format!("one of these roles: {}", roles.join(", ")),
+    }
+}
+
 impl SmApiClient {
     /// Build a client for the SM API base (e.g. `https://<sm-api-host>/api/v1`).
-    pub fn new(base_url: Url) -> Self {
+    pub fn new(base_url: Url, flow: LoginFlow) -> Self {
         Self {
             base_url,
             http: default_http_client(),
             session: None,
+            flow,
+            pending_mfa_cookie: None,
         }
     }
 
     /// Build with a caller-provided reqwest client (tests / shared client).
-    pub fn with_http_client(base_url: Url, http: reqwest::Client) -> Self {
+    pub fn with_http_client(base_url: Url, http: reqwest::Client, flow: LoginFlow) -> Self {
         Self {
             base_url,
             http,
             session: None,
+            flow,
+            pending_mfa_cookie: None,
         }
     }
 
     /// Establish a session: `POST /login` with the Okta access token, then fetch the CSRF
     /// token. Pass `sm_id_token` only for SSO logins (omit for Google/GitHub).
+    ///
+    /// Returns [`AuthError::MfaRequired`] when SM challenges the login; call
+    /// [`SmApiClient::complete_mfa`] on this same client to finish it.
     pub async fn login(
         &mut self,
         access_token: &str,
         sm_id_token: Option<&str>,
     ) -> Result<(), AuthError> {
+        self.post_login(access_token, sm_id_token, None, None).await
+    }
+
+    /// Finish an MFA-challenged login with a TOTP code, reusing the challenged session.
+    ///
+    /// Errors with [`AuthError::Protocol`] if no challenge is outstanding — submitting a code on a
+    /// fresh session cannot work, because SM verifies it against challenge state held in the
+    /// session it issued.
+    pub async fn complete_mfa(
+        &mut self,
+        access_token: &str,
+        sm_id_token: Option<&str>,
+        code: &str,
+    ) -> Result<(), AuthError> {
+        let cookie = self.pending_mfa_cookie.clone().ok_or_else(|| {
+            AuthError::Protocol("no outstanding SM multi-factor challenge to complete".into())
+        })?;
+        self.post_login(access_token, sm_id_token, Some(code), Some(&cookie))
+            .await
+    }
+
+    async fn post_login(
+        &mut self,
+        access_token: &str,
+        sm_id_token: Option<&str>,
+        mfa_code: Option<&str>,
+        mfa_cookie: Option<&str>,
+    ) -> Result<(), AuthError> {
+        let mut body = serde_json::json!({
+            "utm_source": UTM_SOURCE,
+            "utm_medium": UTM_MEDIUM,
+            "utm_campaign": self.flow.as_str(),
+        });
+        if let Some(code) = mfa_code {
+            body["mfa_type"] = MFA_TYPE_TOTP.into();
+            body["mfa_code"] = code.into();
+        }
         let mut req = self
             .http
             .post(endpoint(&self.base_url, "login"))
@@ -131,28 +380,63 @@ impl SmApiClient {
                 format!("Bearer {access_token}"),
             )
             .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body("{}");
+            .body(body.to_string());
         if let Some(id) = sm_id_token {
             req = req.header("sm-id-token", id);
         }
+        if let Some(c) = mfa_cookie {
+            req = req.header(reqwest::header::COOKIE, format!("JSESSIONID={c}"));
+        }
         let resp = req.send().await?;
         let status = resp.status();
+        // Read the cookie before consuming the body: on an MFA challenge the session carrying the
+        // challenge arrives on the *error* response, and the retry must reuse it.
         let cookie = extract_jsessionid(&resp);
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(AuthError::Protocol(format!(
-                "SM /login failed ({status}): {}",
-                truncate(&body)
-            )));
+            return Err(self.classify_login_error(status, &body, cookie, mfa_cookie));
         }
         let cookie = cookie
+            .or_else(|| mfa_cookie.map(str::to_string))
             .ok_or_else(|| AuthError::Protocol("SM /login did not set a JSESSIONID".into()))?;
         let csrf = self.fetch_csrf(&cookie).await?;
         self.session = Some(Session {
             cookie: format!("JSESSIONID={cookie}"),
             csrf,
         });
+        self.pending_mfa_cookie = None;
         Ok(())
+    }
+
+    fn classify_login_error(
+        &mut self,
+        status: reqwest::StatusCode,
+        body: &str,
+        cookie: Option<String>,
+        previous_cookie: Option<&str>,
+    ) -> AuthError {
+        match sm_error_code(body) {
+            Some((code, params)) if code == MFA_REQUIRED_CODE => {
+                // Keep the challenged session for the retry; SM may or may not re-issue it.
+                self.pending_mfa_cookie = cookie.or_else(|| previous_cookie.map(str::to_string));
+                AuthError::MfaRequired {
+                    factors: mfa_factors(params.as_ref()),
+                }
+            }
+            Some((code, _)) if code == SOCIAL_MIGRATION_REQUIRED_CODE => {
+                AuthError::MigrationRequired
+            }
+            Some((code, _)) if code == MFA_INVALID_CODE => AuthError::MfaInvalidCode,
+            // We sent an mfa_type SM does not accept. Never the user's fault, and retrying the
+            // same request cannot help, so say so plainly rather than blaming their code.
+            Some((code, _)) if code == MFA_INVALID_TYPE_CODE => AuthError::Protocol(
+                "the multi-factor type this client sent was rejected by Redis Cloud \
+                 (mfa-invalid-type); this is a bug in redisctl, please report it"
+                    .to_string(),
+            ),
+            Some((code, _)) if code == MFA_QUOTA_EXCEEDED_CODE => AuthError::MfaQuotaExceeded,
+            _ => AuthError::Protocol(format!("SM /login failed ({status}): {}", truncate(body))),
+        }
     }
 
     async fn fetch_csrf(&self, jsessionid: &str) -> Result<String, AuthError> {
@@ -200,6 +484,18 @@ impl SmApiClient {
         let body = resp.text().await.unwrap_or_default();
         if body.contains("account_api_key_already_exists") {
             return Ok(());
+        }
+        // The caller's role does not carry the CAPI permission. Nothing the CLI can do, but
+        // someone who holds the role can enable it once — after which the call above is a no-op.
+        if body.contains(INSUFFICIENT_PERMISSION_CODE) {
+            return Err(AuthError::NotAccountOwner {
+                allowed_roles: allowed_roles(&body),
+            });
+        }
+        if status == reqwest::StatusCode::FORBIDDEN
+            && sm_error_codes(&body) == [FORBIDDEN_REQUEST_CODE]
+        {
+            return Err(AuthError::CapiDisabled);
         }
         Err(AuthError::Protocol(format!(
             "enabling CAPI failed ({status}): {}",
@@ -271,6 +567,30 @@ impl SmApiClient {
             .ok_or_else(|| AuthError::Protocol("not logged in to the SM API".into()))
     }
 
+    /// Rebind the session to `account_id` (`POST /accounts/setcurrent/{id}`).
+    ///
+    /// Every CAPI call resolves the account from the session — `createApiSecretKey` uses the
+    /// session's `userAccountId` — so this must happen *before* enabling access or minting, or the
+    /// key lands on the previous account. Annotated `LEGACY_ONLY` server-side, which the JSESSIONID
+    /// established by [`SmApiClient::login`] satisfies.
+    pub async fn set_current_account(&self, account_id: u64) -> Result<(), AuthError> {
+        let resp = self
+            .authed_post_json(
+                &format!("accounts/setcurrent/{account_id}"),
+                serde_json::json!({}),
+            )
+            .await?;
+        if resp.status().is_success() {
+            return Ok(());
+        }
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        Err(AuthError::Protocol(format!(
+            "could not switch to account {account_id} ({status}): {}",
+            truncate(&body)
+        )))
+    }
+
     async fn authed_get(&self, path: &str) -> Result<reqwest::Response, AuthError> {
         let s = self.session()?;
         Ok(self
@@ -316,7 +636,7 @@ fn extract_jsessionid(resp: &reqwest::Response) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     async fn mount_login_and_csrf(server: &MockServer) {
@@ -338,7 +658,7 @@ mod tests {
     }
 
     fn client(server: &MockServer) -> SmApiClient {
-        SmApiClient::new(Url::parse(&server.uri()).unwrap())
+        SmApiClient::new(Url::parse(&server.uri()).unwrap(), LoginFlow::Loopback)
     }
 
     async fn logged_in(server: &MockServer) -> SmApiClient {
@@ -419,6 +739,100 @@ mod tests {
             .await;
         let c = logged_in(&server).await;
         assert!(c.ensure_capi_enabled().await.is_ok());
+    }
+
+    /// Only an owner may enable programmatic access. SM says so precisely, but nests the code in a
+    /// JSON-encoded string, so it is matched on the body — this pins that it is still classified.
+    #[tokio::test]
+    async fn ensure_capi_enabled_reports_owner_only_distinctly() {
+        let server = MockServer::start().await;
+        let c = logged_in(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/accounts/cloud-api/cloudApiAccessKey"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+                "errors": "[{\"field_name\":null,\"error_code\":\"insufficient-permission\",\"params\":[{\"key\":\"allowed-roles\",\"value\":[\"owner\"]}]}]"
+            })))
+            .mount(&server)
+            .await;
+        // The role SM named is carried through, not a hardcoded string.
+        match c.ensure_capi_enabled().await {
+            Err(AuthError::NotAccountOwner { allowed_roles }) => {
+                assert_eq!(allowed_roles, "the owner role")
+            }
+            other => panic!("expected NotAccountOwner, got {other:?}"),
+        }
+    }
+
+    /// `allowed-roles` reaches us escaped inside a JSON-encoded string. Parsing the structure
+    /// (rather than scanning the text) has to be independent of key order within a param and of
+    /// how role names are spelled, and anything unreadable must still say something accurate.
+    #[test]
+    fn allowed_roles_reads_the_param_regardless_of_shape() {
+        // The real wire shape: `errors` is a JSON-encoded string.
+        assert_eq!(
+            allowed_roles(
+                r#"{"errors":"[{\"error_code\":\"insufficient-permission\",\"params\":[{\"key\":\"allowed-roles\",\"value\":[\"owner\"]}]}]"}"#
+            ),
+            "the owner role"
+        );
+        // `value` before `key`, plus a second param that also has a value list: must not pick the
+        // wrong one. JSON object order carries no meaning, so this cannot be assumed away.
+        assert_eq!(
+            allowed_roles(
+                r#"{"errors":[{"params":[{"value":["owner"],"key":"allowed-roles"},{"value":["viewer"],"key":"current-role"}]}]}"#
+            ),
+            "the owner role"
+        );
+        // Several roles, including a name that is neither lowercase nor underscore-only.
+        assert_eq!(
+            allowed_roles(
+                r#"{"errors":[{"params":[{"key":"allowed-roles","value":["owner","billing_admin","Manager"]}]}]}"#
+            ),
+            "one of these roles: owner, billing_admin, Manager"
+        );
+        // No params, not JSON, or the param missing: name the only role that has ever held it.
+        assert_eq!(
+            allowed_roles(r#"{"errors":"insufficient-permission"}"#),
+            "the owner role"
+        );
+        assert_eq!(allowed_roles("not json at all"), "the owner role");
+        assert_eq!(
+            allowed_roles(r#"{"errors":[{"params":[{"key":"other","value":["x"]}]}]}"#),
+            "the owner role"
+        );
+    }
+
+    /// A generic code must not be matched out of an unrelated envelope.
+    #[test]
+    fn sm_error_codes_reads_every_nested_code() {
+        assert_eq!(
+            sm_error_codes(r#"{"errors":"[{\"error_code\":\"forbidden-request\"}]"}"#),
+            vec!["forbidden-request"]
+        );
+        assert_eq!(
+            sm_error_codes(r#"{"errors":[{"error_code":"a"},{"error_code":"b"}]}"#),
+            vec!["a", "b"]
+        );
+        assert!(sm_error_codes("not json").is_empty());
+    }
+
+    /// The account's own API access being off is a different failure from a role problem: no role
+    /// can fix it, so it must not be reported as "ask someone with the owner role".
+    #[tokio::test]
+    async fn ensure_capi_enabled_reports_a_disabled_account_distinctly() {
+        let server = MockServer::start().await;
+        let c = logged_in(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/accounts/cloud-api/cloudApiAccessKey"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+                "errors": "[{\"field_name\":null,\"error_code\":\"forbidden-request\"}]"
+            })))
+            .mount(&server)
+            .await;
+        assert!(matches!(
+            c.ensure_capi_enabled().await,
+            Err(AuthError::CapiDisabled)
+        ));
     }
 
     #[tokio::test]
@@ -521,6 +935,243 @@ mod tests {
             c.login("ACCESS", None).await,
             Err(AuthError::Protocol(_))
         ));
+    }
+
+    /// Every account-scoped call resolves the account from the session, so a switch has to be a
+    /// real request to the documented path — the mock only matches that exact URL.
+    #[tokio::test]
+    async fn set_current_account_posts_to_setcurrent() {
+        let server = MockServer::start().await;
+        let c = logged_in(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/accounts/setcurrent/424242"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        c.set_current_account(424242).await.unwrap();
+    }
+
+    /// A refused switch must fail loudly; silently continuing would mint on the previous account.
+    #[tokio::test]
+    async fn set_current_account_surfaces_a_refusal() {
+        let server = MockServer::start().await;
+        let c = logged_in(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/accounts/setcurrent/1"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("nope"))
+            .mount(&server)
+            .await;
+        assert!(matches!(
+            c.set_current_account(1).await,
+            Err(AuthError::Protocol(_))
+        ));
+    }
+
+    /// SM records `utm_*` on the signup path, so a first-ever login through redisctl must carry
+    /// attribution or the tool is invisible in signup analytics. The mock matches only if all three
+    /// fields are present, and `utm_campaign` distinguishes the two flows.
+    #[tokio::test]
+    async fn login_sends_utm_attribution_per_flow() {
+        for (flow, campaign) in [
+            (LoginFlow::Loopback, "loopback"),
+            (LoginFlow::Device, "device"),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/login"))
+                .and(body_string_contains("\"utm_source\":\"redisctl\""))
+                .and(body_string_contains("\"utm_medium\":\"cli\""))
+                .and(body_string_contains(format!(
+                    "\"utm_campaign\":\"{campaign}\""
+                )))
+                .respond_with(
+                    ResponseTemplate::new(200).append_header("Set-Cookie", "JSESSIONID=S"),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/csrf"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "csrfToken": { "csrf_token": "CSRF", "csrf_enabled": true, "errors": [] }
+                })))
+                .mount(&server)
+                .await;
+            let mut c = SmApiClient::new(Url::parse(&server.uri()).unwrap(), flow);
+            c.login("ACCESS", None).await.unwrap();
+        }
+    }
+
+    /// The MFA retry must keep the attribution alongside the code.
+    #[tokio::test]
+    async fn mfa_retry_still_carries_utm() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/login"))
+            .and(body_string_contains("\"mfa_code\":\"123456\""))
+            // Case-sensitive on SM's side; lowercase is rejected as mfa-invalid-type.
+            .and(body_string_contains("\"mfa_type\":\"Totp\""))
+            .and(body_string_contains("\"utm_source\":\"redisctl\""))
+            .respond_with(ResponseTemplate::new(200).append_header("Set-Cookie", "JSESSIONID=S"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/csrf"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "csrfToken": { "csrf_token": "CSRF", "csrf_enabled": true, "errors": [] }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/login"))
+            .respond_with(
+                ResponseTemplate::new(401)
+                    .append_header("Set-Cookie", "JSESSIONID=CH; Path=/")
+                    .set_body_json(serde_json::json!({
+                        "errors": { "status": 401, "code": "user-mfa-required" }
+                    })),
+            )
+            .mount(&server)
+            .await;
+        let mut c = client(&server);
+        assert!(matches!(
+            c.login("ACCESS", None).await,
+            Err(AuthError::MfaRequired { .. })
+        ));
+        c.complete_mfa("ACCESS", None, "123456").await.unwrap();
+    }
+
+    /// A password-only account that hasn't been linked to social sign-in gets its own error, so
+    /// the CLI can point the user at the one-time console step instead of a generic failure.
+    #[tokio::test]
+    async fn login_social_migration_required_is_classified() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/login"))
+            .respond_with(ResponseTemplate::new(422).set_body_json(serde_json::json!({
+                "errors": {
+                    "status": 422,
+                    "code": "user-agreement-for-social-login-migration-missing"
+                }
+            })))
+            .mount(&server)
+            .await;
+        let mut c = client(&server);
+        assert!(matches!(
+            c.login("ACCESS", None).await,
+            Err(AuthError::MigrationRequired)
+        ));
+    }
+
+    /// SM answers the first `/login` with `user-mfa-required`; the factors come back for the prompt.
+    #[tokio::test]
+    async fn login_reports_mfa_challenge_with_factors() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/login"))
+            .respond_with(
+                ResponseTemplate::new(401)
+                    .append_header("Set-Cookie", "JSESSIONID=CHALLENGED; Path=/")
+                    .set_body_json(serde_json::json!({
+                        "errors": { "status": 401, "code": "user-mfa-required",
+                                    "params": [{ "type": "totp" }] }
+                    })),
+            )
+            .mount(&server)
+            .await;
+        let mut c = client(&server);
+        match c.login("ACCESS", None).await {
+            Err(AuthError::MfaRequired { factors }) => assert_eq!(factors, vec!["totp"]),
+            other => panic!("expected MfaRequired, got {other:?}"),
+        }
+    }
+
+    /// The regression that matters: SM holds the challenge in the session it issued on the *401*,
+    /// so the retry must send that exact JSESSIONID back. The mock only matches if it does.
+    #[tokio::test]
+    async fn complete_mfa_reuses_the_challenged_session() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/login"))
+            .and(header("cookie", "JSESSIONID=CHALLENGED"))
+            .and(body_string_contains("\"mfa_code\":\"123456\""))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/csrf"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "csrfToken": { "csrf_token": "CSRF", "csrf_enabled": true, "errors": [] }
+            })))
+            .mount(&server)
+            .await;
+        // Unmatched-request fallback: the challenge itself.
+        Mock::given(method("POST"))
+            .and(path("/login"))
+            .respond_with(
+                ResponseTemplate::new(401)
+                    .append_header("Set-Cookie", "JSESSIONID=CHALLENGED; Path=/")
+                    .set_body_json(serde_json::json!({
+                        "errors": { "status": 401, "code": "user-mfa-required" }
+                    })),
+            )
+            .mount(&server)
+            .await;
+
+        let mut c = client(&server);
+        assert!(matches!(
+            c.login("ACCESS", None).await,
+            Err(AuthError::MfaRequired { .. })
+        ));
+        // Succeeds only because the challenged cookie was carried over.
+        c.complete_mfa("ACCESS", None, "123456").await.unwrap();
+    }
+
+    /// A code with no outstanding challenge can never succeed against SM, so fail locally rather
+    /// than sending a request that would trip over missing session state.
+    #[tokio::test]
+    async fn complete_mfa_without_a_challenge_errors() {
+        let server = MockServer::start().await;
+        let mut c = client(&server);
+        assert!(matches!(
+            c.complete_mfa("ACCESS", None, "123456").await,
+            Err(AuthError::Protocol(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn mfa_error_codes_are_classified() {
+        for (code, want_invalid) in [("mfa-invalid-code", true), ("mfa-quota-exceeded", false)] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/login"))
+                .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                    "errors": { "status": 400, "code": code }
+                })))
+                .mount(&server)
+                .await;
+            let mut c = client(&server);
+            let got = c.login("ACCESS", None).await;
+            if want_invalid {
+                assert!(matches!(got, Err(AuthError::MfaInvalidCode)), "{code}");
+            } else {
+                assert!(matches!(got, Err(AuthError::MfaQuotaExceeded)), "{code}");
+            }
+        }
+    }
+
+    #[test]
+    fn mfa_factors_tolerates_shapes_we_have_not_seen() {
+        assert!(mfa_factors(None).is_empty());
+        assert!(mfa_factors(Some(&serde_json::json!({}))).is_empty());
+        // A JSON-encoded string payload, which SM sometimes uses for `params`.
+        assert_eq!(
+            mfa_factors(Some(&serde_json::json!(
+                r#"[{"factorType":"token:software:totp"}]"#
+            ))),
+            vec!["token:software:totp"]
+        );
+        // Never panics on unexpected scalars.
+        assert!(mfa_factors(Some(&serde_json::json!(7))).is_empty());
     }
 
     #[tokio::test]

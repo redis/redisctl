@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Serde helpers for MCP JSON transport coercion.
 //!
 //! MCP clients sometimes serialize integer values as strings (e.g. `"0"` instead

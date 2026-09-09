@@ -371,6 +371,13 @@ impl RedisCtlError {
             // `Other` is the anyhow catch-all and `OutputError` covers
             // serialization and IO; neither is classified yet.
             RedisCtlError::Other(_) | RedisCtlError::OutputError { .. } => exit_code::GENERIC,
+
+            // The agent-native surface publishes its own 1-4 contract (see
+            // docs/reference/agent-error-codes.md), where `retryable` is defined as exactly the
+            // exit-3 class. Those numbers are carried through unchanged so a caller branching on
+            // them keeps working. NOTE: 3 and 4 therefore mean something different here than in
+            // the taxonomy above (CONFIG and AUTH) — reconciling the two is a separate decision.
+            RedisCtlError::Structured(se) => se.exit_code as i32,
         }
     }
 

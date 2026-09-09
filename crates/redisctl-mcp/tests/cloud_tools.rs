@@ -19,7 +19,7 @@ use wiremock::ResponseTemplate;
 // `body_partial_json`, which does a genuine partial (subset) match.
 use wiremock::matchers::body_partial_json;
 
-use redisctl_mcp::state::AppState;
+use redisctl_mcp::AppState;
 use redisctl_mcp::tools::cloud;
 use support::state_full;
 

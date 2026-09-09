@@ -164,6 +164,23 @@ in detail.
 7. Reference and close related issues in the PR description.
 8. When updating a full-SHA GitHub Action pin, keep its trailing release-version annotation in sync.
 
+### Compatibility Review
+
+Changes to documented commands, configuration, machine-readable output, exit codes, MCP tools, or
+public Rust APIs must be reviewed against the
+[compatibility and support policy](docs/docs/reference/compatibility.md). State whether the change
+is additive, breaking, preview-only, internal, or a safety correction, and add a contract test or a
+recorded exception where applicable.
+
+For MCP tool changes, run the catalog contract test before updating its fixture:
+
+```bash
+cargo test -p redisctl-mcp --all-features mcp_catalog_matches_1_0_baseline
+```
+
+The [MCP Compatibility and Catalog](docs/docs/mcp/compatibility.md) page explains how to review and
+record an intentional additive change. Never refresh the fixture solely to make the test pass.
+
 ## Release Process
 
 We use a manual release workflow with semantic versioning:

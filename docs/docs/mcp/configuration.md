@@ -27,11 +27,14 @@ This page covers all three, with emphasis on `--tools` for controlling the tool 
 | `--request-timeout-secs` | -- | -- | `30` | Request timeout in seconds (HTTP transport only) |
 | `--log-level` | -- | `RUST_LOG` | `info` | Log level |
 
-!!! warning "HTTP transport does not provide built-in authentication"
+!!! warning "HTTP transport is preview and does not provide built-in authentication"
     Keep the default loopback bind unless the server is protected by a trusted
     gateway or reverse proxy that provides authentication, authorization, and
     TLS. Do not expose an unprotected `redisctl-mcp` HTTP endpoint to an
     untrusted network.
+
+    Stdio is the stable 1.0 transport. See the
+    [MCP Compatibility and Catalog](compatibility.md) for the detailed MCP contract.
 
 ## The `--tools` Flag
 
@@ -69,9 +72,9 @@ The server resolves which toolsets to load in this order:
 
 | Toolset | Sub-modules | Total Tools |
 |---------|-------------|-------------|
-| `cloud` | `subscriptions`, `account`, `networking`, `fixed`, `raw` | 151 |
+| `cloud` | `subscriptions`, `account`, `networking`, `fixed`, `provisioning`, `raw` | 150 |
 | `enterprise` | `cluster`, `databases`, `rbac`, `observability`, `proxy`, `services`, `raw` | 85 |
-| `database` | `server`, `keys`, `structures`, `diagnostics`, `json`, `search`, `aliases`, `bulk`, `raw` | 139 |
+| `database` | `server`, `keys`, `structures`, `diagnostics`, `json`, `search`, `aliases`, `bulk`, `raw` | 132 |
 | `app` | *(none -- flat toolset)* | 8 |
 | *(system)* | *(always loaded)* | 2 |
 
@@ -79,7 +82,7 @@ The two system tools (`list_available_tools` and `show_policy`) are always regis
 
 ### Examples
 
-**Cloud only** -- all Cloud sub-modules (151 tools + system):
+**Cloud only** -- all Cloud sub-modules (148 tools + system):
 
 ```bash
 redisctl-mcp --profile my-cloud --tools cloud
@@ -91,13 +94,13 @@ redisctl-mcp --profile my-cloud --tools cloud
 redisctl-mcp --profile my-cloud --tools cloud:subscriptions,cloud:networking
 ```
 
-**Enterprise monitoring** -- cluster info + observability (40 tools + system):
+**Enterprise monitoring** -- cluster info + observability (36 tools + system):
 
 ```bash
 redisctl-mcp --profile my-re --tools enterprise:cluster,enterprise:observability
 ```
 
-**Database only** -- direct Redis operations (139 tools + system):
+**Database only** -- direct Redis operations (132 tools + system):
 
 ```bash
 redisctl-mcp --database-url redis://localhost:6379 --tools database

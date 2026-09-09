@@ -26,6 +26,7 @@ fn qa_cloud_auth() -> CloudAuthConfig {
         okta_client_id: "test-client-id".to_string(),
         sm_api_url: "https://sm.example.com/api/v1".to_string(),
         capi_url: "https://api.example.com/v1".to_string(),
+        account_id: None,
     }
 }
 
@@ -81,9 +82,15 @@ fn resolve_cloud_auth_falls_back_to_prod_defaults() {
     let config = Config::default();
     let resolved = config.resolve_cloud_auth("anything");
     assert_eq!(resolved, CloudAuthConfig::prod_defaults());
-    // Prod endpoints aren't provisioned yet, so it isn't complete, but the CAPI base is known.
-    assert!(!resolved.is_complete());
+    // Production endpoints are built in, so a profile with no `[cloud_auth]` section can log in.
+    assert!(resolved.is_complete());
     assert_eq!(resolved.capi_url, "https://api.redislabs.com/v1");
+    assert_eq!(
+        resolved.okta_issuer,
+        "https://auth.redis.com/oauth2/default"
+    );
+    assert!(!resolved.okta_client_id.is_empty());
+    assert_eq!(resolved.sm_api_url, "https://cloud.redis.io/api/v1");
 }
 
 #[test]
@@ -91,7 +98,7 @@ fn apply_cloud_login_writes_profile_default_and_endpoints() {
     let mut config = Config::default();
     let store = CredentialStore::plaintext(); // never touches the keyring
     let creds = MintedCredentials {
-        account_id: Some("112117".to_string()),
+        account_id: Some(112117),
         email: Some("u@e.com".to_string()),
         api_key: "ACCT-KEY".to_string(),
         api_secret: "USER-SECRET".to_string(),
@@ -99,10 +106,15 @@ fn apply_cloud_login_writes_profile_default_and_endpoints() {
         refresh_token: Some("RT".to_string()),
         capi_key_name: "redisctl-demo".to_string(),
         redisctl_key_count: 1,
+        account_name: None,
+        accounts: vec![redisctl_core::auth::LoginAccount {
+            id: 112117,
+            name: None,
+        }],
     };
 
     config
-        .apply_cloud_login(&store, "qa", &creds, Some(qa_cloud_auth()))
+        .apply_cloud_login(&store, "qa", &creds, Some(qa_cloud_auth()), true)
         .unwrap();
 
     // Default cloud profile is set.
@@ -112,13 +124,18 @@ fn apply_cloud_login_writes_profile_default_and_endpoints() {
     assert_eq!(key, "ACCT-KEY");
     assert_eq!(secret, "USER-SECRET");
     assert_eq!(url, "https://api.example.com/v1");
-    // Login endpoints were recorded for re-login.
-    assert_eq!(config.resolve_cloud_auth("qa"), qa_cloud_auth());
+    // Login endpoints were recorded for re-login, along with the account the key is for — which
+    // cannot be derived later, since a key does not name its account.
+    let expected = CloudAuthConfig {
+        account_id: Some(112117),
+        ..qa_cloud_auth()
+    };
+    assert_eq!(config.resolve_cloud_auth("qa"), expected);
 
     // And it survives a save/load round-trip.
     let (_, loaded) = roundtrip(&config);
     assert_eq!(loaded.default_cloud.as_deref(), Some("qa"));
-    assert_eq!(loaded.resolve_cloud_auth("qa"), qa_cloud_auth());
+    assert_eq!(loaded.resolve_cloud_auth("qa"), expected);
 }
 
 /// Mirrors what `cloud auth logout` does at the config layer: it removes the profile (and its

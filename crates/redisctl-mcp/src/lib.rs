@@ -1,3 +1,5 @@
+#![cfg_attr(not(feature = "test-support"), deny(missing_docs))]
+
 //! MCP (Model Context Protocol) server for Redis Cloud and Enterprise
 //!
 //! This crate provides an MCP server that exposes Redis Cloud and Enterprise
@@ -20,47 +22,53 @@
 //!
 //! ## Library Usage
 //!
-//! You can also embed the tools in your own MCP server using sub-routers:
+//! You can also build the same policy-filtered router used by the binary:
 //!
 //! ```no_run
-//! use std::sync::Arc;
-//! use redisctl_mcp::{AppState, CredentialSource, tools};
-//! use redisctl_mcp::policy::{Policy, PolicyConfig};
-//! use tower_mcp::McpRouter;
+//! use redisctl_mcp::{CredentialSource, McpServerBuilder, PolicyConfig};
 //!
 //! # async fn example() -> anyhow::Result<()> {
-//! let policy = Arc::new(Policy::new(
-//!     PolicyConfig::default(), // read-only
-//!     std::collections::HashMap::new(),
-//!     "default".to_string(),
-//! ));
-//! let state = Arc::new(AppState::new(
+//! let server = McpServerBuilder::new(
 //!     CredentialSource::Profiles(vec!["default".to_string()]),
-//!     policy,
-//!     None, // no database URL
-//!     false, // cluster mode
-//!     Some("redisctl-mcp".to_string()), // client name
-//! )?);
-//!
-//! // Use merge to compose sub-routers
-//! let router = McpRouter::new()
-//!     .merge(tools::cloud::router(state.clone()))
-//!     .merge(tools::enterprise::router(state.clone()))
-//!     .merge(tools::profile::router(state.clone()));
+//!     PolicyConfig::default(), // read-only by default
+//!     "embedded default",
+//! )
+//! .with_tool_specs(["cloud", "enterprise", "app"])?
+//! .with_client_name(Some("my-embedded-server".to_string()))
+//! .build()?;
+//! let router = server.into_router();
+//! # let _ = router;
 //! # Ok(())
 //! # }
 //! ```
 
-pub mod audit;
-pub mod policy;
-pub mod presets;
-pub mod prompts;
-pub mod resources;
-pub mod serde_helpers;
-pub mod state;
+mod audit;
+mod policy;
+mod presets;
+mod prompts;
+mod resources;
+mod serde_helpers;
+mod server;
+mod state;
+
+#[cfg(not(feature = "test-support"))]
+mod tools;
+/// Unstable direct tool constructors used by redisctl's integration tests.
+///
+/// This module is not part of the supported redisctl-mcp Rust API. Use
+/// [`McpServerBuilder`] to embed the server safely.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
 pub mod tools;
 
+pub use audit::{AuditConfig, AuditLayer, AuditLevel, AuditService};
+pub use policy::{Policy, PolicyConfig, SafetyTier, ToolsetKind, ToolsetPolicy};
+pub use presets::ToolsConfig;
+pub use server::{McpServer, McpServerBuilder};
 pub use state::{AppState, CredentialSource};
+
+#[cfg(test)]
+mod catalog_contract;
 
 #[cfg(test)]
 mod tests {
@@ -139,10 +147,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            state.database_url,
-            Some("redis://localhost:6379".to_string())
-        );
+        assert_eq!(state.database_url(), Some("redis://localhost:6379"));
     }
 
     #[test]

@@ -61,6 +61,55 @@ pub enum AuthError {
     /// The identity provider returned something unexpected or unparseable.
     #[error("unexpected identity-provider response: {0}")]
     Protocol(String),
+
+    /// The Redis Cloud account still authenticates with a password and has not been linked to a
+    /// social/SSO identity, so the token exchange cannot complete. Linking is a one-time step the
+    /// user performs in the Redis Cloud console.
+    #[error(
+        "this Redis Cloud account must be linked to social sign-in once before the CLI can use it"
+    )]
+    MigrationRequired,
+
+    /// The signed-in user's role on the account does not permit programmatic (CAPI) access, so
+    /// the login cannot mint a key. A one-time step for someone who does hold the role, not a
+    /// retryable failure. `allowed_roles` is what SM reported as sufficient, already formatted.
+    #[error(
+        "your role on this Redis Cloud account cannot enable programmatic access; that needs \
+         {allowed_roles}. Ask someone who has it to enable it once in the console, then run \
+         login again"
+    )]
+    NotAccountOwner { allowed_roles: String },
+
+    /// The account itself has API access switched off, so no role can mint a key. Only Redis can
+    /// turn it back on — it is not exposed to account owners.
+    #[error(
+        "programmatic access is not enabled for this Redis Cloud account; ask Redis support to \
+         enable API access for the account, then run login again"
+    )]
+    CapiDisabled,
+
+    /// `--account` named an account the signed-in user does not belong to. Carries what they do
+    /// have, so the caller can list the options instead of just refusing.
+    #[error("account {requested} is not one of yours; you belong to: {available}")]
+    UnknownAccount { requested: u64, available: String },
+
+    /// No usable account choice: none was given where one is required, or the caller gave up.
+    /// A precondition for the caller to fix, not a backend failure.
+    #[error("{0}")]
+    AccountRequired(String),
+
+    /// SM challenged the login for multi-factor authentication (`user-mfa-required`). Carries the
+    /// factor types SM offered, when it reports them.
+    #[error("this account requires multi-factor authentication")]
+    MfaRequired { factors: Vec<String> },
+
+    /// The submitted MFA code was rejected (`mfa-invalid-code`).
+    #[error("the multi-factor code was not accepted")]
+    MfaInvalidCode,
+
+    /// Too many MFA attempts (`mfa-quota-exceeded`); retrying now will not help.
+    #[error("too many multi-factor attempts; wait before trying again")]
+    MfaQuotaExceeded,
 }
 
 /// A `BasicClient` with the Okta authorize / token / device-authorization endpoints set. The
@@ -102,7 +151,7 @@ pub(crate) fn okta_client(issuer: &Url, client_id: &str) -> Result<OktaClient, A
 pub(crate) fn oauth_http_client() -> Result<oauth2::reqwest::Client, AuthError> {
     oauth2::reqwest::Client::builder()
         .redirect(oauth2::reqwest::redirect::Policy::none())
-        .user_agent(concat!("redisctl/", env!("CARGO_PKG_VERSION")))
+        .user_agent(crate::USER_AGENT)
         .build()
         .map_err(|e| AuthError::Protocol(format!("could not build the OAuth HTTP client: {e}")))
 }
@@ -110,7 +159,7 @@ pub(crate) fn oauth_http_client() -> Result<oauth2::reqwest::Client, AuthError> 
 /// A reqwest client with the redisctl user agent (used by the SM API exchange).
 pub(crate) fn default_http_client() -> reqwest::Client {
     reqwest::Client::builder()
-        .user_agent(concat!("redisctl/", env!("CARGO_PKG_VERSION")))
+        .user_agent(crate::USER_AGENT)
         .build()
         .expect("building the reqwest client should not fail")
 }

@@ -14,7 +14,7 @@ use tower_mcp::Tool;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
-use redisctl_mcp::state::AppState;
+use redisctl_mcp::AppState;
 use redisctl_mcp::tools::enterprise;
 use support::{state_full, state_write};
 
@@ -852,7 +852,7 @@ async fn test_update_enterprise_proxy() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_proxy(state);
 
@@ -955,7 +955,7 @@ async fn test_update_enterprise_service() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_service(state);
 
@@ -986,7 +986,7 @@ async fn test_start_enterprise_service() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::start_service(state);
 
@@ -1009,7 +1009,7 @@ async fn test_stop_enterprise_service() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::stop_service(state);
 
@@ -1032,7 +1032,7 @@ async fn test_restart_enterprise_service() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::restart_service(state);
 
@@ -1143,7 +1143,7 @@ async fn test_update_enterprise_database() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_enterprise_database(state);
 
@@ -1183,7 +1183,7 @@ async fn test_backup_enterprise_database() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::backup_enterprise_database(state);
 
@@ -1219,7 +1219,7 @@ async fn test_import_enterprise_database() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::import_enterprise_database(state);
 
@@ -1253,7 +1253,7 @@ async fn test_export_enterprise_database() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::export_enterprise_database(state);
 
@@ -1280,7 +1280,7 @@ async fn test_restore_enterprise_database() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::restore_enterprise_database(state);
 
@@ -1304,7 +1304,7 @@ async fn test_upgrade_enterprise_database_redis() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::upgrade_enterprise_database_redis(state);
 
@@ -1506,7 +1506,7 @@ async fn test_create_enterprise_crdb() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::create_enterprise_crdb(state);
 
@@ -1539,7 +1539,7 @@ async fn test_update_enterprise_crdb() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_enterprise_crdb(state);
 
@@ -1613,7 +1613,7 @@ async fn test_update_enterprise_cluster() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_cluster(state);
 
@@ -1681,7 +1681,7 @@ async fn test_update_enterprise_cluster_policy() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_cluster_policy(state);
 
@@ -1710,7 +1710,7 @@ async fn test_enable_enterprise_maintenance_mode() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::enable_maintenance_mode(state);
 
@@ -1734,7 +1734,7 @@ async fn test_disable_enterprise_maintenance_mode() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::disable_maintenance_mode(state);
 
@@ -1779,7 +1779,7 @@ async fn test_rotate_enterprise_cluster_certificates() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::rotate_cluster_certificates(state);
 
@@ -1801,7 +1801,7 @@ async fn test_update_enterprise_cluster_certificates() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_cluster_certificates(state);
 
@@ -1864,7 +1864,7 @@ async fn test_update_enterprise_license() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_license(state);
 
@@ -1908,7 +1908,7 @@ async fn test_enable_enterprise_node_maintenance() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::enable_node_maintenance(state);
 
@@ -1934,7 +1934,7 @@ async fn test_disable_enterprise_node_maintenance() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::disable_node_maintenance(state);
 
@@ -1960,7 +1960,7 @@ async fn test_rebalance_enterprise_node() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::rebalance_node(state);
 
@@ -1986,7 +1986,7 @@ async fn test_drain_enterprise_node() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::drain_node(state);
 
@@ -2011,7 +2011,7 @@ async fn test_update_enterprise_node() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_enterprise_node(state);
 
@@ -2106,7 +2106,7 @@ async fn test_create_enterprise_user() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::create_enterprise_user(state);
 
@@ -2163,7 +2163,7 @@ async fn test_update_enterprise_user() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_enterprise_user(state);
 
@@ -2310,7 +2310,7 @@ async fn test_create_enterprise_role() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::create_enterprise_role(state);
 
@@ -2355,7 +2355,7 @@ async fn test_update_enterprise_role() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_enterprise_role(state);
 
@@ -2475,7 +2475,7 @@ async fn test_create_enterprise_acl() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::create_enterprise_acl(state);
 
@@ -2522,7 +2522,7 @@ async fn test_update_enterprise_acl() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_enterprise_acl(state);
 
@@ -2641,7 +2641,7 @@ async fn test_update_enterprise_ldap_config() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::update_enterprise_ldap_config(state);
 
@@ -2798,7 +2798,7 @@ async fn test_acknowledge_enterprise_alert() {
 
     let client = server.client();
     let mut state = AppState::with_enterprise_client(client);
-    state.policy = AppState::test_write_policy();
+    state.set_test_policy(AppState::test_write_policy());
     let state = Arc::new(state);
     let tool = enterprise::acknowledge_enterprise_alert(state);
 

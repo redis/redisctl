@@ -20,10 +20,12 @@ pub mod sm_api;
 mod oidc;
 
 pub use auth_code_loopback::LoopbackFlowClient;
-pub use authenticator::{CloudAuthenticator, MintedCredentials};
+pub use authenticator::{
+    AccountChoice, AccountPrompt, CloudAuthenticator, LoginAccount, MintedCredentials,
+};
 pub use device_flow::{DeviceAuthorization, DeviceFlowClient};
 pub use oidc::{AuthError, TokenSet};
-pub use sm_api::{CapiKey, SmAccount, SmApiClient, SmUser};
+pub use sm_api::{CapiKey, LoginFlow, SmAccount, SmApiClient, SmUser};
 
 // Crate-private OIDC plumbing shared by the SM exchange (referenced as `super::*`). The flow
 // clients pull their `oauth2` helpers directly from `super::oidc`.

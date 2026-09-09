@@ -76,6 +76,52 @@ impl StructuredError {
     pub fn keyring_unavailable(message: impl Into<String>) -> Self {
         Self::new("keyring_unavailable", 2, false, message)
     }
+    pub fn insufficient_permission(message: impl Into<String>) -> Self {
+        Self::new("insufficient_permission", 2, false, message)
+    }
+    pub fn account_required(message: impl Into<String>) -> Self {
+        Self::new("account_required", 2, false, message)
+    }
+    pub fn capi_disabled(message: impl Into<String>) -> Self {
+        Self::new("capi_disabled", 2, false, message)
+    }
+    pub fn unknown_account(message: impl Into<String>) -> Self {
+        Self::new("unknown_account", 2, false, message)
+    }
+    pub fn migration_required() -> Self {
+        Self::new(
+            "migration_required",
+            2,
+            false,
+            "this Redis Cloud account signs in with a password and must be linked to Google or \
+             GitHub once, in the Redis Cloud console, before the CLI can use it",
+        )
+    }
+    pub fn mfa_required() -> Self {
+        Self::new(
+            "mfa_required",
+            2,
+            false,
+            "this account requires multi-factor authentication; run `redisctl cloud auth login` \
+             in an interactive terminal to enter the code",
+        )
+    }
+    pub fn mfa_invalid_code() -> Self {
+        Self::new(
+            "mfa_invalid_code",
+            2,
+            false,
+            "the multi-factor code was not accepted; start login again",
+        )
+    }
+    pub fn mfa_quota_exceeded() -> Self {
+        Self::new(
+            "mfa_quota_exceeded",
+            4,
+            false,
+            "too many multi-factor attempts; wait before trying again",
+        )
+    }
     pub fn invalid_name(message: impl Into<String>) -> Self {
         Self::new("invalid_name", 2, false, message)
     }
@@ -140,6 +186,22 @@ impl From<AuthError> for StructuredError {
             AuthError::Protocol(msg) => {
                 Self::sm_exchange_failed(format!("login exchange failed: {msg}"))
             }
+            // A one-time console step, not a failure to retry — give it its own code so an agent
+            // can tell the user what to do rather than surfacing a generic exchange error.
+            // Reuse the `AuthError` Display text rather than restating it: a second copy here
+            // would leave the agent-facing message stale whenever the attribute is edited.
+            AuthError::NotAccountOwner { .. } => Self::insufficient_permission(err.to_string()),
+            AuthError::CapiDisabled => Self::capi_disabled(err.to_string()),
+            // A choice the caller has to make or correct, not a backend failure.
+            AuthError::AccountRequired(_) => Self::account_required(err.to_string()),
+            // --account named an account the user is not in; the message lists the real ones.
+            AuthError::UnknownAccount { .. } => Self::unknown_account(err.to_string()),
+            AuthError::MigrationRequired => Self::migration_required(),
+            // Reached only when there was no terminal to prompt on: the caller must re-run
+            // interactively, so this is a precondition to fix rather than a retryable failure.
+            AuthError::MfaRequired { .. } => Self::mfa_required(),
+            AuthError::MfaInvalidCode => Self::mfa_invalid_code(),
+            AuthError::MfaQuotaExceeded => Self::mfa_quota_exceeded(),
         }
     }
 }
@@ -159,6 +221,14 @@ mod tests {
             StructuredError::not_authenticated("x"),
             StructuredError::sm_exchange_failed("x"),
             StructuredError::keyring_unavailable("x"),
+            StructuredError::insufficient_permission("x"),
+            StructuredError::capi_disabled("x"),
+            StructuredError::account_required("x"),
+            StructuredError::unknown_account("x"),
+            StructuredError::migration_required(),
+            StructuredError::mfa_required(),
+            StructuredError::mfa_invalid_code(),
+            StructuredError::mfa_quota_exceeded(),
             StructuredError::invalid_name("x"),
             StructuredError::name_conflict("x"),
             StructuredError::free_db_exists("x"),
@@ -195,6 +265,43 @@ mod tests {
             StructuredError::from(AuthError::Protocol("boom".into())).code,
             "sm_exchange_failed"
         );
+        // `allowed_roles` arrives already phrased (see sm_api::allowed_roles).
+        let owner = StructuredError::from(AuthError::NotAccountOwner {
+            allowed_roles: "the owner role".to_string(),
+        });
+        assert_eq!(owner.code, "insufficient_permission");
+        assert_eq!(owner.exit_code, 2);
+        // The role SM reported reaches the user rather than a hardcoded one.
+        assert!(owner.message.contains("the owner role"));
+        // The relayed text is the AuthError's own, so the two paths cannot drift.
+        assert_eq!(
+            owner.message,
+            AuthError::NotAccountOwner {
+                allowed_roles: "the owner role".to_string()
+            }
+            .to_string()
+        );
+        let disabled = StructuredError::from(AuthError::CapiDisabled);
+        assert_eq!(disabled.code, "capi_disabled");
+        assert_eq!(disabled.exit_code, 2);
+        assert!(!disabled.retryable);
+        let mig = StructuredError::from(AuthError::MigrationRequired);
+        assert_eq!(mig.code, "migration_required");
+        assert_eq!(mig.exit_code, 2);
+        assert!(!mig.retryable);
+        // MFA reaches the structured path only when we couldn't prompt, so it's a precondition
+        // (exit 2) the caller fixes by re-running interactively — never "retryable".
+        let mfa = StructuredError::from(AuthError::MfaRequired { factors: vec![] });
+        assert_eq!(mfa.code, "mfa_required");
+        assert_eq!(mfa.exit_code, 2);
+        assert!(!mfa.retryable);
+        assert_eq!(
+            StructuredError::from(AuthError::MfaInvalidCode).code,
+            "mfa_invalid_code"
+        );
+        let quota = StructuredError::from(AuthError::MfaQuotaExceeded);
+        assert_eq!(quota.code, "mfa_quota_exceeded");
+        assert_eq!(quota.exit_code, 4);
     }
 
     #[test]
