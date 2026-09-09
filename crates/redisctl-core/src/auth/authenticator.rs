@@ -4,7 +4,7 @@
 //! Returns [`MintedCredentials`] for the caller to persist (see
 //! `config::Config::apply_cloud_login`). Persistence lives in the config layer so this stays
 //! free of file/keyring I/O and easy to test. The flow itself (device polling with progress,
-//! or loopback with a browser) is driven by the CLI using [`CloudAuthenticator::device_flow`]
+//! or loopback with a browser) is driven by the CLI using `CloudAuthenticator::device_flow`
 //! / [`CloudAuthenticator::loopback`].
 
 use url::Url;

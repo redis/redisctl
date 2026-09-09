@@ -12,7 +12,7 @@
 //! returns. A later `status --wait` — possibly a *different* process — rebuilds the client from
 //! the issuer + client id, deserializes the [`DeviceAuthorization`], and calls
 //! [`poll`](DeviceFlowClient::poll). Refreshing a token is flow-agnostic and lives in
-//! [`super::oidc::refresh`].
+//! `super::oidc::refresh`.
 
 use std::time::Duration;
 

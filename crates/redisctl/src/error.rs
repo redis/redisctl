@@ -176,9 +176,9 @@ impl RedisCtlError {
     pub fn suggestions(&self) -> Vec<String> {
         match self {
             RedisCtlError::ProfileNotFound { name } => vec![
-                format!("List available profiles: redisctl profile list"),
+                "List available profiles: redisctl profile list".to_string(),
                 format!("Create profile '{}': redisctl profile set {}", name, name),
-                format!("Check profile name spelling"),
+                "Check profile name spelling".to_string(),
             ],
             RedisCtlError::NoProfileConfigured {
                 deployment_type, ..
@@ -366,18 +366,16 @@ impl RedisCtlError {
             RedisCtlError::ConnectionError { .. } => exit_code::NETWORK,
             RedisCtlError::Timeout { .. } => exit_code::TIMEOUT,
 
+            // The agent-native surface publishes its own 1-4 contract (see
+            // docs/reference/agent-error-codes.md), where `retryable` is defined as exactly the
+            // exit-3 class. Those numbers are carried through unchanged so a caller branching on
+            // them keeps working. NOTE: 3 and 4 therefore mean something different here than in
+            // the taxonomy above (CONFIG and AUTH) - reconciling the two is a separate decision.
             RedisCtlError::Structured(se) => i32::from(se.exit_code),
 
             // `Other` is the anyhow catch-all and `OutputError` covers
             // serialization and IO; neither is classified yet.
             RedisCtlError::Other(_) | RedisCtlError::OutputError { .. } => exit_code::GENERIC,
-
-            // The agent-native surface publishes its own 1-4 contract (see
-            // docs/reference/agent-error-codes.md), where `retryable` is defined as exactly the
-            // exit-3 class. Those numbers are carried through unchanged so a caller branching on
-            // them keeps working. NOTE: 3 and 4 therefore mean something different here than in
-            // the taxonomy above (CONFIG and AUTH) — reconciling the two is a separate decision.
-            RedisCtlError::Structured(se) => se.exit_code as i32,
         }
     }
 
