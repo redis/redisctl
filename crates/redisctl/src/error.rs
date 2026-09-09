@@ -176,9 +176,9 @@ impl RedisCtlError {
     pub fn suggestions(&self) -> Vec<String> {
         match self {
             RedisCtlError::ProfileNotFound { name } => vec![
-                format!("List available profiles: redisctl profile list"),
+                "List available profiles: redisctl profile list".to_string(),
                 format!("Create profile '{}': redisctl profile set {}", name, name),
-                format!("Check profile name spelling"),
+                "Check profile name spelling".to_string(),
             ],
             RedisCtlError::NoProfileConfigured {
                 deployment_type, ..
