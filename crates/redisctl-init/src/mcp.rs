@@ -10,7 +10,7 @@ use crate::change::{Change, Status};
 use crate::docker::docker_ok;
 use crate::env::{FileAction, read_for_planning};
 use crate::project::Agent;
-use crate::util::{has_bin, mask_url};
+use crate::util::has_bin;
 
 /// How the launcher runs the server: uvx when available, a Docker bridge otherwise.
 /// With neither, the config is still written for uvx and the caller shows a note.
@@ -22,12 +22,9 @@ enum Runner {
 
 fn server_entry(runner: &Runner) -> serde_json::Value {
     let inner = match runner {
-        // Inside the container, localhost is the container itself. The add-host
-        // mapping defines host.docker.internal on Linux Engine (Docker Desktop has
-        // it built in), and the rewrites anchor on :// so a password or a
-        // foo.localhost host can never be rewritten.
+        // Rewrite only the hostname; userinfo and remote hosts stay intact.
         Runner::Docker => {
-            r#"exec docker run --rm -i --add-host=host.docker.internal:host-gateway mcp/redis --url "$(printf %s "$REDIS_URL" | sed -e 's|://localhost|://host.docker.internal|' -e 's|://127\.0\.0\.1|://host.docker.internal|')""#
+            r#"exec docker run --rm -i --add-host=host.docker.internal:host-gateway mcp/redis --url "$(printf %s "$REDIS_URL" | sed -E 's~^(rediss?://([^/]*@)?)(localhost|127\.0\.0\.1)([:/?#]|$)~\1host.docker.internal\4~')""#
         }
         _ => r#"exec uvx --from redis-mcp-server@latest redis-mcp-server --url "$REDIS_URL""#,
     };
@@ -132,22 +129,7 @@ fn upsert(
         Some(previous) if *previous == server => {
             return Ok(McpAction::Report(Change::new(rel, Status::Unchanged, "")));
         }
-        Some(previous) => {
-            let command = previous["command"].as_str().unwrap_or_default();
-            let args = previous["args"]
-                .as_array()
-                .map(|args| {
-                    args.iter()
-                        .filter_map(|a| a.as_str())
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                })
-                .unwrap_or_default();
-            format!(
-                "replaced existing redis server (was: {})",
-                mask_url(format!("{command} {args}").trim())
-            )
-        }
+        Some(_) => "replaced existing redis server".to_string(),
         None => "redis: reads REDIS_URL from .env at launch".to_string(),
     };
     map.insert("redis".to_string(), server);
@@ -223,8 +205,6 @@ mod tests {
             launcher.contains("--add-host=host.docker.internal:host-gateway"),
             "{launcher}"
         );
-        assert!(launcher.contains("://localhost"), "{launcher}");
-        assert!(!launcher.contains("s/localhost/"), "{launcher}");
     }
 
     #[test]
@@ -248,7 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn a_different_existing_redis_server_is_replaced_with_a_masked_note() {
+    fn a_different_existing_redis_server_is_replaced_without_its_arguments() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join(".mcp.json"),
@@ -259,11 +239,7 @@ mod tests {
         let change = plan.actions[0].preview();
         assert_eq!(change.status, Status::Updated);
         assert!(change.note.contains("replaced existing redis server"));
-        assert!(
-            change.note.contains("redis://default:****@h:1"),
-            "{}",
-            change.note
-        );
+        assert_eq!(change.note, "replaced existing redis server");
         assert!(!change.note.contains("s3cret"));
     }
 
