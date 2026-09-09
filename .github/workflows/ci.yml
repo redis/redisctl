@@ -53,6 +53,9 @@ jobs:
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+      - name: Check redisctl-core with default features
+        run: cargo check -p redisctl-core
+
   # Unit tests for each package in parallel
   test-unit:
     name: Unit Tests - ${{ matrix.package }}

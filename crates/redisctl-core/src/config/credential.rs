@@ -72,8 +72,15 @@ impl CredentialStore {
     /// Create a store that always uses plaintext (no keyring). Useful for tests and for the
     /// explicit `--allow-plaintext` opt-in when no keyring is available.
     pub fn plaintext() -> Self {
-        Self {
-            storage: CredentialStorage::Plaintext,
+        #[cfg(feature = "secure-storage")]
+        {
+            Self {
+                storage: CredentialStorage::Plaintext,
+            }
+        }
+        #[cfg(not(feature = "secure-storage"))]
+        {
+            Self {}
         }
     }
 
