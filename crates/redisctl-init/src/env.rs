@@ -93,6 +93,21 @@ fn strip_edge_quotes(value: &str) -> &str {
         .unwrap_or(value)
 }
 
+fn env_assignment(key: &str, value: &str) -> Result<String, InitError> {
+    // Literal quoting keeps dotenv readers and the MCP shell in agreement.
+    let quote = if value.contains(['$', '`', '\\', '"']) {
+        '\''
+    } else {
+        '"'
+    };
+    if value.contains(quote) || value.contains(['\n', '\r']) {
+        return Err(InitError::InvalidEnvValue {
+            key: key.to_string(),
+        });
+    }
+    Ok(format!("{key}={quote}{value}{quote}"))
+}
+
 /// Set a key in a dotenv-style file. Appends with a provenance comment; an existing
 /// key is never clobbered - same value reads as unchanged, a different one is kept.
 pub(crate) fn plan_env_set(
@@ -101,8 +116,7 @@ pub(crate) fn plan_env_set(
     key: &str,
     value: &str,
 ) -> Result<FileAction, InitError> {
-    // Quoted so the .env stays shell-sourceable.
-    let line = format!("{key}=\"{value}\"");
+    let line = env_assignment(key, value)?;
     let Some(content) = read_for_planning(dir, rel)? else {
         return Ok(FileAction::Write {
             rel: rel.to_string(),
