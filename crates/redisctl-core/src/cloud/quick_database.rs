@@ -109,6 +109,7 @@ pub async fn provision(
     params: &QuickDatabaseParams,
 ) -> QResult<QuickDatabaseReport> {
     validate_name(&params.name)?;
+    validate_variable(&params.variable)?;
     let sub_name = format!("{SUBSCRIPTION_PREFIX}{}", params.name);
 
     // Find our subscription (idempotent re-run / crash resume).
@@ -195,6 +196,26 @@ fn deliver_and_report(
 
 /// PRD §5.1.1 name rules: lowercase alnum + hyphens, 3–40 chars, no leading/trailing hyphen,
 /// no `--`.
+/// An env-var name, so it cannot carry a newline into the credentials file and inject lines.
+fn validate_variable(variable: &str) -> QResult<()> {
+    let valid = !variable.is_empty()
+        && variable
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && variable
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if valid {
+        Ok(())
+    } else {
+        Err(QuickDatabaseError::InvalidName(format!(
+            "'{variable}' is not a usable environment variable name: use letters, digits and \
+             underscores, starting with a letter or underscore"
+        )))
+    }
+}
+
 fn validate_name(name: &str) -> QResult<()> {
     let ok = (3..=40).contains(&name.len())
         && name
@@ -445,27 +466,26 @@ fn classify_task_error(msg: &str) -> QuickDatabaseError {
 /// Map a generic CAPI error to a branchable class. 5xx / network / connection are transient;
 /// 429 is rate-limited; quota messages map to quota_exceeded; everything else is `Other`.
 fn classify_cloud_error(action: &str, err: CloudError) -> QuickDatabaseError {
+    let relay = |text: &str| format!("{action}: {}", crate::bound_upstream_text(text));
     match err {
-        CloudError::RateLimited { message } => {
-            QuickDatabaseError::RateLimited(format!("{action}: {message}"))
-        }
+        CloudError::RateLimited { message } => QuickDatabaseError::RateLimited(relay(&message)),
         CloudError::ServiceUnavailable { message }
         | CloudError::InternalServerError { message } => {
-            QuickDatabaseError::Transient(format!("{action}: {message}"))
+            QuickDatabaseError::Transient(relay(&message))
         }
         CloudError::Request(m) | CloudError::ConnectionError(m) => {
-            QuickDatabaseError::Transient(format!("{action}: {m}"))
+            QuickDatabaseError::Transient(relay(&m))
         }
         CloudError::ApiError { code, message } if (500..=599).contains(&code) => {
-            QuickDatabaseError::Transient(format!("{action}: {message}"))
+            QuickDatabaseError::Transient(relay(&message))
         }
         CloudError::ApiError { code: 429, message } => {
-            QuickDatabaseError::RateLimited(format!("{action}: {message}"))
+            QuickDatabaseError::RateLimited(relay(&message))
         }
         CloudError::BadRequest { message } if is_quota_message(&message) => {
-            QuickDatabaseError::QuotaExceeded(format!("{action}: {message}"))
+            QuickDatabaseError::QuotaExceeded(relay(&message))
         }
-        other => QuickDatabaseError::Other(format!("{action}: {other}")),
+        other => QuickDatabaseError::Other(relay(&other.to_string())),
     }
 }
 
@@ -519,6 +539,29 @@ mod tests {
     /// An absent `enableTls` must not be read as TLS. Free Essentials plans report
     /// `supportSsl: false`, so claiming `rediss://` would tell the user their traffic is
     /// encrypted when it is not.
+    /// The variable name is caller-supplied — an MCP client can set it — and is interpolated into
+    /// the credentials file, so a newline would inject lines of its own.
+    #[test]
+    fn variable_name_must_be_an_env_var_name() {
+        for ok in ["REDIS_URL", "_X", "a1", "MY_APP_REDIS_URL"] {
+            assert!(validate_variable(ok).is_ok(), "{ok} should be accepted");
+        }
+        for bad in [
+            "",
+            "1LEADING",
+            "HAS-DASH",
+            "HAS SPACE",
+            "REDIS_URL=x",
+            "A\nINJECTED=1",
+            "A\r\nINJECTED=1",
+        ] {
+            assert!(
+                validate_variable(bad).is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
+    }
+
     #[test]
     fn connection_parts_does_not_assume_tls_when_the_field_is_absent() {
         let db: FixedDatabase = serde_json::from_value(serde_json::json!({

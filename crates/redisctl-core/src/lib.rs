@@ -74,6 +74,25 @@
 /// (free-tier provisioning among them), so all consumers — CLI and MCP alike — must send it.
 pub const USER_AGENT: &str = concat!("redisctl/", env!("CARGO_PKG_VERSION"));
 
+/// Bound and flatten text from an upstream service before it reaches an error message.
+///
+/// Those messages are read by agents as well as people, so third-party text must not arrive with
+/// newlines or control characters, or at arbitrary length.
+pub(crate) fn bound_upstream_text(text: &str) -> String {
+    const MAX: usize = 200;
+    let flattened: String = text
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(MAX)
+        .collect();
+    let trimmed = flattened.trim().to_string();
+    if text.chars().count() > MAX {
+        format!("{trimmed}…")
+    } else {
+        trimmed
+    }
+}
+
 pub mod auth;
 pub mod clients;
 pub mod config;

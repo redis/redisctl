@@ -14,7 +14,9 @@ In `-o json` / `-o yaml` mode, a failure on these commands prints an error envel
 ```
 
 - `code` — a stable, append-only identifier. Branch on this.
-- `message` — human, actionable, and always safe to show (never contains secrets).
+- `message` — human, actionable, and safe to show. Nothing in redisctl puts a credential in one,
+  and text relayed from an upstream service is bounded and stripped of control characters first —
+  but it is not a guarantee about what a third-party service echoes back.
 - `retryable` — whether re-running the same command unchanged might succeed.
 
 Human (non-JSON) mode is unchanged: the usual diagnostic goes to **stderr** and the process
