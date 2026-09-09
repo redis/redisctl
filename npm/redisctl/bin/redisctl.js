@@ -6,6 +6,8 @@
 'use strict';
 
 const { spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
 
 // Until the first release ships init, brew/cargo installs are 0.11.x and the
 // only working install is the branch build (swap this at GA - see the README
@@ -27,7 +29,34 @@ const args =
 
 // Never through a shell: a pasted connection URL can carry & | ^ %, which
 // cmd.exe would run as syntax. Windows resolves .exe from PATH without one.
-const command = process.platform === 'win32' ? 'redisctl.exe' : 'redisctl';
+const binaryName = process.platform === 'win32' ? 'redisctl.exe' : 'redisctl';
+const wrapperPath = fs.realpathSync(__filename);
+function isWrapper(file) {
+  if (file === wrapperPath) return true;
+  try {
+    const manifest = path.resolve(path.dirname(file), '..', 'package.json');
+    return JSON.parse(fs.readFileSync(manifest, 'utf8')).name === '@redis/redisctl';
+  } catch {
+    return false;
+  }
+}
+// npx puts this wrapper's own bin entry first on PATH.
+const command = (process.env.PATH || '')
+  .split(path.delimiter)
+  .map((dir) => path.resolve(dir, binaryName))
+  .find((candidate) => {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return fs.statSync(candidate).isFile() && !isWrapper(fs.realpathSync(candidate));
+    } catch {
+      return false;
+    }
+  });
+
+if (!command) {
+  console.error(INSTALL_HINT);
+  process.exit(1);
+}
 
 // npm exec exports its flags as npm_config_* to every descendant; the package
 // pinning (`--package=@redis/redisctl`) would make redisctl's own npm/npx calls
