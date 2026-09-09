@@ -20,7 +20,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use redisctl_core::AuthError;
 use redisctl_core::auth::{
-    AccountChoice, CloudAuthenticator, LoginAccount, LoginFlow, MintedCredentials,
+    AccountChoice, CloudAuthenticator, LoginAccount, LoginFlow, MFA_MAX_ATTEMPTS, MintedCredentials,
 };
 use redisctl_core::{CloudAuthConfig, Config, CredentialStore, DeviceAuthorization, TokenSet};
 use serde::{Deserialize, Serialize};
@@ -491,7 +491,7 @@ fn prompt_mfa_code(factors: &[String], attempt: u32) -> Result<Option<String>, A
     } else {
         eprintln!(
             "That code wasn't accepted. {} attempt(s) left.",
-            4 - attempt
+            MFA_MAX_ATTEMPTS.saturating_sub(attempt)
         );
     }
     loop {
