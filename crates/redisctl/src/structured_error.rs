@@ -4,7 +4,9 @@
 //! [`StructuredError`]. On failure in JSON/YAML mode the CLI prints
 //! `{"status":"error","error":{code,message,retryable}}` to **stdout** (agents parse
 //! stdout) and exits with the mapped code; in human mode it prints the usual diagnostic to
-//! stderr. `message` is always safe to show — it never contains secrets.
+//! stderr. `message` is safe to show: nothing here puts a credential in one, and text relayed
+//! from an upstream service is bounded and flattened first. It is not a guarantee about what a
+//! third-party service chooses to echo back.
 //!
 //! Exit codes: `1` unknown/backend, `2` usage/precondition the caller must fix, `3`
 //! transient/retryable, `4` quota/limit reached.

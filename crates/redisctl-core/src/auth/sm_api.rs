@@ -143,6 +143,7 @@ fn mfa_factors(params: Option<&serde_json::Value>) -> Vec<String> {
     if let Some(p) = params {
         strings(p, &mut out);
     }
+    out.sort();
     out.dedup();
     out
 }
