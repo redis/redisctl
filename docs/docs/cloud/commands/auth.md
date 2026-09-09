@@ -39,7 +39,7 @@ redisctl cloud auth login --allow-plaintext
 |------|-------------|
 | `--device` | Use the device-authorization flow (print a URL + code) instead of opening a browser. |
 | `--wait` | With `--device`: block until approved (one-shot). Without it, `login --device` returns immediately and `auth status --wait` completes the login. |
-| `--allow-plaintext` | Store credentials in the config file when no OS keyring is available. |
+| `--allow-plaintext` | Store credentials in the config file (`0600`) when no OS keyring is available. Required when there is no keyring: without it, login refuses rather than writing them there silently. |
 | `--account <ID>` | Mint the key for this Redis Cloud account id. Defaults to your current account. Carried through the device flow, so `login --device --account <id>` still applies when `auth status --wait` completes it. |
 
 ### Browser (loopback) flow

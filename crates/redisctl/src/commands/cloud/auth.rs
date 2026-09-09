@@ -544,7 +544,17 @@ async fn complete_and_persist(
     let store = if run.allow_plaintext {
         CredentialStore::plaintext()
     } else {
-        CredentialStore::new()
+        let store = CredentialStore::new();
+        if store.storage_backend() != "keyring" {
+            return Err(RedisCtlError::Structured(Box::new(
+                StructuredError::keyring_unavailable(
+                    "no OS keyring is available to store the credentials, and storing them in \
+                     the config file has to be asked for. Re-run with `--allow-plaintext` to \
+                     store them there (0600) instead.",
+                ),
+            )));
+        }
+        store
     };
     let mut config = conn_mgr.config.clone();
     // On the keyring path, a store failure means the OS secret service is unavailable (D4):
@@ -564,11 +574,11 @@ async fn complete_and_persist(
                 RedisCtlError::Structured(Box::new(StructuredError::keyring_unavailable(format!(
                     "failed to store credentials in the OS keyring ({e}). Re-run \
                      `redisctl cloud auth login --allow-plaintext` to store them in the config \
-                     file instead."
+                     file (0600) instead."
                 ))))
             }
         })?;
-    save_config(conn_mgr, &config)?;
+    save_config_for_store(conn_mgr, &config, &store)?;
     Ok(creds)
 }
 
@@ -811,6 +821,9 @@ fn clear_pending(conn_mgr: &ConnectionManager, profile: &str) {
 fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let mut f = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
@@ -822,6 +835,9 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
 
 #[cfg(not(unix))]
 fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     std::fs::write(path, bytes)
 }
 
@@ -835,6 +851,24 @@ fn save_config(conn_mgr: &ConnectionManager, config: &Config) -> CliResult<()> {
         Some(path) => config.save_to_path(path)?,
         None => config.save()?,
     }
+    Ok(())
+}
+
+/// Save after a login. A plaintext store has just put the CAPI secret in this file, so it is
+/// written owner-only; the keyring path leaves permissions alone.
+fn save_config_for_store(
+    conn_mgr: &ConnectionManager,
+    config: &Config,
+    store: &CredentialStore,
+) -> CliResult<()> {
+    if store.storage_backend() == "keyring" {
+        return save_config(conn_mgr, config);
+    }
+    let path = match &conn_mgr.config_path {
+        Some(path) => path.clone(),
+        None => Config::config_path()?,
+    };
+    config.save_to_path_owner_only(&path)?;
     Ok(())
 }
 
@@ -885,6 +919,33 @@ mod tests {
                 name: None,
             },
         ]
+    }
+
+    /// The pending record lands next to the config, in a directory that does not exist on a
+    /// machine that has never run redisctl. Writing used to fail there with ENOENT *after* the
+    /// IdP had already issued a code, losing the code the user needs.
+    #[test]
+    fn write_private_creates_missing_parents() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("no")
+            .join("such")
+            .join("dir")
+            .join("p.json");
+        write_private(&path, b"{}").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"{}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_private_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("p.json");
+        write_private(&path, b"{}").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "got {mode:o}");
     }
 
     /// The listing shows both a position and an id, so both have to be accepted — and anything

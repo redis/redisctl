@@ -633,6 +633,21 @@ impl Config {
         Ok(())
     }
 
+    /// Save to `config_path` with owner-only permissions, for callers that just put a secret in it.
+    pub fn save_to_path_owner_only(&self, config_path: &Path) -> Result<()> {
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| ConfigError::SaveError {
+                path: parent.display().to_string(),
+                source: e,
+            })?;
+        }
+        let content = toml::to_string_pretty(self)?;
+        write_owner_only(config_path, content.as_bytes()).map_err(|e| ConfigError::SaveError {
+            path: config_path.display().to_string(),
+            source: e,
+        })
+    }
+
     /// Set or update a profile
     pub fn set_profile(&mut self, name: String, profile: Profile) {
         self.profiles.insert(name, profile);
@@ -674,6 +689,7 @@ impl Config {
             // Reference is implicit (looked up by the well-known key on refresh); ignore it.
             let _ = store.store_credential(&format!("{profile_name}-okta-refresh"), refresh)?;
         }
+        let existing = self.profiles.get(profile_name);
         let profile = Profile {
             deployment_type: DeploymentType::Cloud,
             credentials: ProfileCredentials::Cloud {
@@ -681,8 +697,8 @@ impl Config {
                 api_secret,
                 api_url: creds.api_url.clone(),
             },
-            files_api_key: None,
-            tags: Vec::new(),
+            files_api_key: existing.and_then(|p| p.files_api_key.clone()),
+            tags: existing.map(|p| p.tags.clone()).unwrap_or_default(),
         };
         self.profiles.insert(profile_name.to_string(), profile);
         if let Some(mut auth) = cloud_auth {
@@ -786,6 +802,25 @@ impl Config {
 
 fn default_cloud_url() -> String {
     "https://api.redislabs.com/v1".to_string()
+}
+
+#[cfg(unix)]
+fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let mut f = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    f.write_all(bytes)?;
+    f.set_permissions(std::fs::Permissions::from_mode(0o600))
+}
+
+#[cfg(not(unix))]
+fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    fs::write(path, bytes)
 }
 
 #[cfg(test)]

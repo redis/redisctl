@@ -93,11 +93,8 @@ fn resolve_cloud_auth_falls_back_to_prod_defaults() {
     assert_eq!(resolved.sm_api_url, "https://cloud.redis.io/api/v1");
 }
 
-#[test]
-fn apply_cloud_login_writes_profile_default_and_endpoints() {
-    let mut config = Config::default();
-    let store = CredentialStore::plaintext(); // never touches the keyring
-    let creds = MintedCredentials {
+fn minted() -> MintedCredentials {
+    MintedCredentials {
         account_id: Some(112117),
         email: Some("u@e.com".to_string()),
         api_key: "ACCT-KEY".to_string(),
@@ -111,7 +108,14 @@ fn apply_cloud_login_writes_profile_default_and_endpoints() {
             id: 112117,
             name: None,
         }],
-    };
+    }
+}
+
+#[test]
+fn apply_cloud_login_writes_profile_default_and_endpoints() {
+    let mut config = Config::default();
+    let store = CredentialStore::plaintext();
+    let creds = minted();
 
     config
         .apply_cloud_login(&store, "qa", &creds, Some(qa_cloud_auth()), true)
@@ -161,4 +165,90 @@ fn logout_removes_profile_but_preserves_cloud_auth_endpoints() {
     let auth = loaded.resolve_cloud_auth("qa");
     assert!(auth.is_complete());
     assert_eq!(auth.okta_client_id, "test-client-id");
+}
+
+/// A login rewrites the profile, but must not discard settings it does not own.
+#[test]
+fn apply_cloud_login_preserves_files_api_key_and_tags() {
+    let mut config = Config::default();
+    config.set_profile(
+        "qa".to_string(),
+        Profile {
+            deployment_type: DeploymentType::Cloud,
+            credentials: ProfileCredentials::Cloud {
+                api_key: "OLD".to_string(),
+                api_secret: "OLD".to_string(),
+                api_url: "https://api.example.com/v1".to_string(),
+            },
+            files_api_key: Some("FILES-KEY".to_string()),
+            tags: vec!["team-a".to_string(), "prod".to_string()],
+        },
+    );
+
+    config
+        .apply_cloud_login(
+            &CredentialStore::plaintext(),
+            "qa",
+            &minted(),
+            Some(qa_cloud_auth()),
+            true,
+        )
+        .unwrap();
+
+    let profile = &config.profiles["qa"];
+    assert_eq!(profile.files_api_key.as_deref(), Some("FILES-KEY"));
+    assert_eq!(profile.tags, vec!["team-a", "prod"]);
+    let (key, _, _) = profile.cloud_credentials().unwrap();
+    assert_eq!(key, "ACCT-KEY", "the credentials themselves are replaced");
+}
+
+/// A first login has no profile to merge with, so the fields are simply absent.
+#[test]
+fn apply_cloud_login_on_a_fresh_profile_has_no_extras() {
+    let mut config = Config::default();
+    config
+        .apply_cloud_login(
+            &CredentialStore::plaintext(),
+            "qa",
+            &minted(),
+            Some(qa_cloud_auth()),
+            true,
+        )
+        .unwrap();
+    let profile = &config.profiles["qa"];
+    assert!(profile.files_api_key.is_none());
+    assert!(profile.tags.is_empty());
+}
+
+/// The plaintext path puts the CAPI secret in this file, so that save must not be readable by
+/// other users. The ordinary save is left as it is, to keep every other command's behaviour.
+#[cfg(unix)]
+#[test]
+fn owner_only_save_is_0600_and_tightens_an_existing_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("nested").join("config.toml");
+
+    let mut config = Config::default();
+    config
+        .apply_cloud_login(
+            &CredentialStore::plaintext(),
+            "qa",
+            &minted(),
+            Some(qa_cloud_auth()),
+            true,
+        )
+        .unwrap();
+    config.save_to_path_owner_only(&path).unwrap();
+
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "got {mode:o}");
+
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    config.save_to_path_owner_only(&path).unwrap();
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(
+        mode, 0o600,
+        "an existing loose file is tightened, got {mode:o}"
+    );
 }
