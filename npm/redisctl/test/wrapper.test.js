@@ -125,3 +125,39 @@ test('a missing redisctl gets the branch-install hint, not a stack trace', () =>
   assert.match(result.stderr, /cargo install --git .* --branch feat\/init-command/);
   assert.doesNotMatch(result.stderr, /at (Object|Module)\./);
 });
+
+test('the npm bin entry is skipped when locating the native binary', (t) => {
+  const { dir, argsFile } = fakeRedisctl(0);
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const npmBin = path.join(dir, 'node_modules', '.bin');
+  fs.mkdirSync(npmBin, { recursive: true });
+  fs.symlinkSync(WRAPPER, path.join(npmBin, 'redisctl'));
+  fs.symlinkSync(process.execPath, path.join(npmBin, 'node'));
+  const globalPackage = path.join(dir, 'global', 'node_modules', '@redis', 'redisctl');
+  const globalBin = path.join(dir, 'global', 'bin');
+  fs.mkdirSync(path.join(globalPackage, 'bin'), { recursive: true });
+  fs.mkdirSync(globalBin, { recursive: true });
+  fs.copyFileSync(WRAPPER, path.join(globalPackage, 'bin', 'redisctl.js'));
+  fs.writeFileSync(path.join(globalPackage, 'package.json'), JSON.stringify({ name: '@redis/redisctl' }));
+  fs.symlinkSync(path.join(globalPackage, 'bin', 'redisctl.js'), path.join(globalBin, 'redisctl'));
+  const guard = path.join(dir, 'guard.cjs');
+  fs.writeFileSync(guard, `
+const depth = Number(process.env.REDISCTL_TEST_DEPTH || 0) + 1;
+if (depth > 2) process.exit(99);
+process.env.REDISCTL_TEST_DEPTH = String(depth);
+`);
+  for (const nativePresent of [true, false]) {
+    const result = spawnSync(path.join(npmBin, 'redisctl'), ['init', '--dry-run'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: [npmBin, globalBin, ...(nativePresent ? [dir] : [])].join(path.delimiter),
+        NODE_OPTIONS: `--require=${guard}`,
+        REDISCTL_TEST_DEPTH: '0',
+      },
+    });
+    assert.strictEqual(result.status, nativePresent ? 0 : 1, result.stderr);
+    if (nativePresent) assert.deepStrictEqual(childArgs(argsFile), ['init', '--dry-run']);
+    else assert.match(result.stderr, /redisctl is not installed/);
+  }
+});
