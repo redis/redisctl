@@ -55,7 +55,7 @@ fn handy_commands(facts: &SkillFacts) -> String {
         );
     }
     format!(
-        "- redis-cli is not installed ({NATIVE_INSTALL_HINT}); once installed: `redis-cli -u \"$REDIS_URL\" PING`\n- Until then, inspect data with the Redis client your code already uses"
+        "- redis-cli is not installed ({NATIVE_INSTALL_HINT}); once installed: `redis-cli -u \"$REDIS_URL\" PING`\n- Until then, prefer the `redis` MCP server tools for inspection"
     )
 }
 
@@ -143,6 +143,7 @@ file.
 {db}
 
 ## Tooling
+- An MCP server named `redis` is registered in the project's agent configs (it reads `REDIS_URL` from `.env` at launch). Prefer its tools to inspect keys, search, and manipulate data instead of shelling out.
 {skills}
 
 ## Conventions

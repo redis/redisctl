@@ -247,9 +247,6 @@ PROFILE REQUIREMENT:
     Db(DbCommands),
 
     /// Onboard this project to Redis + set up your AI coding agent
-    // Hidden while the command is incomplete: merges to main can auto-release, and a
-    // half-wired command must not surface in --help.
-    #[command(hide = true)]
     Init(InitArgs),
 
     /// Version information
