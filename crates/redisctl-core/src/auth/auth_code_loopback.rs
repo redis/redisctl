@@ -204,7 +204,7 @@ impl LoopbackFlowClient {
                             &mut stream,
                             400,
                             "Bad Request",
-                            "Login failed. You can close this tab.",
+                            "You can close this tab and return to the terminal.",
                         )
                         .await;
                         return match err.as_str() {
@@ -222,7 +222,7 @@ impl LoopbackFlowClient {
                                 &mut stream,
                                 200,
                                 "OK",
-                                "Signed in - you can close this tab.",
+                                "You can close this tab and return to the terminal.",
                             )
                             .await;
                             Ok(c)
@@ -302,9 +302,14 @@ async fn read_request_target(stream: &mut TcpStream) -> Result<String, AuthError
 
 /// Write a minimal HTML page and close the connection. Used for both the success page and the
 /// neutral error/"still waiting" pages, so the wording is decided by the caller after validation.
+/// The page the browser lands on once the callback has been handled.
+///
+/// Entirely self-contained: no stylesheet, font, image or script is fetched, so the page cannot
+/// report the fact or timing of a login to anyone, and it renders on a machine with no route to
+/// the internet. `message` is always a fixed string chosen by the caller — nothing from the
+/// request reaches the page.
 async fn write_page(stream: &mut TcpStream, status: u16, reason: &str, message: &str) {
-    let body =
-        format!("<html><body style=\"font-family:sans-serif\"><h2>{message}</h2></body></html>");
+    let body = page_body(status, message);
     let response = format!(
         "HTTP/1.1 {status} {reason}\r\nContent-Type: text/html; charset=utf-8\r\n\
          Content-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -315,6 +320,37 @@ async fn write_page(stream: &mut TcpStream, status: u16, reason: &str, message: 
     let _ = stream.flush().await;
 }
 
+fn page_body(status: u16, message: &str) -> String {
+    let accent = if status == 200 { "#22a06b" } else { "#d33a2c" };
+    let heading = if status == 200 {
+        "Signed in to Redis Cloud"
+    } else {
+        "Sign-in did not complete"
+    };
+    let body = format!(
+        "<!doctype html>\n\
+         <meta charset=\"utf-8\">\n\
+         <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n\
+         <title>redisctl</title>\n\
+         <style>\n\
+         body{{color:#1b1f23;background:#f6f8fa;font-size:14px;\
+         font-family:-apple-system,\"Segoe UI\",Helvetica,Arial,sans-serif;line-height:1.5;\
+         max-width:620px;margin:56px auto;padding:0 16px;text-align:center}}\n\
+         .box{{border:1px solid #e1e4e8;border-top:3px solid {accent};background:#fff;\
+         padding:28px 24px;border-radius:6px}}\n\
+         h1{{font-size:20px;margin:0 0 4px}}\n\
+         p{{margin:0;color:#57606a}}\n\
+         .mark{{font-weight:600;letter-spacing:.02em;color:#8b949e;font-size:12px;\
+         text-transform:uppercase;margin-bottom:20px}}\n\
+         </style>\n\
+         <body>\n\
+         <div class=\"mark\">redisctl</div>\n\
+         <div class=\"box\"><h1>{heading}</h1><p>{message}</p></div>\n\
+         </body>\n"
+    );
+    body
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -322,6 +358,37 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// The page is served by a CLI to a browser on a machine that may have no route out, and it
+    /// must not be able to tell anyone a login just happened. So it fetches nothing: no
+    /// stylesheet, font, image, script or favicon.
+    #[test]
+    fn the_page_fetches_nothing() {
+        for status in [200, 400] {
+            let body = page_body(status, "You can close this tab and return to the terminal.");
+            for forbidden in [
+                "http://", "https://", "//", "src=", "href=", "@import", "url(", "<script", "<img",
+                "<link", "<iframe",
+            ] {
+                assert!(
+                    !body.contains(forbidden),
+                    "status {status}: page must not contain {forbidden:?}:\n{body}"
+                );
+            }
+        }
+    }
+
+    /// Success and failure have to be distinguishable at a glance, and neither may echo anything
+    /// from the request.
+    #[test]
+    fn the_page_reflects_the_outcome_and_nothing_else() {
+        let ok = page_body(200, "You can close this tab and return to the terminal.");
+        assert!(ok.contains("Signed in to Redis Cloud"));
+
+        let bad = page_body(400, "You can close this tab and return to the terminal.");
+        assert!(bad.contains("Sign-in did not complete"));
+        assert_ne!(ok, bad, "the two outcomes should not render identically");
+    }
 
     async fn mount_token(server: &MockServer) {
         Mock::given(method("POST"))
