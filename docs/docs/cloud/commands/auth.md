@@ -150,8 +150,16 @@ redisctl --profile contoso cloud auth login --account 481022
 Re-using one profile is fine too, but each login replaces that profile's key, so only the most
 recent account stays usable. The key it replaces is revoked, on whichever account held it, so
 signing in repeatedly does not leave a trail of live keys behind — the same behaviour as
-[`switch`](#switch-accounts) and [`logout`](#log-out). `-o json` reports `superseded_revoked`,
-which is `null` when there was no earlier key to replace.
+[`switch`](#switch-accounts) and [`logout`](#log-out). The new key is minted first, so a failed
+revocation never costs you a working key; it is reported instead, pointing at the console:
+
+```
+  note: could not revoke the key this login replaced — revoke it in the Redis Cloud console
+  (Access Management > API Keys).
+```
+
+`-o json` reports `superseded_revoked`: `true` when the replaced key was revoked, `false` when that
+failed, and `null` when the profile had no earlier key.
 
 !!! note "A new profile name defaults to production"
     A profile with no `[cloud_auth.<name>]` section falls back to the built-in **production**
