@@ -148,6 +148,8 @@ async fn login(
         .await;
     }
 
+    let superseded = superseded_key(&auth_cfg);
+
     let tokens = if use_device {
         run_device_flow_blocking(&authenticator).await?
     } else {
@@ -169,13 +171,24 @@ async fn login(
                 Some(id) => AccountChoice::Id(id),
                 None => AccountChoice::Current,
             },
-            superseded: None,
+            superseded,
             allow_plaintext,
             make_default: true,
         },
     )
     .await?;
     emit_signed_in(&creds, &profile_name, output)
+}
+
+/// The key a profile already holds, which a fresh mint for that profile replaces.
+fn superseded_key(auth_cfg: &CloudAuthConfig) -> Option<SupersededKey> {
+    match (auth_cfg.account_id, auth_cfg.capi_key_name.clone()) {
+        (Some(account_id), Some(key_name)) => Some(SupersededKey {
+            account_id,
+            key_name,
+        }),
+        _ => None,
+    }
 }
 
 /// List the accounts this sign-in can reach, so an id can be looked up without minting a key.
@@ -255,13 +268,7 @@ async fn switch(
     // Which account this profile is on today, and which key it holds, as recorded at the last
     // login/switch. Read before `auth_cfg` is consumed below.
     let on_account = auth_cfg.account_id;
-    let superseded = match (on_account, auth_cfg.capi_key_name.clone()) {
-        (Some(account_id), Some(key_name)) => Some(SupersededKey {
-            account_id,
-            key_name,
-        }),
-        _ => None,
-    };
+    let superseded = superseded_key(&auth_cfg);
 
     // Already there: minting another key for the same account would just add to the sprawl.
     if let Some(want) = account
@@ -755,7 +762,7 @@ async fn status(
                     &profile_name,
                     &authenticator,
                     &tokens,
-                    auth_cfg,
+                    auth_cfg.clone(),
                     LoginRun {
                         flow: LoginFlow::Device,
                         // Whatever the initiating `login --device --account` asked for; `None`
@@ -764,7 +771,7 @@ async fn status(
                             Some(id) => AccountChoice::Id(id),
                             None => AccountChoice::Current,
                         },
-                        superseded: None,
+                        superseded: superseded_key(&auth_cfg),
                         allow_plaintext: pending.allow_plaintext,
                         make_default: true,
                     },

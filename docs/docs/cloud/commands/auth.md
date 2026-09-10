@@ -128,7 +128,7 @@ never have to look an account id up:
 ✓ Signed in as user@example.com. Credentials saved to profile 'cloud'.
   note: the key is for Acme (#316941) — 1 of 3 accounts you belong to:
     Acme (#316941) · Contoso (#481022) · Initech (#502113)
-  To use another: redisctl --profile cloud cloud auth login --account <id>
+  To use another: redisctl --profile cloud cloud auth switch <id>
 ```
 
 Use `--account` to pick one explicitly, without touching the console:
@@ -148,7 +148,10 @@ redisctl --profile contoso cloud auth login --account 481022
 ```
 
 Re-using one profile is fine too, but each login replaces that profile's key, so only the most
-recent account stays usable.
+recent account stays usable. The key it replaces is revoked, on whichever account held it, so
+signing in repeatedly does not leave a trail of live keys behind — the same behaviour as
+[`switch`](#switch-accounts) and [`logout`](#log-out). `-o json` reports `superseded_revoked`,
+which is `null` when there was no earlier key to replace.
 
 !!! note "A new profile name defaults to production"
     A profile with no `[cloud_auth.<name>]` section falls back to the built-in **production**
@@ -231,8 +234,10 @@ redisctl cloud auth switch 481022
 ```
 
 Switching revokes the key it replaces, so the previous account is not left holding a live
-credential nothing refers to any more. If that revocation fails the switch still completes and says
-so, pointing at the console — the same shape as `logout`. `-o json` reports `superseded_revoked`.
+credential nothing refers to any more; the new key is minted first, so a failure anywhere in the
+switch never leaves the profile without a working key. If that revocation fails the switch still
+completes and says so, pointing at the console — the same shape as `logout`. `-o json` reports
+`superseded_revoked`.
 
 The account marked `(current)` is the one **this profile** is on, recorded when the key was minted.
 It is not read back from the server: switching is scoped to the sign-in session, so Redis Cloud

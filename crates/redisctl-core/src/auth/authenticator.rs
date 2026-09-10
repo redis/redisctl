@@ -335,7 +335,7 @@ impl CloudAuthenticator {
         })?;
         let minted = sm.mint_capi_key(key_name, user.user_account()?).await?;
         let superseded_revoked = match superseded {
-            Some(previous) => Some(revoke_superseded(&sm, &previous).await),
+            Some(previous) => Some(revoke_superseded(&sm, &previous, account_id).await),
             None => None,
         };
         // Best-effort: count our keys so the CLI can warn about sprawl (D5). Never fail login
@@ -465,10 +465,11 @@ fn login_accounts(accounts: &[SmAccount]) -> Vec<LoginAccount> {
     out
 }
 
-/// Revoke `previous` using the current session, which has to be pointed at its account first
-/// because the delete is scoped to the session's account.
-async fn revoke_superseded(sm: &SmApiClient, previous: &SupersededKey) -> bool {
-    if sm.set_current_account(previous.account_id).await.is_err() {
+/// Revoke `previous` using the current session. The delete is scoped to the session's account, so
+/// the session is pointed at `previous.account_id` unless `on` says it is already there.
+async fn revoke_superseded(sm: &SmApiClient, previous: &SupersededKey, on: Option<u64>) -> bool {
+    if on != Some(previous.account_id) && sm.set_current_account(previous.account_id).await.is_err()
+    {
         return false;
     }
     let Ok(entries) = sm.fetch_capi_key_entries().await else {
@@ -1049,6 +1050,57 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(creds.account_id, Some(111));
+    }
+
+    /// A re-login replaces the profile's key, so the one it replaces is revoked. On the same
+    /// account no `setcurrent` is needed to reach it — none is mounted here, and one would 404.
+    #[tokio::test]
+    async fn complete_login_revokes_the_key_it_replaces_on_the_same_account() {
+        let server = MockServer::start().await;
+        common_login_mocks(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/users/me"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"id": "1", "current_account_id": "111", "email": "u@e.com"}),
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/accounts"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "accounts": [{"id": 111, "name": "One", "api_access_key": "KEY-111"}]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/accounts/cloud-api/cloudApiKeys"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "cloudApiKeys": [{"id": 7, "name": "redisctl-cli-1"}]
+            })))
+            .mount(&server)
+            .await;
+        let deleted = Mock::given(method("DELETE"))
+            .and(path("/accounts/cloud-api/cloudApiKeys/7"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .named("revoke the superseded key");
+        server.register(deleted).await;
+
+        let creds = authenticator(&server)
+            .complete_login_with_mfa(
+                &tokens(),
+                "redisctl-cli-2",
+                LoginFlow::Loopback,
+                AccountChoice::Current,
+                Some(SupersededKey {
+                    account_id: 111,
+                    key_name: "redisctl-cli-1".to_string(),
+                }),
+                |_, _| Ok(None),
+            )
+            .await
+            .unwrap();
+        assert_eq!(creds.superseded_revoked, Some(true));
     }
 
     #[tokio::test]
