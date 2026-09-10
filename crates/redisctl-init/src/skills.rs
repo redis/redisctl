@@ -17,10 +17,9 @@ use crate::project::Agent;
 use crate::util::{has_bin, read_if, sh_in};
 use crate::{Event, InitError};
 
-const SKILLS_DIR: &str = ".agents/skills";
+use crate::SKILLS_DIR;
+
 const LOCK_FILE: &str = "skills-lock.json";
-/// The skill this tool generates itself; never treated as a foreign collision.
-const GENERATED_SKILL: &str = "redis-project-setup";
 
 /// The skills CLI's identifiers for the agents redisctl init supports; passing them
 /// explicitly (instead of `--agent '*'`) keeps the layout to the directories the
@@ -58,7 +57,7 @@ fn installed_skill_path(cwd: &Path, global: bool, name: &str) -> Option<PathBuf>
 
 /// Where an install would land, named only when nothing was actually installed -
 /// which directory the skills CLI uses is its own layout choice.
-fn describe_target(global: bool) -> String {
+pub(crate) fn describe_target(global: bool) -> String {
     if global {
         format!(
             "{}/ or {}/",
@@ -159,7 +158,7 @@ fn unmanaged_collisions(cwd: &Path) -> BTreeMap<String, String> {
     let mut collisions = BTreeMap::new();
     for dir in target_dirs(cwd, false) {
         for name in skill_dirs(&dir) {
-            if name == GENERATED_SKILL || managed.contains_key(&name) {
+            if name == crate::project_skill::NAME || managed.contains_key(&name) {
                 continue;
             }
             if let Ok(content) = std::fs::read_to_string(dir.join(&name).join("SKILL.md")) {
@@ -232,6 +231,27 @@ fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// What the install actually did, read back from disk truth.
+pub(crate) struct SkillsOutcome {
+    pub(crate) changes: Vec<Change>,
+    pub(crate) installed: Vec<String>,
+    pub(crate) installed_dir: Option<PathBuf>,
+    /// The standard CLI managed the layout (and its own symlinks); a checkout copy
+    /// did not.
+    pub(crate) via_npx: bool,
+}
+
+impl SkillsOutcome {
+    fn skipped(change: Change) -> Self {
+        Self {
+            changes: vec![change],
+            installed: Vec::new(),
+            installed_dir: None,
+            via_npx: false,
+        }
+    }
+}
+
 /// The decided skills install, fixed at plan time; outcomes are disk truth read
 /// back at apply time.
 #[derive(Debug)]
@@ -279,15 +299,15 @@ impl SkillsAction {
         &self,
         cwd: &Path,
         on_event: &mut dyn FnMut(Event),
-    ) -> Result<Vec<Change>, InitError> {
+    ) -> Result<SkillsOutcome, InitError> {
         if let Some(repo) = &self.repo {
             let source = repo.join("skills");
             if !source.exists() {
-                return Ok(vec![Change::new(
+                return Ok(SkillsOutcome::skipped(Change::new(
                     describe_target(self.global),
                     Status::Skipped,
                     format!("{} has no skills/ directory", repo.display()),
-                )]);
+                )));
             }
             return self.copy_from(cwd, &source);
         }
@@ -333,18 +353,18 @@ impl SkillsAction {
                     self.report_project(cwd, &before_lock, &collisions)
                 });
             }
-            return Ok(vec![Change::new(
+            return Ok(SkillsOutcome::skipped(Change::new(
                 describe_target(self.global),
                 Status::Skipped,
                 failure_note(&r.stderr, &r.stdout, r.status),
-            )]);
+            )));
         }
 
-        Ok(vec![Change::new(
+        Ok(SkillsOutcome::skipped(Change::new(
             describe_target(self.global),
             Status::Skipped,
             "npx not found - install Node, or pass --skills-repo <a redis/agent-skills checkout>",
-        )])
+        )))
     }
 
     /// The npx project outcome, read from the lock the CLI maintains.
@@ -353,11 +373,19 @@ impl SkillsAction {
         cwd: &Path,
         before: &BTreeMap<String, String>,
         collisions: &BTreeMap<String, String>,
-    ) -> Vec<Change> {
+    ) -> SkillsOutcome {
         let after = read_lock_hashes(cwd);
         let mut changes = Vec::new();
+        let mut installed_dir = None;
         for (name, hash) in &after {
-            let subject = installed_skill_path(cwd, false, name)
+            let path = installed_skill_path(cwd, false, name);
+            if installed_dir.is_none() {
+                installed_dir = path
+                    .as_deref()
+                    .and_then(Path::parent)
+                    .map(Path::to_path_buf);
+            }
+            let subject = path
                 .map(|p| format!("{}/", display_relative(cwd, &p)))
                 .unwrap_or_else(|| name.clone());
             if let Some(previous_md) = collisions.get(name) {
@@ -386,7 +414,12 @@ impl SkillsAction {
             Status::Unchanged,
             "owned by the skills CLI",
         ));
-        changes
+        SkillsOutcome {
+            changes,
+            installed: after.into_keys().collect(),
+            installed_dir,
+            via_npx: true,
+        }
     }
 
     /// The npx global outcome: the global lock names what the CLI manages; a
@@ -398,25 +431,32 @@ impl SkillsAction {
         cwd: &Path,
         before_names: &BTreeSet<String>,
         before_signatures: &BTreeMap<String, Option<u64>>,
-    ) -> Vec<Change> {
+    ) -> SkillsOutcome {
         let after = global_skill_names();
         let managed: Vec<String> = read_global_lock_names()
             .unwrap_or_else(|| after.difference(before_names).cloned().collect())
             .into_iter()
             .filter(|name| after.contains(name))
             .collect();
-        managed
-            .into_iter()
+        let mut installed_dir = None;
+        let changes = managed
+            .iter()
             .map(|name| {
-                let path = installed_skill_path(cwd, true, &name);
+                let path = installed_skill_path(cwd, true, name);
+                if installed_dir.is_none() {
+                    installed_dir = path
+                        .as_deref()
+                        .and_then(Path::parent)
+                        .map(Path::to_path_buf);
+                }
                 let subject = path
                     .as_ref()
                     .map(|p| format!("{}/", p.display()))
                     .unwrap_or_else(|| name.clone());
-                let status = if !before_names.contains(&name) {
+                let status = if !before_names.contains(name) {
                     Status::Created
                 } else if path.as_deref().and_then(dir_signature)
-                    == before_signatures.get(&name).copied().flatten()
+                    == before_signatures.get(name).copied().flatten()
                 {
                     Status::Unchanged
                 } else {
@@ -424,13 +464,20 @@ impl SkillsAction {
                 };
                 Change::new(subject, status, "npx skills add")
             })
-            .collect()
+            .collect();
+        SkillsOutcome {
+            changes,
+            installed: managed,
+            installed_dir,
+            via_npx: true,
+        }
     }
 
     /// Copy every skill from a checkout into the layout the real CLI would use.
-    fn copy_from(&self, cwd: &Path, source: &Path) -> Result<Vec<Change>, InitError> {
+    fn copy_from(&self, cwd: &Path, source: &Path) -> Result<SkillsOutcome, InitError> {
         let destination = fallback_dir(cwd, self.global, &self.agents);
         let mut changes = Vec::new();
+        let mut installed = Vec::new();
         for name in skill_dirs(source) {
             let src = source.join(&name);
             let dst = destination.join(&name);
@@ -441,6 +488,7 @@ impl SkillsAction {
             };
             if dirs_equal(&src, &dst) {
                 changes.push(Change::new(subject, Status::Unchanged, ""));
+                installed.push(name);
                 continue;
             }
             let status = if dst.exists() {
@@ -458,15 +506,21 @@ impl SkillsAction {
                 status,
                 "redis/agent-skills (local checkout; run npx skills add redis/agent-skills to adopt standard management)",
             ));
+            installed.push(name);
         }
         if changes.is_empty() {
-            changes.push(Change::new(
+            return Ok(SkillsOutcome::skipped(Change::new(
                 describe_target(self.global),
                 Status::Skipped,
                 "no skills found in the checkout",
-            ));
+            )));
         }
-        Ok(changes)
+        Ok(SkillsOutcome {
+            changes,
+            installed_dir: Some(destination),
+            installed,
+            via_npx: false,
+        })
     }
 }
 
@@ -570,7 +624,7 @@ mod tests {
             global: false,
             repo: Some(repo.path().to_path_buf()),
         };
-        let changes = solo.perform(project.path(), &mut |_| {}).unwrap();
+        let changes = solo.perform(project.path(), &mut |_| {}).unwrap().changes;
         assert_eq!(changes[0].subject, ".claude/skills/redis-basics/");
         assert!(
             project
@@ -579,7 +633,7 @@ mod tests {
                 .exists()
         );
         let rerun = solo.perform(project.path(), &mut |_| {}).unwrap();
-        assert!(rerun.iter().all(|c| c.status == Status::Unchanged));
+        assert!(rerun.changes.iter().all(|c| c.status == Status::Unchanged));
     }
 
     #[test]
@@ -596,10 +650,13 @@ mod tests {
     fn explicit_checkout_copies_and_reruns_unchanged() {
         let repo = fake_checkout(&["redis-basics", "redis-search"]);
         let project = tempfile::tempdir().unwrap();
-        let changes = action(repo.path())
+        let outcome = action(repo.path())
             .perform(project.path(), &mut |_| {})
             .unwrap();
-        let summary: Vec<_> = changes
+        assert_eq!(outcome.installed, vec!["redis-basics", "redis-search"]);
+        assert!(!outcome.via_npx);
+        let summary: Vec<_> = outcome
+            .changes
             .iter()
             .map(|c| (c.subject.as_str(), c.status))
             .collect();
@@ -620,7 +677,8 @@ mod tests {
         let rerun = action(repo.path())
             .perform(project.path(), &mut |_| {})
             .unwrap();
-        assert!(rerun.iter().all(|c| c.status == Status::Unchanged));
+        assert!(rerun.changes.iter().all(|c| c.status == Status::Unchanged));
+        assert_eq!(rerun.installed.len(), 2);
     }
 
     #[test]
@@ -637,7 +695,8 @@ mod tests {
         .unwrap();
         let changes = action(repo.path())
             .perform(project.path(), &mut |_| {})
-            .unwrap();
+            .unwrap()
+            .changes;
         assert_eq!(changes[0].status, Status::Updated);
         assert_eq!(
             std::fs::read_to_string(project.path().join(".agents/skills/redis-basics/SKILL.md"))
@@ -652,7 +711,8 @@ mod tests {
         let project = tempfile::tempdir().unwrap();
         let changes = action(repo.path())
             .perform(project.path(), &mut |_| {})
-            .unwrap();
+            .unwrap()
+            .changes;
         assert_eq!(changes[0].status, Status::Skipped);
         assert!(changes[0].note.contains("no skills/ directory"));
     }
@@ -660,7 +720,7 @@ mod tests {
     #[test]
     fn unmanaged_collisions_ignore_the_lock_and_the_generated_skill() {
         let project = tempfile::tempdir().unwrap();
-        for name in ["mine", "managed", GENERATED_SKILL] {
+        for name in ["mine", "managed", crate::project_skill::NAME] {
             let dir = project.path().join(SKILLS_DIR).join(name);
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join("SKILL.md"), "x").unwrap();
@@ -711,8 +771,10 @@ mod tests {
             global: false,
             repo: None,
         };
-        let changes = a.report_project(project.path(), &before, &collisions);
-        let by_subject: BTreeMap<_, _> = changes
+        let outcome = a.report_project(project.path(), &before, &collisions);
+        assert_eq!(outcome.installed.len(), 3);
+        let by_subject: BTreeMap<_, _> = outcome
+            .changes
             .iter()
             .map(|c| (c.subject.clone(), c.status))
             .collect();
