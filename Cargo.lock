@@ -2974,10 +2974,13 @@ dependencies = [
 name = "redisctl-init"
 version = "0.11.1"
 dependencies = [
+ "chrono",
+ "redis",
  "regex",
  "serde_json",
  "tempfile",
  "thiserror 2.0.17",
+ "tokio",
  "which 7.0.3",
 ]
 
