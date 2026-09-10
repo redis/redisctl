@@ -163,7 +163,14 @@ pub enum Question {
 /// A question is worth asking only when no flag has already answered it.
 pub fn pending_questions(args: &InitArgs, url_given: bool) -> Vec<Question> {
     let mut pending = Vec::new();
-    if !url_given && !args.cloud {
+    // A product flag, --iris, or --complete already says where (or whether) the
+    // database comes from.
+    let products_answered = args.agent_memory.is_some()
+        || args.langcache.is_some()
+        || args.context_retriever.is_some()
+        || args.iris
+        || args.complete;
+    if !url_given && !args.cloud && !products_answered {
         pending.push(Question::Database);
     }
     if args.agents.is_empty() {
@@ -338,6 +345,15 @@ mod tests {
             skills_global: false,
             dry_run: false,
             no_telemetry: false,
+            agent_memory: None,
+            store: None,
+            langcache: None,
+            cache: None,
+            context_retriever: None,
+            iris: false,
+            api_key: None,
+            complete: false,
+            no_example: false,
             pasted: Vec::new(),
         }
     }
@@ -356,6 +372,24 @@ mod tests {
             pending_questions(&a, false),
             vec![Question::Agents, Question::Skills]
         );
+    }
+
+    #[test]
+    fn product_flags_iris_and_complete_answer_the_database_question() {
+        for set in [
+            |a: &mut InitArgs| a.agent_memory = Some("https://x.io".into()),
+            |a: &mut InitArgs| a.langcache = Some("https://x.io".into()),
+            |a: &mut InitArgs| a.context_retriever = Some("https://x.io".into()),
+            |a: &mut InitArgs| a.iris = true,
+            |a: &mut InitArgs| a.complete = true,
+        ] {
+            let mut a = args();
+            set(&mut a);
+            assert_eq!(
+                pending_questions(&a, false),
+                vec![Question::Agents, Question::Skills]
+            );
+        }
     }
 
     #[test]
