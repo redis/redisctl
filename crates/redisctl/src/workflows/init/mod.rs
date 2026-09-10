@@ -178,6 +178,8 @@ async fn run_inner(
         install_cli: !args.no_install_cli,
         skills_repo: args.skills_repo.clone(),
         skills_global: args.skills_global,
+        replace_env_url: false,
+        env_placeholder: false,
     };
 
     output::banner();
@@ -215,6 +217,9 @@ async fn run_inner(
     let interactive = wizard::applies(args, &pending);
     telemetry.props.interactive = interactive;
     telemetry.props.wizard_questions_asked = if interactive { pending.len() } else { 0 };
+    // An explicit flag is consent to supersede whatever REDIS_URL .env carries;
+    // only the implicit no-flags default keeps it.
+    options.replace_env_url = options.url_input.is_some() || wants_cloud;
     if interactive {
         telemetry.step("wizard");
         // Probed only when the database question will actually be asked: the
@@ -224,16 +229,21 @@ async fn run_inner(
         } else {
             engine::LocalRedis::NotFound
         };
+        let env_url = engine::read_env_key(&cwd, ".env", "REDIS_URL")
+            .filter(|url| url != engine::PLACEHOLDER_URL);
         let answers = wizard::run(
             &pending,
             &engine::detect_agents(&cwd),
             engine::docker_available(),
             local,
+            env_url.as_deref(),
         )?;
         if let Some(url) = answers.url {
             options.url_input = Some(url);
         }
         wants_cloud = wants_cloud || answers.cloud;
+        options.replace_env_url = options.replace_env_url || answers.database_explicit;
+        options.env_placeholder = answers.placeholder;
         if let Some(agents) = answers.agents {
             options.agents = Some(agents);
             asked_agents = true;
@@ -243,18 +253,6 @@ async fn run_inner(
         }
     }
     telemetry.step("database");
-    // Never-clobber means a freshly provisioned database could never be recorded
-    // in .env; keep the existing value instead of creating one the project would
-    // not use (and burning the free-plan slot).
-    if wants_cloud && engine::read_env_key(&cwd, ".env", "REDIS_URL").is_some() {
-        println!(
-            "{}",
-            yellow(
-                "  note: .env already carries REDIS_URL - keeping it (init never overwrites credentials). Remove that line to take the database from Redis Cloud.\n"
-            )
-        );
-        wants_cloud = false;
-    }
     let mut cloud_changes = Vec::new();
     if wants_cloud {
         // A missing profile has one fix worth naming here; other client errors
@@ -318,25 +316,30 @@ async fn run_inner(
         .map(|a| a.as_str())
         .collect::<Vec<_>>()
         .join(", ");
+    // A rail entry, so the wizard's rail runs unbroken into the status steps.
     println!(
-        "{}    {}{}   {}\n",
-        bold("Agents"),
-        names,
-        if args.agents.is_empty() && !asked_agents {
-            dim(" (detected)")
-        } else {
-            String::new()
-        },
-        dim(&format!("existing: {agent_bits}"))
+        "{}",
+        output::rail_line(&format!(
+            "{}   {}{}   {}",
+            bold("Agents"),
+            names,
+            if args.agents.is_empty() && !asked_agents {
+                dim(" (detected)")
+            } else {
+                String::new()
+            },
+            dim(&format!("existing: {agent_bits}"))
+        ))
     );
     if proj.runtime == engine::Runtime::Unknown {
         println!(
             "{}",
-            yellow(
-                "  note: no package manifest detected - continuing; everything redisctl init writes is language-agnostic.\n"
-            )
+            output::rail_line(&yellow(
+                "note: no package manifest detected - continuing; everything redisctl init writes is language-agnostic."
+            ))
         );
     }
+    println!("{}", output::rail_gap());
 
     let subject = |applied: bool| match plan.database_url() {
         Some(url) => format!(
@@ -360,6 +363,7 @@ async fn run_inner(
     };
 
     if dry {
+        println!("{}\n", output::rail_end("plan ready"));
         println!(
             "{}  {}",
             bold("Plan"),
@@ -385,11 +389,17 @@ async fn run_inner(
                 p.done(&outcome);
             }
         }
-        engine::Event::Note(text) => println!("{}", dim(&text)),
-        engine::Event::Warning(text) => println!("{}", yellow(&text)),
+        engine::Event::Note(text) => {
+            println!("{}  {}", output::rail_gap(), dim(text.trim_start()))
+        }
+        engine::Event::Warning(text) => {
+            println!("{}  {}", output::rail_gap(), yellow(text.trim_start()))
+        }
     })
     .await?;
 
+    println!("{}", output::rail_gap());
+    println!("{}\n", output::rail_end("done"));
     println!(
         "{}  {}",
         bold("Changes"),
@@ -402,7 +412,14 @@ async fn run_inner(
 
     telemetry.props.skills_installed_count = report.skills_installed;
     telemetry.step("validate");
-    if let Some(url) = plan.database_url() {
+    if plan.database_pending() {
+        println!(
+            "\n{}  {} database  {}",
+            bold("Validate"),
+            yellow("○"),
+            dim("waiting for REDIS_URL")
+        );
+    } else if let Some(url) = plan.database_url() {
         print!("\n{}  ", bold("Validate"));
         let _ = std::io::Write::flush(&mut std::io::stdout());
         match engine::validate(url).await {
@@ -473,24 +490,33 @@ async fn run_inner(
         .iter()
         .filter_map(|product| product.pending_env())
         .collect();
-    if !pending.is_empty() {
+    if !pending.is_empty() || plan.database_pending() {
         println!("\n{}", bold("Action required"));
-        for (index, env_key) in pending.iter().enumerate() {
+        let mut step = 0;
+        if plan.database_pending() {
+            step += 1;
+            println!(
+                "  {step}. Open {} and replace {} with your database connection string.",
+                bold(".env"),
+                bold(&format!("REDIS_URL=\"{}\"", engine::PLACEHOLDER_URL)),
+            );
+        }
+        for env_key in &pending {
             let kind = if env_key.ends_with("_KEY") {
                 "key"
             } else {
                 "value"
             };
+            step += 1;
             println!(
-                "  {}. Open {} and replace {} with the {kind} from Redis Cloud.",
-                index + 1,
+                "  {step}. Open {} and replace {} with the {kind} from Redis Cloud.",
                 bold(".env"),
                 bold(&format!("{env_key}=\"{}\"", engine::SECRET_PLACEHOLDER)),
             );
         }
         println!(
             "  {}. Run {} to validate the full setup.",
-            pending.len() + 1,
+            step + 1,
             bold("redisctl init --complete")
         );
         println!(
