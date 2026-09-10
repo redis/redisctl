@@ -68,6 +68,8 @@ jobs:
         include:
           - package: redisctl-core
             targets: "--lib"
+          - package: redisctl-init
+            targets: "--lib"
           - package: redisctl
             targets: "--bins"
           - package: redisctl-mcp
