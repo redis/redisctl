@@ -447,10 +447,10 @@ fn init_tracing(verbose: u8) {
         tracing_subscriber::EnvFilter::from_default_env()
     } else {
         let level = match verbose {
-            0 => "redisctl=warn,redis_cloud=warn,redis_enterprise=warn",
-            1 => "redisctl=info,redis_cloud=info,redis_enterprise=info",
-            2 => "redisctl=debug,redis_cloud=debug,redis_enterprise=debug",
-            _ => "redisctl=trace,redis_cloud=trace,redis_enterprise=trace",
+            0 => "redisctl=warn,redisctl_core=warn,redis_cloud=warn,redis_enterprise=warn",
+            1 => "redisctl=info,redisctl_core=info,redis_cloud=info,redis_enterprise=info",
+            2 => "redisctl=debug,redisctl_core=debug,redis_cloud=debug,redis_enterprise=debug",
+            _ => "redisctl=trace,redisctl_core=trace,redis_cloud=trace,redis_enterprise=trace",
         };
         tracing_subscriber::EnvFilter::new(level)
     };

@@ -214,7 +214,9 @@ The email matters when a profile could hold either of two sign-ins: account memb
 **user**, so the same account can look different depending on who signed in. `-o json` reports it
 as `email`.
 
-It mints nothing and switches nothing — it exists so an id can be looked up without a login. The
+It mints nothing and switches nothing — it exists so an id can be looked up without a login. (It
+does store a refreshed sign-in token when the identity provider rotates them, so the next command
+is not left holding the one this call spent.) The
 sign-in stored at login is reused, so no browser opens, but it does sign in to Redis Cloud: on an
 account with MFA it prompts for a code, and exits `2` with `mfa_required` when there is no terminal
 to prompt on.

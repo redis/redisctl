@@ -221,6 +221,16 @@ async fn accounts(
             )))),
         })?;
 
+    // Okta hands back a replacement refresh token only when the app rotates them — and when it
+    // does, the one just used stops working. Every other command persists what it gets back;
+    // this one mints nothing, so without this the next command would reach for a dead token.
+    // Best-effort: failing to store it must not fail a read.
+    if let Some(rotated) = tokens.refresh_token.as_deref()
+        && rotated != refresh_token
+    {
+        let _ = store.store_credential(&format!("{profile_name}-okta-refresh"), rotated);
+    }
+
     let listing = authenticator
         .list_accounts(&tokens, prompt_mfa_code)
         .await
