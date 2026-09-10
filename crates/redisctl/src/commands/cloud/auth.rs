@@ -20,7 +20,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use redisctl_core::AuthError;
 use redisctl_core::auth::{
-    AccountChoice, CloudAuthenticator, LoginAccount, LoginFlow, MFA_MAX_ATTEMPTS, MintedCredentials,
+    AccountChoice, CloudAuthenticator, LoginAccount, LoginFlow, MFA_MAX_ATTEMPTS,
+    MintedCredentials, SupersededKey,
 };
 use redisctl_core::{CloudAuthConfig, Config, CredentialStore, DeviceAuthorization, TokenSet};
 use serde::{Deserialize, Serialize};
@@ -167,6 +168,7 @@ async fn login(
                 Some(id) => AccountChoice::Id(id),
                 None => AccountChoice::Current,
             },
+            superseded: None,
             allow_plaintext,
             make_default: true,
         },
@@ -188,8 +190,16 @@ async fn switch(
 ) -> CliResult<()> {
     let (profile_name, authenticator, auth_cfg) = prepare(conn_mgr, profile)?;
 
-    // Which account this profile is on today, as recorded at the last login/switch.
+    // Which account this profile is on today, and which key it holds, as recorded at the last
+    // login/switch. Read before `auth_cfg` is consumed below.
     let on_account = auth_cfg.account_id;
+    let superseded = match (on_account, auth_cfg.capi_key_name.clone()) {
+        (Some(account_id), Some(key_name)) => Some(SupersededKey {
+            account_id,
+            key_name,
+        }),
+        _ => None,
+    };
 
     // Already there: minting another key for the same account would just add to the sprawl.
     if let Some(want) = account
@@ -270,6 +280,7 @@ async fn switch(
                     prompt_account(accounts, on_account)
                 })),
             },
+            superseded,
             // A refresh token only exists on the keyring path, so this is never plaintext.
             allow_plaintext: false,
             // Changing an existing profile's account is not a reason to make it the default.
@@ -286,6 +297,14 @@ async fn switch(
         "\n\u{2713} Profile '{profile_name}' now uses {}.",
         creds.account_label()
     );
+    match creds.superseded_revoked {
+        Some(true) => eprintln!("  the key it replaced has been revoked."),
+        Some(false) => eprintln!(
+            "  note: could not revoke the key it replaced — revoke it in the Redis Cloud console \
+             (Access Management > API Keys)."
+        ),
+        None => {}
+    }
     warn_on_key_sprawl(&creds);
     print_formatted_output(
         serde_json::json!({
@@ -299,6 +318,7 @@ async fn switch(
             })).collect::<Vec<_>>(),
             "email": creds.email,
             "redisctl_key_count": creds.redisctl_key_count,
+            "superseded_revoked": creds.superseded_revoked,
             "changed": true,
         }),
         output,
@@ -517,6 +537,8 @@ struct LoginRun {
     flow: LoginFlow,
     /// Which account to mint for: the session's current one, an explicit id, or a picker.
     account: AccountChoice,
+    /// The key this run replaces, revoked once its successor exists.
+    superseded: Option<SupersededKey>,
     allow_plaintext: bool,
     /// Whether to make this the default cloud profile. True when logging in (it bootstraps the
     /// profile), false when only changing which account an existing profile targets.
@@ -538,6 +560,7 @@ async fn complete_and_persist(
             &default_key_name(),
             run.flow,
             run.account,
+            run.superseded,
             prompt_mfa_code,
         )
         .await
@@ -681,6 +704,7 @@ async fn status(
                             Some(id) => AccountChoice::Id(id),
                             None => AccountChoice::Current,
                         },
+                        superseded: None,
                         allow_plaintext: pending.allow_plaintext,
                         make_default: true,
                     },

@@ -36,6 +36,8 @@ pub struct MintedCredentials {
     pub redisctl_key_count: usize,
     /// Name of the account the key was minted for, when the API reports one.
     pub account_name: Option<String>,
+    /// Whether the key this switch replaced was revoked. `None` when there was none to revoke.
+    pub superseded_revoked: Option<bool>,
     /// Whether this login is what switched account-wide programmatic access on. Reported so an
     /// account-level change is not made silently.
     pub capi_newly_enabled: bool,
@@ -50,6 +52,12 @@ pub struct MintedCredentials {
 /// [`AccountChoice::Prompt`] exists because a picker cannot run before the exchange: listing the
 /// accounts needs a session, and re-logging-in to act on the answer would mean a second sign-in
 /// (and a second MFA challenge). The callback is invoked mid-exchange instead, on the one session.
+/// A key a switch is about to replace, revoked on the same session once its successor exists.
+pub struct SupersededKey {
+    pub account_id: u64,
+    pub key_name: String,
+}
+
 pub enum AccountChoice {
     /// Whatever account the session is already on.
     Current,
@@ -127,6 +135,7 @@ impl std::fmt::Debug for MintedCredentials {
             .field("redisctl_key_count", &self.redisctl_key_count)
             .field("account_name", &self.account_name)
             .field("capi_newly_enabled", &self.capi_newly_enabled)
+            .field("superseded_revoked", &self.superseded_revoked)
             .field("accounts", &self.accounts)
             .finish()
     }
@@ -226,7 +235,7 @@ impl CloudAuthenticator {
         flow: LoginFlow,
         account: AccountChoice,
     ) -> Result<MintedCredentials, AuthError> {
-        self.complete_login_with_mfa(tokens, key_name, flow, account, |_, _| Ok(None))
+        self.complete_login_with_mfa(tokens, key_name, flow, account, None, |_, _| Ok(None))
             .await
     }
 
@@ -243,6 +252,7 @@ impl CloudAuthenticator {
         key_name: &str,
         flow: LoginFlow,
         account: AccountChoice,
+        superseded: Option<SupersededKey>,
         mut mfa_prompt: F,
     ) -> Result<MintedCredentials, AuthError>
     where
@@ -294,6 +304,10 @@ impl CloudAuthenticator {
             AuthError::Protocol("account has no CAPI access key after enabling CAPI".into())
         })?;
         let minted = sm.mint_capi_key(key_name, user.user_account()?).await?;
+        let superseded_revoked = match superseded {
+            Some(previous) => Some(revoke_superseded(&sm, &previous).await),
+            None => None,
+        };
         // Best-effort: count our keys so the CLI can warn about sprawl (D5). Never fail login
         // over this — a listing error just means no warning.
         let redisctl_key_count = sm
@@ -312,6 +326,7 @@ impl CloudAuthenticator {
             redisctl_key_count,
             account_name,
             capi_newly_enabled,
+            superseded_revoked,
             accounts: all_accounts,
         })
     }
@@ -420,6 +435,24 @@ fn login_accounts(accounts: &[SmAccount]) -> Vec<LoginAccount> {
     out
 }
 
+/// Revoke `previous` using the current session, which has to be pointed at its account first
+/// because the delete is scoped to the session's account.
+async fn revoke_superseded(sm: &SmApiClient, previous: &SupersededKey) -> bool {
+    if sm.set_current_account(previous.account_id).await.is_err() {
+        return false;
+    }
+    let Ok(entries) = sm.fetch_capi_key_entries().await else {
+        return false;
+    };
+    let Some((id, _)) = entries
+        .into_iter()
+        .find(|(_, name)| name == &previous.key_name)
+    else {
+        return false;
+    };
+    sm.delete_capi_key(id).await.is_ok()
+}
+
 fn select_account(accounts: Vec<SmAccount>, current_account_id: Option<&str>) -> Option<SmAccount> {
     let target = current_account_id.and_then(|s| s.parse::<u64>().ok());
     let idx = target
@@ -502,6 +535,7 @@ mod tests {
             redisctl_key_count: 3,
             account_name: Some("Acme".to_string()),
             capi_newly_enabled: false,
+            superseded_revoked: None,
             accounts: vec![
                 LoginAccount {
                     id: 316941,
