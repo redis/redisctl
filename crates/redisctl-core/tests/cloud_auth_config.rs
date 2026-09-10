@@ -105,6 +105,7 @@ fn minted() -> MintedCredentials {
         capi_key_name: "redisctl-demo".to_string(),
         redisctl_key_count: 1,
         account_name: None,
+        capi_newly_enabled: false,
         accounts: vec![redisctl_core::auth::LoginAccount {
             id: 112117,
             name: None,

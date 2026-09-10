@@ -36,6 +36,9 @@ pub struct MintedCredentials {
     pub redisctl_key_count: usize,
     /// Name of the account the key was minted for, when the API reports one.
     pub account_name: Option<String>,
+    /// Whether this login is what switched account-wide programmatic access on. Reported so an
+    /// account-level change is not made silently.
+    pub capi_newly_enabled: bool,
     /// Every account the signed-in user belongs to. The key is scoped to exactly one of them —
     /// the session's *current* account — so the CLI can both name the one it used and list the
     /// alternatives, which are otherwise only discoverable in the console.
@@ -123,6 +126,7 @@ impl std::fmt::Debug for MintedCredentials {
             .field("capi_key_name", &self.capi_key_name)
             .field("redisctl_key_count", &self.redisctl_key_count)
             .field("account_name", &self.account_name)
+            .field("capi_newly_enabled", &self.capi_newly_enabled)
             .field("accounts", &self.accounts)
             .finish()
     }
@@ -273,7 +277,7 @@ impl CloudAuthenticator {
         if let Some(want) = want {
             user = self.switch_account(&sm, user, want).await?;
         }
-        sm.ensure_capi_enabled().await?;
+        let capi_newly_enabled = sm.ensure_capi_enabled().await?;
         // Pick the account matching the logged-in user's current_account_id. /accounts list
         // order isn't guaranteed, so taking the first entry could mint a key for the wrong
         // account in a multi-account org. Fall back to the first only when it's absent/unknown.
@@ -307,6 +311,7 @@ impl CloudAuthenticator {
             capi_key_name: minted.name,
             redisctl_key_count,
             account_name,
+            capi_newly_enabled,
             accounts: all_accounts,
         })
     }
@@ -496,6 +501,7 @@ mod tests {
             capi_key_name: "redisctl-cli-1".to_string(),
             redisctl_key_count: 3,
             account_name: Some("Acme".to_string()),
+            capi_newly_enabled: false,
             accounts: vec![
                 LoginAccount {
                     id: 316941,
