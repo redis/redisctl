@@ -205,7 +205,9 @@ async fn accounts(
         .get_credential(&format!("keyring:{profile_name}-okta-refresh"), None)
         .map_err(|_| {
             RedisCtlError::Structured(Box::new(StructuredError::not_authenticated(format!(
-                "there is no stored sign-in for profile '{profile_name}' to list accounts with.                  Run `redisctl --profile {profile_name} cloud auth login` first; its output lists                  them too."
+                "there is no stored sign-in for profile '{profile_name}' to list accounts \
+                 with. Run `redisctl --profile {profile_name} cloud auth login` first; its \
+                 output lists them too."
             ))))
         })?;
     let tokens = authenticator
@@ -214,18 +216,24 @@ async fn accounts(
         .map_err(|e| match e {
             AuthError::Network(_) => auth_err(e),
             _ => RedisCtlError::Structured(Box::new(StructuredError::not_authenticated(format!(
-                "the stored sign-in for profile '{profile_name}' is no longer usable. Run                  `redisctl --profile {profile_name} cloud auth login`."
+                "the stored sign-in for profile '{profile_name}' is no longer usable. Run \
+                 `redisctl --profile {profile_name} cloud auth login`."
             )))),
         })?;
 
-    let (accounts, session_account) = authenticator
+    let listing = authenticator
         .list_accounts(&tokens, prompt_mfa_code)
         .await
         .map_err(auth_err)?;
+    let accounts = listing.accounts;
 
     // What this profile's key is for, which is what the caller is choosing against. The session's
     // own account is the user's server-side default and is not the same thing.
-    let profile_account = on_account.or(session_account);
+    let profile_account = on_account.or(listing.session_account);
+    match listing.email.as_deref() {
+        Some(email) => eprintln!("\nAccounts {email} belongs to:"),
+        None => eprintln!("\nAccounts this sign-in belongs to:"),
+    }
     for a in &accounts {
         let marker = if Some(a.id) == profile_account {
             "  (this profile)"
@@ -242,6 +250,7 @@ async fn accounts(
         serde_json::json!({
             "status": "ok",
             "profile": profile_name,
+            "email": listing.email,
             "account_id": profile_account,
             "accounts": accounts.iter().map(|a| serde_json::json!({
                 "id": a.id,

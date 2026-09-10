@@ -202,7 +202,7 @@ impl CloudAuthenticator {
         &self,
         tokens: &TokenSet,
         mut mfa_prompt: F,
-    ) -> Result<(Vec<LoginAccount>, Option<u64>), AuthError>
+    ) -> Result<AccountListing, AuthError>
     where
         F: FnMut(&[String], u32) -> Result<Option<String>, AuthError>,
     {
@@ -224,7 +224,11 @@ impl CloudAuthenticator {
             .current_account_id
             .as_deref()
             .and_then(|s| s.parse::<u64>().ok());
-        Ok((login_accounts(&sm.fetch_accounts().await?), current))
+        Ok(AccountListing {
+            email: user.email,
+            accounts: login_accounts(&sm.fetch_accounts().await?),
+            session_account: current,
+        })
     }
 
     /// Revoke a minted CAPI key by name, using a session established from `tokens`.
@@ -358,7 +362,11 @@ impl CloudAuthenticator {
                 superseded_revoked: None,
                 accounts: all_accounts,
             },
-            superseded.map(|previous| SupersededRevoker { sm, previous }),
+            superseded.map(|previous| SupersededRevoker {
+                sm,
+                previous,
+                on: account_id,
+            }),
         ))
     }
 
@@ -466,6 +474,16 @@ fn login_accounts(accounts: &[SmAccount]) -> Vec<LoginAccount> {
     out
 }
 
+/// What a sign-in can reach, read without minting or switching anything.
+#[derive(Debug)]
+pub struct AccountListing {
+    pub email: Option<String>,
+    pub accounts: Vec<LoginAccount>,
+    /// The account the session starts on: the user's server-side default, which is not
+    /// necessarily the one a profile's key belongs to.
+    pub session_account: Option<u64>,
+}
+
 /// Revoke `previous` using the current session, which has to be pointed at its account first
 /// because the delete is scoped to the session's account.
 /// Revokes the key a freshly minted one replaces, using the session that minted it.
@@ -476,6 +494,9 @@ fn login_accounts(accounts: &[SmAccount]) -> Vec<LoginAccount> {
 pub struct SupersededRevoker {
     sm: SmApiClient,
     previous: SupersededKey,
+    /// The account the replacement was minted on, so the revoke can skip a pointless
+    /// `setcurrent` when the old key lives there too.
+    on: Option<u64>,
 }
 
 impl SupersededRevoker {
@@ -492,12 +513,15 @@ impl SupersededRevoker {
 
     /// Best-effort: `false` means the old key may still be live, never that the new one is bad.
     pub async fn revoke(self) -> bool {
-        revoke_superseded(&self.sm, &self.previous).await
+        revoke_superseded(&self.sm, &self.previous, self.on).await
     }
 }
 
-async fn revoke_superseded(sm: &SmApiClient, previous: &SupersededKey) -> bool {
-    if sm.set_current_account(previous.account_id).await.is_err() {
+/// Revoke `previous` using the current session. The delete is scoped to the session's account, so
+/// the session is pointed at `previous.account_id` unless `on` says it is already there.
+async fn revoke_superseded(sm: &SmApiClient, previous: &SupersededKey, on: Option<u64>) -> bool {
+    if on != Some(previous.account_id) && sm.set_current_account(previous.account_id).await.is_err()
+    {
         return false;
     }
     let Ok(entries) = sm.fetch_capi_key_entries().await else {
@@ -964,17 +988,18 @@ mod tests {
             .mount(&server)
             .await;
 
-        let (accounts, current) = authenticator(&server)
+        let listing = authenticator(&server)
             .list_accounts(&tokens(), |_, _| Ok(None))
             .await
             .unwrap();
 
         // Sorted, so the numbering a caller reads is stable between runs.
         assert_eq!(
-            accounts.iter().map(|a| a.id).collect::<Vec<_>>(),
+            listing.accounts.iter().map(|a| a.id).collect::<Vec<_>>(),
             vec![111, 222]
         );
-        assert_eq!(current, Some(222));
+        assert_eq!(listing.session_account, Some(222));
+        assert_eq!(listing.email.as_deref(), Some("u@e.com"));
     }
 
     /// An account the user does not belong to is refused before any switch is attempted, and the
