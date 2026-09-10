@@ -197,6 +197,36 @@ impl CloudAuthenticator {
         super::oidc::revoke_refresh_token(&self.issuer, &self.client_id, refresh_token).await
     }
 
+    /// List the accounts the signed-in user belongs to, minting nothing and switching nothing.
+    pub async fn list_accounts<F>(
+        &self,
+        tokens: &TokenSet,
+        mut mfa_prompt: F,
+    ) -> Result<(Vec<LoginAccount>, Option<u64>), AuthError>
+    where
+        F: FnMut(&[String], u32) -> Result<Option<String>, AuthError>,
+    {
+        let mut sm = SmApiClient::with_http_client(
+            self.sm_api_url.clone(),
+            self.http.clone(),
+            LoginFlow::Switch,
+        );
+        match sm.login(&tokens.access_token, None).await {
+            Ok(()) => {}
+            Err(AuthError::MfaRequired { factors }) => {
+                self.satisfy_mfa(&mut sm, tokens, &factors, &mut mfa_prompt)
+                    .await?
+            }
+            Err(e) => return Err(e),
+        }
+        let user = sm.fetch_current_user().await?;
+        let current = user
+            .current_account_id
+            .as_deref()
+            .and_then(|s| s.parse::<u64>().ok());
+        Ok((login_accounts(&sm.fetch_accounts().await?), current))
+    }
+
     /// Revoke a minted CAPI key by name, using a session established from `tokens`.
     ///
     /// Returns whether a key of that name was found. Deleting is scoped to the session's account,
@@ -863,6 +893,59 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, AuthError::AccountRequired(_)), "got {err:?}");
+    }
+
+    /// Listing must not mint a key or move the session: only the read endpoints are mounted, so
+    /// an attempt at either would 404 and fail the test.
+    #[tokio::test]
+    async fn list_accounts_reads_without_minting_or_switching() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/login"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({}))
+                    .append_header("Set-Cookie", "JSESSIONID=SID; Path=/"),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/csrf"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"csrfToken": {"csrf_token": "C"}})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/users/me"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"id": "1", "current_account_id": "222", "email": "u@e.com"}),
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/accounts"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "accounts": [
+                    {"id": 222, "name": "Two"},
+                    {"id": 111, "name": "One"}
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let (accounts, current) = authenticator(&server)
+            .list_accounts(&tokens(), |_, _| Ok(None))
+            .await
+            .unwrap();
+
+        // Sorted, so the numbering a caller reads is stable between runs.
+        assert_eq!(
+            accounts.iter().map(|a| a.id).collect::<Vec<_>>(),
+            vec![111, 222]
+        );
+        assert_eq!(current, Some(222));
     }
 
     /// An account the user does not belong to is refused before any switch is attempted, and the

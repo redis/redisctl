@@ -1694,6 +1694,11 @@ pub enum CloudAuthCommands {
         #[arg(value_name = "ID")]
         account: Option<u64>,
     },
+    /// List the Redis Cloud accounts you belong to, with their ids.
+    ///
+    /// Reuses the sign-in stored at login, so no browser is opened. Mints nothing and switches
+    /// nothing — use the ids with `cloud auth switch`.
+    Accounts,
     /// Report whether the profile is authenticated to Redis Cloud.
     Status {
         /// Block until a pending device-authorization login completes (or times out / is
