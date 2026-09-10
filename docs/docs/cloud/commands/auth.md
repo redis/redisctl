@@ -156,7 +156,16 @@ recent account stays usable.
     environment, add the section first — otherwise the new profile silently signs you in to
     production instead.
 
-`-o json` reports `account_id`, `account_name` and `account_count`, plus an `accounts` array of
+If programmatic (API) access was off for the account, `login` switches it on and says so — it is
+an account-wide setting, not something scoped to the key being minted:
+
+```
+  note: programmatic (API) access was switched on for this account — it was off until now, and
+  this applies account-wide, not just to this key.
+```
+
+`-o json` reports `capi_newly_enabled` alongside `account_id`, `account_name` and `account_count`,
+plus an `accounts` array of
 every `{id, name}` — so a script can confirm it got the account it expected, or pick one without a
 trip to the console. `account_id` and `accounts[].id` are both numbers, so they compare directly:
 
@@ -239,6 +248,15 @@ redisctl cloud auth status --wait --timeout 300
 |------|-------------|
 | `--wait` | Block until a pending device login is approved (or is denied / the code expires), then run the exchange and persist. |
 | `--timeout <secs>` | Max seconds to wait with `--wait` (default 600). If it elapses while still pending, exits `0` reporting `authorization_pending` — run again to keep waiting. |
+
+!!! note "Credentials can disappear from the OS keyring on Linux"
+    The Linux keyring is an in-memory kernel store: it does not survive a reboot, and its
+    longer-lived fallback expires after a few days. So a machine that logged in last week may have
+    no stored credentials today, and the refresh token is kept in the same place — so silent
+    re-auth is gone with it.
+
+    Commands report this rather than blaming the config, and the fix is to run
+    `redisctl cloud auth login` again. `cloud auth status` reports `authenticated: false`.
 
 ## Log Out
 

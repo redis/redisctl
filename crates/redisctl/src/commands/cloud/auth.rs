@@ -624,6 +624,12 @@ fn emit_signed_in(
             "  To use another: redisctl --profile {profile_name} cloud auth login --account <id>"
         );
     }
+    if creds.capi_newly_enabled {
+        eprintln!(
+            "  note: programmatic (API) access was switched on for this account — it was off \
+             until now, and this applies account-wide, not just to this key."
+        );
+    }
     warn_on_key_sprawl(creds);
     let key_count = creds.redisctl_key_count;
     print_formatted_output(
@@ -640,6 +646,7 @@ fn emit_signed_in(
             })).collect::<Vec<_>>(),
             "email": creds.email,
             "redisctl_key_count": key_count,
+            "capi_newly_enabled": creds.capi_newly_enabled,
         }),
         output,
     )
@@ -804,7 +811,8 @@ async fn revoke_remotely(
     let auth_cfg = conn_mgr.config.resolve_cloud_auth(profile_name);
     let Some(key_name) = auth_cfg.capi_key_name.clone() else {
         return Revocation::Skipped(
-            "this profile does not record which API key it holds, so there is nothing to revoke              by name."
+            "this profile does not record which API key it holds, so there is nothing to \
+             revoke by name."
                 .to_string(),
         );
     };
