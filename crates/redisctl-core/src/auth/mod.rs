@@ -22,7 +22,7 @@ mod oidc;
 pub use auth_code_loopback::LoopbackFlowClient;
 pub use authenticator::{
     AccountChoice, AccountPrompt, CloudAuthenticator, LoginAccount, MFA_MAX_ATTEMPTS,
-    MintedCredentials,
+    MintedCredentials, SupersededKey,
 };
 pub use device_flow::{DeviceAuthorization, DeviceFlowClient};
 pub use oidc::{AuthError, TokenSet};
