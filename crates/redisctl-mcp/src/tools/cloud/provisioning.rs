@@ -61,6 +61,25 @@ pub fn cloud_auth_status(state: std::sync::Arc<crate::state::AppState>) -> tower
         .build()
 }
 
+/// Any directory is fine; the name has to be an env file, so credentials cannot be aimed at a
+/// shell profile or an ssh config.
+fn credentials_path_is_an_env_file(path: &str) -> Result<std::path::PathBuf, tower_mcp::Error> {
+    let candidate = std::path::PathBuf::from(path);
+    let name = candidate
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    let looks_like_env =
+        name == ".env" || name.starts_with(".env.") || name.ends_with(".env") && name.len() > 4;
+    if looks_like_env {
+        return Ok(candidate);
+    }
+    Err(tower_mcp::Error::invalid_params(format!(
+        "output_credentials must name an env file (`.env`, `.env.local`, `something.env`), \
+         got {path:?}"
+    )))
+}
+
 cloud_tool!(write, cloud_quick_database, "cloud_quick_database",
     "Create or reuse a FREE Redis database and write its connection string to a file (default \
      ./.env). Idempotent by name: re-running returns the existing database. Returns database \
@@ -85,13 +104,11 @@ cloud_tool!(write, cloud_quick_database, "cloud_quick_database",
     } => |client, input| {
         let mut params = QuickDatabaseParams::new(input.name);
         if let Some(p) = input.output_credentials {
-            params.output_credentials = p.into();
+            params.output_credentials = credentials_path_is_an_env_file(&p)?;
         }
         if let Some(v) = input.variable {
             params.variable = v;
         }
-        // Agent-supplied, so bound it: an hour is far past any real provisioning time, and an
-        // unbounded value would hold the tool call open indefinitely.
         if let Some(t) = input.wait_timeout {
             params.wait_timeout = t.clamp(1, 3600);
         }
@@ -104,3 +121,40 @@ cloud_tool!(write, cloud_quick_database, "cloud_quick_database",
         CallToolResult::from_serialize(&report)
     }
 );
+
+#[cfg(test)]
+mod tests {
+    use super::credentials_path_is_an_env_file;
+
+    #[test]
+    fn credentials_target_must_be_an_env_file() {
+        for ok in [
+            ".env",
+            "./.env",
+            "config/.env",
+            ".env.local",
+            "prod.env",
+            "/Users/someone/projects/app/.env",
+            "/tmp/xyz/.env",
+        ] {
+            assert!(
+                credentials_path_is_an_env_file(ok).is_ok(),
+                "{ok} should be accepted"
+            );
+        }
+        for bad in [
+            "/Users/someone/.zshrc",
+            "~/.bashrc",
+            "/etc/passwd",
+            "../.ssh/authorized_keys",
+            "envfile",
+            ".environment",
+            "",
+        ] {
+            assert!(
+                credentials_path_is_an_env_file(bad).is_err(),
+                "{bad:?} should be refused"
+            );
+        }
+    }
+}
