@@ -206,6 +206,10 @@ Either a list position or an account id is accepted. Pass the id to skip the pro
 redisctl cloud auth switch 481022
 ```
 
+Switching revokes the key it replaces, so the previous account is not left holding a live
+credential nothing refers to any more. If that revocation fails the switch still completes and says
+so, pointing at the console — the same shape as `logout`. `-o json` reports `superseded_revoked`.
+
 The account marked `(current)` is the one **this profile** is on, recorded when the key was minted.
 It is not read back from the server: switching is scoped to the sign-in session, so Redis Cloud
 still reports your usual default account and the console is unaffected by a CLI switch.
