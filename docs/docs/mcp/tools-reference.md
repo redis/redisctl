@@ -69,6 +69,13 @@ Network connectivity -- VPC peering, Transit Gateway, Private Service Connect (P
 
 ### `cloud:fixed` (27 tools)
 
+!!! note "Database reads do not include the password"
+    `get_database`, `list_databases`, `get_fixed_database` and `list_fixed_databases`
+    replace `security.password` with `[REDACTED]`. Tool results are read into an agent's
+    context, and the provisioning flow deliberately keeps credentials out of it by writing
+    them to a file. Use `cloud_quick_database` and read the file it names, or the CLI's
+    `cloud database get`, which is a human-facing command and still prints the password.
+
 Essentials/Fixed tier subscriptions and databases -- plans, backup, import, tagging, and version upgrades.
 
 | Representative Tools | Description |
