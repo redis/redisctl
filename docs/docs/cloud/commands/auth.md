@@ -199,15 +199,20 @@ Until that's done, login exits `2` with `migration_required`.
 redisctl cloud auth accounts
 ```
 
-Lists the accounts this sign-in can reach, with their ids, marking the one this profile's key
-belongs to:
+Lists the accounts this sign-in can reach, with their ids, naming the signed-in user and marking
+the account this profile's key belongs to:
 
 ```
+Accounts user@example.com belongs to:
   Acme (#316941)  (this profile)
   Contoso (#481022)
 
 To use another: redisctl --profile cloud cloud auth switch <id>
 ```
+
+The email matters when a profile could hold either of two sign-ins: account membership is per
+**user**, so the same account can look different depending on who signed in. `-o json` reports it
+as `email`.
 
 It mints nothing and switches nothing — it exists so an id can be looked up without a login. The
 sign-in stored at login is reused, so no browser opens, but it does sign in to Redis Cloud: on an

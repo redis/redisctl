@@ -202,7 +202,7 @@ impl CloudAuthenticator {
         &self,
         tokens: &TokenSet,
         mut mfa_prompt: F,
-    ) -> Result<(Vec<LoginAccount>, Option<u64>), AuthError>
+    ) -> Result<AccountListing, AuthError>
     where
         F: FnMut(&[String], u32) -> Result<Option<String>, AuthError>,
     {
@@ -224,7 +224,11 @@ impl CloudAuthenticator {
             .current_account_id
             .as_deref()
             .and_then(|s| s.parse::<u64>().ok());
-        Ok((login_accounts(&sm.fetch_accounts().await?), current))
+        Ok(AccountListing {
+            email: user.email,
+            accounts: login_accounts(&sm.fetch_accounts().await?),
+            session_account: current,
+        })
     }
 
     /// Revoke a minted CAPI key by name, using a session established from `tokens`.
@@ -463,6 +467,16 @@ fn login_accounts(accounts: &[SmAccount]) -> Vec<LoginAccount> {
         .collect();
     out.sort_by_key(|a| a.id);
     out
+}
+
+/// What a sign-in can reach, read without minting or switching anything.
+#[derive(Debug)]
+pub struct AccountListing {
+    pub email: Option<String>,
+    pub accounts: Vec<LoginAccount>,
+    /// The account the session starts on: the user's server-side default, which is not
+    /// necessarily the one a profile's key belongs to.
+    pub session_account: Option<u64>,
 }
 
 /// Revoke `previous` using the current session. The delete is scoped to the session's account, so
@@ -936,17 +950,18 @@ mod tests {
             .mount(&server)
             .await;
 
-        let (accounts, current) = authenticator(&server)
+        let listing = authenticator(&server)
             .list_accounts(&tokens(), |_, _| Ok(None))
             .await
             .unwrap();
 
         // Sorted, so the numbering a caller reads is stable between runs.
         assert_eq!(
-            accounts.iter().map(|a| a.id).collect::<Vec<_>>(),
+            listing.accounts.iter().map(|a| a.id).collect::<Vec<_>>(),
             vec![111, 222]
         );
-        assert_eq!(current, Some(222));
+        assert_eq!(listing.session_account, Some(222));
+        assert_eq!(listing.email.as_deref(), Some("u@e.com"));
     }
 
     /// An account the user does not belong to is refused before any switch is attempted, and the
