@@ -140,6 +140,9 @@ impl Theme for RedisTheme {
 }
 
 const DATABASE_PROMPT: &str = "Where should the database come from?";
+const DATABASE_ITEMS: [&str; 3] = ["Redis Cloud", "Local Redis", "Paste a connection string"];
+const LOCAL_FOUND_PROMPT: &str = "Found a local Redis at localhost:6379 - use it?";
+const LOCAL_NONE_PROMPT: &str = "No local Redis found - create one?";
 const AGENTS_PROMPT: &str = "Which agent(s) should be configured?";
 const SKILLS_PROMPT: &str = "Where should the Redis skills be installed?";
 const INTERRUPTED: &str = "interrupted";
@@ -149,7 +152,12 @@ const INTERRUPTED: &str = "interrupted";
 pub(crate) fn is_wizard_prompt(prompt: &str) -> bool {
     matches!(
         prompt,
-        DATABASE_PROMPT | AGENTS_PROMPT | SKILLS_PROMPT | INTERRUPTED
+        DATABASE_PROMPT
+            | LOCAL_FOUND_PROMPT
+            | LOCAL_NONE_PROMPT
+            | AGENTS_PROMPT
+            | SKILLS_PROMPT
+            | INTERRUPTED
     ) || prompt == super::cloud::PICKER_PROMPT
 }
 
@@ -216,11 +224,12 @@ pub fn run(
     pending: &[Question],
     detected: &[engine::Agent],
     docker: bool,
+    local: engine::LocalRedis,
 ) -> Result<Answers, RedisCtlError> {
     let mut answers = Answers::default();
     for question in pending {
         match question {
-            Question::Database => match ask_database(docker)? {
+            Question::Database => match ask_database(docker, local)? {
                 DatabaseChoice::Docker => {}
                 DatabaseChoice::Cloud => answers.cloud = true,
                 DatabaseChoice::Url(url) => answers.url = Some(url),
@@ -238,37 +247,86 @@ enum DatabaseChoice {
     Url(String),
 }
 
-/// Docker is the default; Redis Cloud routes into the cloud flow; a paste comes
-/// back as the URL.
-fn ask_database(docker: bool) -> Result<DatabaseChoice, RedisCtlError> {
+/// Redis Cloud leads and is the default; "Local Redis" reuses a server that is
+/// already running (asking for credentials when it wants them) and only falls back
+/// to creating a Docker container; a paste comes back as the URL.
+fn ask_database(docker: bool, local: engine::LocalRedis) -> Result<DatabaseChoice, RedisCtlError> {
     const PROMPT: &str = DATABASE_PROMPT;
+    // No tier qualifier on Redis Cloud: the cloud flow connects to existing
+    // databases on any plan; only creating a new one defaults to the free plan.
+    let selection = Select::with_theme(&RedisTheme)
+        .with_prompt(PROMPT)
+        .items(&DATABASE_ITEMS)
+        .default(0)
+        .interact_opt()
+        .map_err(prompt_failed)?;
+    match selection {
+        None => Err(cancelled(PROMPT)),
+        Some(0) => Ok(DatabaseChoice::Cloud),
+        Some(1) => ask_local(docker, local),
+        _ => ask_paste(),
+    }
+}
+
+/// The "Local Redis" sub-question, shaped by what the probe found: a ready server
+/// is offered for reuse, one that wants credentials routes to the paste prompt,
+/// and an absent one offers to create a Docker container.
+fn ask_local(docker: bool, local: engine::LocalRedis) -> Result<DatabaseChoice, RedisCtlError> {
+    if local == engine::LocalRedis::NeedsAuth {
+        eprintln!(
+            "  Found a local Redis at localhost:6379, but it needs credentials - paste its connection string."
+        );
+        return ask_paste();
+    }
     // An option that cannot work stays on the list carrying the reason - the same
     // information the error would deliver after the run, shown before it instead.
-    let docker_item = if docker {
-        "Local Docker container"
-    } else {
-        "Local Docker container  (Docker is not running)"
+    let docker_item = |label: &str| {
+        if docker {
+            label.to_string()
+        } else {
+            format!("{label}  (Docker is not running)")
+        }
     };
-    // No tier qualifier: the cloud flow connects to existing databases on any
-    // plan; only creating a new one defaults to the free Essentials plan.
-    let items = [docker_item, "Redis Cloud", "Paste a connection string"];
+    let found = local == engine::LocalRedis::Ready;
+    let (prompt, items) = if found {
+        (
+            LOCAL_FOUND_PROMPT,
+            [
+                "Use it".to_string(),
+                docker_item("Start a fresh Docker container instead"),
+            ],
+        )
+    } else {
+        (
+            LOCAL_NONE_PROMPT,
+            [
+                docker_item("Start one with Docker"),
+                "Paste a connection string".to_string(),
+            ],
+        )
+    };
+    let docker_index = if found { 1 } else { 0 };
+    let default = if found || docker { 0 } else { 1 };
     loop {
         let selection = Select::with_theme(&RedisTheme)
-            .with_prompt(PROMPT)
+            .with_prompt(prompt)
             .items(&items)
-            .default(if docker { 0 } else { 2 })
+            .default(default)
             .interact_opt()
             .map_err(prompt_failed)?;
         match selection {
-            None => return Err(cancelled(PROMPT)),
-            Some(0) if !docker => {
+            None => return Err(cancelled(prompt)),
+            Some(i) if i == docker_index && !docker => {
                 eprintln!("  Docker is not running - start it, or paste a connection string.");
             }
-            Some(0) => return Ok(DatabaseChoice::Docker),
-            Some(1) => return Ok(DatabaseChoice::Cloud),
-            _ => break,
+            Some(i) if i == docker_index => return Ok(DatabaseChoice::Docker),
+            Some(_) if found => return Ok(DatabaseChoice::Url(engine::LOCAL_REDIS_URL.into())),
+            Some(_) => return ask_paste(),
         }
     }
+}
+
+fn ask_paste() -> Result<DatabaseChoice, RedisCtlError> {
     let pasted: String = Input::with_theme(&RedisTheme)
         .with_prompt("Paste the connection string")
         .validate_with(|input: &String| {
@@ -362,6 +420,20 @@ mod tests {
     fn the_cloud_picker_cancel_gets_wizard_tips() {
         assert!(is_wizard_prompt(super::super::cloud::PICKER_PROMPT));
         assert!(!is_wizard_prompt("Delete user 5?"));
+    }
+
+    #[test]
+    fn redis_cloud_leads_the_database_options() {
+        assert_eq!(
+            DATABASE_ITEMS,
+            ["Redis Cloud", "Local Redis", "Paste a connection string"]
+        );
+    }
+
+    #[test]
+    fn the_local_subflow_prompts_get_wizard_cancel_tips() {
+        assert!(is_wizard_prompt(LOCAL_FOUND_PROMPT));
+        assert!(is_wizard_prompt(LOCAL_NONE_PROMPT));
     }
 
     #[test]
