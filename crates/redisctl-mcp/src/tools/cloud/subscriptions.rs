@@ -11,6 +11,8 @@ use redisctl_core::cloud::{
 };
 use tower_mcp::{CallToolResult, ResultExt};
 
+use super::without_database_password;
+
 use crate::serde_helpers;
 use crate::tools::macros::{cloud_tool, mcp_module};
 
@@ -166,7 +168,7 @@ cloud_tool!(read_only, list_databases, "list_databases",
             .await
             .tool_context("Failed to list databases")?;
 
-        CallToolResult::from_serialize(&databases)
+        CallToolResult::from_serialize(&without_database_password(&databases))
     }
 );
 
@@ -184,7 +186,7 @@ cloud_tool!(read_only, get_database, "get_database",
             .await
             .tool_context("Failed to get database")?;
 
-        CallToolResult::from_serialize(&database)
+        CallToolResult::from_serialize(&without_database_password(&database))
     }
 );
 
@@ -479,7 +481,7 @@ cloud_tool!(write, create_database, "create_database",
         .await
         .tool_context("Failed to create database")?;
 
-        CallToolResult::from_serialize(&database)
+        CallToolResult::from_serialize(&without_database_password(&database))
     }
 );
 
@@ -547,7 +549,7 @@ cloud_tool!(write, update_database, "update_database",
         .await
         .tool_context("Failed to update database")?;
 
-        CallToolResult::from_serialize(&database)
+        CallToolResult::from_serialize(&without_database_password(&database))
     }
 );
 

@@ -12,6 +12,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use tower_mcp::{CallToolResult, ResultExt};
 
+use super::without_database_password;
+
 use crate::tools::macros::{cloud_tool, mcp_module};
 
 /// Input for a tag key-value pair
@@ -268,7 +270,7 @@ cloud_tool!(read_only, list_fixed_databases, "list_fixed_databases",
             .await
             .tool_context("Failed to list fixed databases")?;
 
-        CallToolResult::from_serialize(&databases)
+        CallToolResult::from_serialize(&without_database_password(&databases))
     }
 );
 
@@ -287,7 +289,7 @@ cloud_tool!(read_only, get_fixed_database, "get_fixed_database",
             .await
             .tool_context("Failed to get fixed database")?;
 
-        CallToolResult::from_serialize(&database)
+        CallToolResult::from_serialize(&without_database_password(&database))
     }
 );
 
