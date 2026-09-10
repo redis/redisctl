@@ -70,7 +70,7 @@ pub(crate) fn read_for_planning(dir: &Path, rel: &str) -> Result<Option<String>,
 
 /// Read one key out of a dotenv-style file: `KEY=value`, optional `export`, optional
 /// quotes.
-pub(crate) fn read_env_key(dir: &Path, rel: &str, key: &str) -> Option<String> {
+pub fn read_env_key(dir: &Path, rel: &str, key: &str) -> Option<String> {
     let content = read_if(dir, rel)?;
     let re = regex::Regex::new(&format!(
         r"^\s*(?:export\s+)?{}\s*=\s*(.*)$",
