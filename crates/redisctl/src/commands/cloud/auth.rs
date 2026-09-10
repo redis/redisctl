@@ -742,6 +742,12 @@ fn emit_signed_in(
              until now, and this applies account-wide, not just to this key."
         );
     }
+    if creds.superseded_revoked == Some(false) {
+        eprintln!(
+            "  note: could not revoke the key this login replaced — revoke it in the Redis Cloud \
+             console (Access Management > API Keys)."
+        );
+    }
     warn_on_key_sprawl(creds);
     let key_count = creds.redisctl_key_count;
     print_formatted_output(
@@ -759,6 +765,7 @@ fn emit_signed_in(
             "email": creds.email,
             "redisctl_key_count": key_count,
             "capi_newly_enabled": creds.capi_newly_enabled,
+            "superseded_revoked": creds.superseded_revoked,
         }),
         output,
     )
