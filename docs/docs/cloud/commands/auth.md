@@ -182,6 +182,30 @@ address** and accept the prompt to link the account; afterwards `cloud auth logi
 
 Until that's done, login exits `2` with `migration_required`.
 
+## List Accounts
+
+```bash
+redisctl cloud auth accounts
+```
+
+Lists the accounts this sign-in can reach, with their ids, marking the one this profile's key
+belongs to:
+
+```
+  Acme (#316941)  (this profile)
+  Contoso (#481022)
+
+To use another: redisctl --profile cloud cloud auth switch <id>
+```
+
+It mints nothing and switches nothing — it exists so an id can be looked up without a login. The
+sign-in stored at login is reused, so no browser opens, but it does sign in to Redis Cloud: on an
+account with MFA it prompts for a code, and exits `2` with `mfa_required` when there is no terminal
+to prompt on.
+
+`cloud auth status` deliberately does **not** list accounts. It is an offline check — no network,
+no sign-in, and so no MFA prompt — which is what makes it safe for an agent to call freely.
+
 ## Switch Accounts
 
 ```bash
