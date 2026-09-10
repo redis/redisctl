@@ -310,6 +310,11 @@ sm_api_url     = "https://<sm-api-host>/api/v1"
 capi_url       = "https://api.redislabs.com/v1"
 ```
 
+All three endpoints must use `https` and must not embed credentials in the URL — a config that names
+the real identity provider while pointing `sm_api_url` elsewhere would otherwise receive a live
+access token after an ordinary-looking login. `http` is accepted only for `localhost`, `127.0.0.1`
+and `::1`, where there is no network to intercept.
+
 ## Error handling (agents)
 
 In `-o json` / `-o yaml` mode, failures on this surface print a machine-branchable envelope to

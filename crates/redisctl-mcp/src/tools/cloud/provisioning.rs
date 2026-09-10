@@ -90,11 +90,13 @@ cloud_tool!(write, cloud_quick_database, "cloud_quick_database",
         if let Some(v) = input.variable {
             params.variable = v;
         }
+        // Agent-supplied, so bound it: an hour is far past any real provisioning time, and an
+        // unbounded value would hold the tool call open indefinitely.
         if let Some(t) = input.wait_timeout {
-            params.wait_timeout = t;
+            params.wait_timeout = t.clamp(1, 3600);
         }
         if let Some(i) = input.wait_interval {
-            params.wait_interval = i;
+            params.wait_interval = i.clamp(1, 60);
         }
         let report = provision(&client, &params)
             .await
