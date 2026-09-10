@@ -65,6 +65,11 @@ pub struct InitArgs {
     #[arg(long)]
     pub dry_run: bool,
 
+    /// Do not send the anonymous usage event for this run (also honored:
+    /// REDISCTL_INIT_TELEMETRY=0, DO_NOT_TRACK=1)
+    #[arg(long = "no-telemetry")]
+    pub no_telemetry: bool,
+
     /// A pasted connect command, same as --url (the Cloud console's Copy button
     /// output works verbatim)
     #[arg(
@@ -92,6 +97,7 @@ impl std::fmt::Debug for InitArgs {
             .field("skills_repo", &self.skills_repo)
             .field("skills_global", &self.skills_global)
             .field("dry_run", &self.dry_run)
+            .field("no_telemetry", &self.no_telemetry)
             .field("pasted", &(!self.pasted.is_empty()).then_some("<redacted>"))
             .finish()
     }
@@ -114,6 +120,7 @@ mod tests {
             skills_repo: None,
             skills_global: false,
             dry_run: false,
+            no_telemetry: false,
             pasted: vec![
                 "redis-cli".into(),
                 "-u".into(),

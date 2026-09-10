@@ -13,7 +13,11 @@ use serial_test::serial;
 use std::path::{Path, PathBuf};
 
 fn redisctl() -> Command {
-    Command::cargo_bin("redisctl").unwrap()
+    let mut cmd = Command::cargo_bin("redisctl").unwrap();
+    // Explicitly off: a key in the developer's (or CI's) environment must not
+    // make test runs send telemetry.
+    cmd.env("REDISCTL_INIT_AMPLITUDE_KEY", "");
+    cmd
 }
 
 /// A fake redis/agent-skills checkout keeps the skills step offline; this suite
