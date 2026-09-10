@@ -72,6 +72,7 @@ pub async fn handle_auth_command(
             .await
         }
         CloudAuthCommands::Switch { account } => switch(conn_mgr, profile, *account, output).await,
+        CloudAuthCommands::Accounts => accounts(conn_mgr, profile, output).await,
         CloudAuthCommands::Status { wait, timeout } => {
             status(conn_mgr, profile, *wait, *timeout, output).await
         }
@@ -147,6 +148,8 @@ async fn login(
         .await;
     }
 
+    let superseded = superseded_key(&auth_cfg);
+
     let tokens = if use_device {
         run_device_flow_blocking(&authenticator).await?
     } else {
@@ -168,13 +171,94 @@ async fn login(
                 Some(id) => AccountChoice::Id(id),
                 None => AccountChoice::Current,
             },
-            superseded: None,
+            superseded,
             allow_plaintext,
             make_default: true,
         },
     )
     .await?;
     emit_signed_in(&creds, &profile_name, output)
+}
+
+/// The key a profile already holds, which a fresh mint for that profile replaces.
+fn superseded_key(auth_cfg: &CloudAuthConfig) -> Option<SupersededKey> {
+    match (auth_cfg.account_id, auth_cfg.capi_key_name.clone()) {
+        (Some(account_id), Some(key_name)) => Some(SupersededKey {
+            account_id,
+            key_name,
+        }),
+        _ => None,
+    }
+}
+
+/// List the accounts this sign-in can reach, so an id can be looked up without minting a key.
+async fn accounts(
+    conn_mgr: &ConnectionManager,
+    profile: Option<&str>,
+    output: OutputFormat,
+) -> CliResult<()> {
+    let (profile_name, authenticator, auth_cfg) = prepare(conn_mgr, profile)?;
+    let on_account = auth_cfg.account_id;
+
+    let store = CredentialStore::new();
+    let refresh_token = store
+        .get_credential(&format!("keyring:{profile_name}-okta-refresh"), None)
+        .map_err(|_| {
+            RedisCtlError::Structured(Box::new(StructuredError::not_authenticated(format!(
+                "there is no stored sign-in for profile '{profile_name}' to list accounts \
+                 with. Run `redisctl --profile {profile_name} cloud auth login` first; its \
+                 output lists them too."
+            ))))
+        })?;
+    let tokens = authenticator
+        .refresh(&refresh_token)
+        .await
+        .map_err(|e| match e {
+            AuthError::Network(_) => auth_err(e),
+            _ => RedisCtlError::Structured(Box::new(StructuredError::not_authenticated(format!(
+                "the stored sign-in for profile '{profile_name}' is no longer usable. Run \
+                 `redisctl --profile {profile_name} cloud auth login`."
+            )))),
+        })?;
+
+    let listing = authenticator
+        .list_accounts(&tokens, prompt_mfa_code)
+        .await
+        .map_err(auth_err)?;
+    let accounts = listing.accounts;
+
+    // What this profile's key is for, which is what the caller is choosing against. The session's
+    // own account is the user's server-side default and is not the same thing.
+    let profile_account = on_account.or(listing.session_account);
+    match listing.email.as_deref() {
+        Some(email) => eprintln!("\nAccounts {email} belongs to:"),
+        None => eprintln!("\nAccounts this sign-in belongs to:"),
+    }
+    for a in &accounts {
+        let marker = if Some(a.id) == profile_account {
+            "  (this profile)"
+        } else {
+            ""
+        };
+        eprintln!("  {}{}", a.label(), marker);
+    }
+    if accounts.len() > 1 {
+        eprintln!("\nTo use another: redisctl --profile {profile_name} cloud auth switch <id>");
+    }
+
+    print_formatted_output(
+        serde_json::json!({
+            "status": "ok",
+            "profile": profile_name,
+            "email": listing.email,
+            "account_id": profile_account,
+            "accounts": accounts.iter().map(|a| serde_json::json!({
+                "id": a.id,
+                "name": a.name,
+            })).collect::<Vec<_>>(),
+        }),
+        output,
+    )
 }
 
 /// Switch the profile's key to another account, reusing the sign-in stored at login.
@@ -193,13 +277,7 @@ async fn switch(
     // Which account this profile is on today, and which key it holds, as recorded at the last
     // login/switch. Read before `auth_cfg` is consumed below.
     let on_account = auth_cfg.account_id;
-    let superseded = match (on_account, auth_cfg.capi_key_name.clone()) {
-        (Some(account_id), Some(key_name)) => Some(SupersededKey {
-            account_id,
-            key_name,
-        }),
-        _ => None,
-    };
+    let superseded = superseded_key(&auth_cfg);
 
     // Already there: minting another key for the same account would just add to the sprawl.
     if let Some(want) = account
@@ -643,14 +721,18 @@ fn emit_signed_in(
         );
         // Name the profile actually in use: a `<name>` placeholder invites inventing a new one,
         // and an unconfigured profile silently resolves to the *production* endpoints.
-        eprintln!(
-            "  To use another: redisctl --profile {profile_name} cloud auth login --account <id>"
-        );
+        eprintln!("  To use another: redisctl --profile {profile_name} cloud auth switch <id>");
     }
     if creds.capi_newly_enabled {
         eprintln!(
             "  note: programmatic (API) access was switched on for this account — it was off \
              until now, and this applies account-wide, not just to this key."
+        );
+    }
+    if creds.superseded_revoked == Some(false) {
+        eprintln!(
+            "  note: could not revoke the key this login replaced — revoke it in the Redis Cloud \
+             console (Access Management > API Keys)."
         );
     }
     warn_on_key_sprawl(creds);
@@ -670,6 +752,7 @@ fn emit_signed_in(
             "email": creds.email,
             "redisctl_key_count": key_count,
             "capi_newly_enabled": creds.capi_newly_enabled,
+            "superseded_revoked": creds.superseded_revoked,
         }),
         output,
     )
@@ -695,7 +778,7 @@ async fn status(
                     &profile_name,
                     &authenticator,
                     &tokens,
-                    auth_cfg,
+                    auth_cfg.clone(),
                     LoginRun {
                         flow: LoginFlow::Device,
                         // Whatever the initiating `login --device --account` asked for; `None`
@@ -704,7 +787,7 @@ async fn status(
                             Some(id) => AccountChoice::Id(id),
                             None => AccountChoice::Current,
                         },
-                        superseded: None,
+                        superseded: superseded_key(&auth_cfg),
                         allow_plaintext: pending.allow_plaintext,
                         make_default: true,
                     },

@@ -128,7 +128,7 @@ never have to look an account id up:
 ✓ Signed in as user@example.com. Credentials saved to profile 'cloud'.
   note: the key is for Acme (#316941) — 1 of 3 accounts you belong to:
     Acme (#316941) · Contoso (#481022) · Initech (#502113)
-  To use another: redisctl --profile cloud cloud auth login --account <id>
+  To use another: redisctl --profile cloud cloud auth switch <id>
 ```
 
 Use `--account` to pick one explicitly, without touching the console:
@@ -148,7 +148,18 @@ redisctl --profile contoso cloud auth login --account 481022
 ```
 
 Re-using one profile is fine too, but each login replaces that profile's key, so only the most
-recent account stays usable.
+recent account stays usable. The key it replaces is revoked, on whichever account held it, so
+signing in repeatedly does not leave a trail of live keys behind — the same behaviour as
+[`switch`](#switch-accounts) and [`logout`](#log-out). The new key is minted first, so a failed
+revocation never costs you a working key; it is reported instead, pointing at the console:
+
+```
+  note: could not revoke the key this login replaced — revoke it in the Redis Cloud console
+  (Access Management > API Keys).
+```
+
+`-o json` reports `superseded_revoked`: `true` when the replaced key was revoked, `false` when that
+failed, and `null` when the profile had no earlier key.
 
 !!! note "A new profile name defaults to production"
     A profile with no `[cloud_auth.<name>]` section falls back to the built-in **production**
@@ -182,6 +193,35 @@ address** and accept the prompt to link the account; afterwards `cloud auth logi
 
 Until that's done, login exits `2` with `migration_required`.
 
+## List Accounts
+
+```bash
+redisctl cloud auth accounts
+```
+
+Lists the accounts this sign-in can reach, with their ids, naming the signed-in user and marking
+the account this profile's key belongs to:
+
+```
+Accounts user@example.com belongs to:
+  Acme (#316941)  (this profile)
+  Contoso (#481022)
+
+To use another: redisctl --profile cloud cloud auth switch <id>
+```
+
+The email matters when a profile could hold either of two sign-ins: account membership is per
+**user**, so the same account can look different depending on who signed in. `-o json` reports it
+as `email`.
+
+It mints nothing and switches nothing — it exists so an id can be looked up without a login. The
+sign-in stored at login is reused, so no browser opens, but it does sign in to Redis Cloud: on an
+account with MFA it prompts for a code, and exits `2` with `mfa_required` when there is no terminal
+to prompt on.
+
+`cloud auth status` deliberately does **not** list accounts. It is an offline check — no network,
+no sign-in, and so no MFA prompt — which is what makes it safe for an agent to call freely.
+
 ## Switch Accounts
 
 ```bash
@@ -207,8 +247,10 @@ redisctl cloud auth switch 481022
 ```
 
 Switching revokes the key it replaces, so the previous account is not left holding a live
-credential nothing refers to any more. If that revocation fails the switch still completes and says
-so, pointing at the console — the same shape as `logout`. `-o json` reports `superseded_revoked`.
+credential nothing refers to any more; the new key is minted first, so a failure anywhere in the
+switch never leaves the profile without a working key. If that revocation fails the switch still
+completes and says so, pointing at the console — the same shape as `logout`. `-o json` reports
+`superseded_revoked`.
 
 The account marked `(current)` is the one **this profile** is on, recorded when the key was minted.
 It is not read back from the server: switching is scoped to the sign-in session, so Redis Cloud

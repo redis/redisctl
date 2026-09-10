@@ -197,6 +197,40 @@ impl CloudAuthenticator {
         super::oidc::revoke_refresh_token(&self.issuer, &self.client_id, refresh_token).await
     }
 
+    /// List the accounts the signed-in user belongs to, minting nothing and switching nothing.
+    pub async fn list_accounts<F>(
+        &self,
+        tokens: &TokenSet,
+        mut mfa_prompt: F,
+    ) -> Result<AccountListing, AuthError>
+    where
+        F: FnMut(&[String], u32) -> Result<Option<String>, AuthError>,
+    {
+        let mut sm = SmApiClient::with_http_client(
+            self.sm_api_url.clone(),
+            self.http.clone(),
+            LoginFlow::Switch,
+        );
+        match sm.login(&tokens.access_token, None).await {
+            Ok(()) => {}
+            Err(AuthError::MfaRequired { factors }) => {
+                self.satisfy_mfa(&mut sm, tokens, &factors, &mut mfa_prompt)
+                    .await?
+            }
+            Err(e) => return Err(e),
+        }
+        let user = sm.fetch_current_user().await?;
+        let current = user
+            .current_account_id
+            .as_deref()
+            .and_then(|s| s.parse::<u64>().ok());
+        Ok(AccountListing {
+            email: user.email,
+            accounts: login_accounts(&sm.fetch_accounts().await?),
+            session_account: current,
+        })
+    }
+
     /// Revoke a minted CAPI key by name, using a session established from `tokens`.
     ///
     /// Returns whether a key of that name was found. Deleting is scoped to the session's account,
@@ -305,7 +339,7 @@ impl CloudAuthenticator {
         })?;
         let minted = sm.mint_capi_key(key_name, user.user_account()?).await?;
         let superseded_revoked = match superseded {
-            Some(previous) => Some(revoke_superseded(&sm, &previous).await),
+            Some(previous) => Some(revoke_superseded(&sm, &previous, account_id).await),
             None => None,
         };
         // Best-effort: count our keys so the CLI can warn about sprawl (D5). Never fail login
@@ -435,22 +469,66 @@ fn login_accounts(accounts: &[SmAccount]) -> Vec<LoginAccount> {
     out
 }
 
-/// Revoke `previous` using the current session, which has to be pointed at its account first
-/// because the delete is scoped to the session's account.
-async fn revoke_superseded(sm: &SmApiClient, previous: &SupersededKey) -> bool {
-    if sm.set_current_account(previous.account_id).await.is_err() {
+/// What a sign-in can reach, read without minting or switching anything.
+#[derive(Debug)]
+pub struct AccountListing {
+    pub email: Option<String>,
+    pub accounts: Vec<LoginAccount>,
+    /// The account the session starts on: the user's server-side default, which is not
+    /// necessarily the one a profile's key belongs to.
+    pub session_account: Option<u64>,
+}
+
+/// Revoke `previous` using the current session. The delete is scoped to the session's account, so
+/// the session is pointed at `previous.account_id` unless `on` says it is already there.
+async fn revoke_superseded(sm: &SmApiClient, previous: &SupersededKey, on: Option<u64>) -> bool {
+    let account = previous.account_id;
+    let moved = on != Some(account);
+    if moved && let Err(e) = sm.set_current_account(account).await {
+        tracing::warn!(
+            "cannot reach account {account} to revoke key {}: {e}",
+            previous.key_name
+        );
         return false;
     }
-    let Ok(entries) = sm.fetch_capi_key_entries().await else {
+    let revoked = delete_named_key(sm, account, &previous.key_name).await;
+    // Leave the session on the account the caller put it on: the key count that follows is
+    // reported as the count for the account this profile now uses.
+    if moved
+        && let Some(back) = on
+        && let Err(e) = sm.set_current_account(back).await
+    {
+        tracing::warn!("could not point the session back at account {back}: {e}");
+    }
+    revoked
+}
+
+async fn delete_named_key(sm: &SmApiClient, account: u64, key: &str) -> bool {
+    let entries = match sm.fetch_capi_key_entries().await {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::warn!("cannot list keys on account {account} to revoke {key}: {e}");
+            return false;
+        }
+    };
+    let Some((id, _)) = entries.iter().find(|(_, name)| name == key) else {
+        tracing::warn!(
+            "key {key} is not on account {account}; it holds: {}",
+            entries
+                .iter()
+                .map(|(_, name)| name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
         return false;
     };
-    let Some((id, _)) = entries
-        .into_iter()
-        .find(|(_, name)| name == &previous.key_name)
-    else {
-        return false;
-    };
-    sm.delete_capi_key(id).await.is_ok()
+    match sm.delete_capi_key(*id).await {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!("could not delete key {key} ({id}) on account {account}: {e}");
+            false
+        }
+    }
 }
 
 fn select_account(accounts: Vec<SmAccount>, current_account_id: Option<&str>) -> Option<SmAccount> {
@@ -865,6 +943,60 @@ mod tests {
         assert!(matches!(err, AuthError::AccountRequired(_)), "got {err:?}");
     }
 
+    /// Listing must not mint a key or move the session: only the read endpoints are mounted, so
+    /// an attempt at either would 404 and fail the test.
+    #[tokio::test]
+    async fn list_accounts_reads_without_minting_or_switching() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/login"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({}))
+                    .append_header("Set-Cookie", "JSESSIONID=SID; Path=/"),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/csrf"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"csrfToken": {"csrf_token": "C"}})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/users/me"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"id": "1", "current_account_id": "222", "email": "u@e.com"}),
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/accounts"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "accounts": [
+                    {"id": 222, "name": "Two"},
+                    {"id": 111, "name": "One"}
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let listing = authenticator(&server)
+            .list_accounts(&tokens(), |_, _| Ok(None))
+            .await
+            .unwrap();
+
+        // Sorted, so the numbering a caller reads is stable between runs.
+        assert_eq!(
+            listing.accounts.iter().map(|a| a.id).collect::<Vec<_>>(),
+            vec![111, 222]
+        );
+        assert_eq!(listing.session_account, Some(222));
+        assert_eq!(listing.email.as_deref(), Some("u@e.com"));
+    }
+
     /// An account the user does not belong to is refused before any switch is attempted, and the
     /// message names the accounts they do have.
     #[tokio::test]
@@ -966,6 +1098,140 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(creds.account_id, Some(111));
+    }
+
+    /// A re-login replaces the profile's key, so the one it replaces is revoked. On the same
+    /// account no `setcurrent` is needed to reach it — none is mounted here, and one would 404.
+    #[tokio::test]
+    async fn complete_login_revokes_the_key_it_replaces_on_the_same_account() {
+        let server = MockServer::start().await;
+        common_login_mocks(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/users/me"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"id": "1", "current_account_id": "111", "email": "u@e.com"}),
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/accounts"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "accounts": [{"id": 111, "name": "One", "api_access_key": "KEY-111"}]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/accounts/cloud-api/cloudApiKeys"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "cloudApiKeys": [{"id": 7, "name": "redisctl-cli-1"}]
+            })))
+            .mount(&server)
+            .await;
+        let deleted = Mock::given(method("DELETE"))
+            .and(path("/accounts/cloud-api/cloudApiKeys/7"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .named("revoke the superseded key");
+        server.register(deleted).await;
+
+        let creds = authenticator(&server)
+            .complete_login_with_mfa(
+                &tokens(),
+                "redisctl-cli-2",
+                LoginFlow::Loopback,
+                AccountChoice::Current,
+                Some(SupersededKey {
+                    account_id: 111,
+                    key_name: "redisctl-cli-1".to_string(),
+                }),
+                |_, _| Ok(None),
+            )
+            .await
+            .unwrap();
+        assert_eq!(creds.superseded_revoked, Some(true));
+    }
+
+    /// Revoking across accounts has to point the session at the key's account and then put it
+    /// back, so the key count that follows describes the account the profile ends up on.
+    #[tokio::test]
+    async fn revoking_across_accounts_puts_the_session_back() {
+        let server = MockServer::start().await;
+        let switched = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        common_login_mocks(&server).await;
+
+        let flag = switched.clone();
+        Mock::given(method("GET"))
+            .and(path("/users/me"))
+            .respond_with(move |_: &wiremock::Request| {
+                let id = if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                    "222"
+                } else {
+                    "111"
+                };
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "1", "current_account_id": id, "email": "u@e.com"
+                }))
+            })
+            .mount(&server)
+            .await;
+        let flag = switched.clone();
+        Mock::given(method("POST"))
+            .and(path("/accounts/setcurrent/222"))
+            .respond_with(move |_: &wiremock::Request| {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({}))
+            })
+            // Once to switch, once to restore after the revoke.
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/accounts"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "accounts": [
+                    {"id": 111, "name": "One", "api_access_key": "KEY-111"},
+                    {"id": 222, "name": "Two", "api_access_key": "KEY-222"}
+                ]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/accounts/setcurrent/111"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(1)
+            .named("point the session at the superseded key's account")
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/accounts/cloud-api/cloudApiKeys"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "cloudApiKeys": [{"id": 9, "name": "redisctl-cli-1"}]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/accounts/cloud-api/cloudApiKeys/9"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let creds = authenticator(&server)
+            .complete_login_with_mfa(
+                &tokens(),
+                "redisctl-cli-2",
+                LoginFlow::Switch,
+                AccountChoice::Id(222),
+                Some(SupersededKey {
+                    account_id: 111,
+                    key_name: "redisctl-cli-1".to_string(),
+                }),
+                |_, _| Ok(None),
+            )
+            .await
+            .unwrap();
+        assert_eq!(creds.account_id, Some(222));
+        assert_eq!(creds.superseded_revoked, Some(true));
     }
 
     #[tokio::test]
