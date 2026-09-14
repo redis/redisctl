@@ -163,6 +163,7 @@ pub(crate) fn oauth_http_client() -> Result<oauth2::reqwest::Client, AuthError> 
 pub(crate) fn default_http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent(crate::USER_AGENT)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .expect("building the reqwest client should not fail")
 }
