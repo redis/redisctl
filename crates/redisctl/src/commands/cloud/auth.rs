@@ -477,6 +477,12 @@ async fn run_loopback_flow(auth: &CloudAuthenticator) -> CliResult<TokenSet> {
 /// time-based code, so the caller reports `mfa_required` and the human re-runs interactively.
 /// The `^\d{6}$` check is local on purpose: a malformed value would otherwise consume one of the
 /// user's server-side attempts.
+/// Submissions still available, counting the one about to be entered: the prompt runs before
+/// the code for `attempt` is sent.
+fn attempts_left(attempt: u32) -> u32 {
+    MFA_MAX_ATTEMPTS.saturating_add(1).saturating_sub(attempt)
+}
+
 fn prompt_mfa_code(factors: &[String], attempt: u32) -> Result<Option<String>, AuthError> {
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         return Ok(None);
@@ -491,7 +497,7 @@ fn prompt_mfa_code(factors: &[String], attempt: u32) -> Result<Option<String>, A
     } else {
         eprintln!(
             "That code wasn't accepted. {} attempt(s) left.",
-            MFA_MAX_ATTEMPTS.saturating_sub(attempt)
+            attempts_left(attempt)
         );
     }
     loop {
@@ -907,6 +913,17 @@ fn open_browser(url: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The prompt runs before the code for that attempt is submitted, so the count includes the
+    /// one being typed: with three allowed, the second prompt still has two submissions left.
+    #[test]
+    fn attempts_left_counts_the_submission_being_entered() {
+        assert_eq!(MFA_MAX_ATTEMPTS, 3);
+        assert_eq!(attempts_left(1), 3);
+        assert_eq!(attempts_left(2), 2);
+        assert_eq!(attempts_left(3), 1);
+        assert_eq!(attempts_left(9), 0);
+    }
 
     fn accounts() -> Vec<LoginAccount> {
         vec![
