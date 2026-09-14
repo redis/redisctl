@@ -633,6 +633,21 @@ impl Config {
         Ok(())
     }
 
+    /// Save to `config_path` with owner-only permissions, for callers that just put a secret in it.
+    pub fn save_to_path_owner_only(&self, config_path: &Path) -> Result<()> {
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| ConfigError::SaveError {
+                path: parent.display().to_string(),
+                source: e,
+            })?;
+        }
+        let content = toml::to_string_pretty(self)?;
+        write_owner_only(config_path, content.as_bytes()).map_err(|e| ConfigError::SaveError {
+            path: config_path.display().to_string(),
+            source: e,
+        })
+    }
+
     /// Set or update a profile
     pub fn set_profile(&mut self, name: String, profile: Profile) {
         self.profiles.insert(name, profile);
@@ -674,6 +689,7 @@ impl Config {
             // Reference is implicit (looked up by the well-known key on refresh); ignore it.
             let _ = store.store_credential(&format!("{profile_name}-okta-refresh"), refresh)?;
         }
+        let existing = self.profiles.get(profile_name);
         let profile = Profile {
             deployment_type: DeploymentType::Cloud,
             credentials: ProfileCredentials::Cloud {
@@ -681,8 +697,8 @@ impl Config {
                 api_secret,
                 api_url: creds.api_url.clone(),
             },
-            files_api_key: None,
-            tags: Vec::new(),
+            files_api_key: existing.and_then(|p| p.files_api_key.clone()),
+            tags: existing.map(|p| p.tags.clone()).unwrap_or_default(),
         };
         self.profiles.insert(profile_name.to_string(), profile);
         if let Some(mut auth) = cloud_auth {
@@ -786,6 +802,60 @@ impl Config {
 
 fn default_cloud_url() -> String {
     "https://api.redislabs.com/v1".to_string()
+}
+
+/// Write `bytes` to `path` so that only the owner can read them.
+///
+/// Via a fresh sibling file rather than in place: `mode()` is ignored for a file that already
+/// exists, and tightening one afterwards leaves the secret briefly readable and does nothing
+/// about a descriptor already open on it. The rename is atomic within the directory and carries
+/// the new file's mode, so a reader either sees the old contents at the old permissions or the
+/// new contents at `0600`.
+#[cfg(unix)]
+fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
+    let name = path.file_name().unwrap_or(path.as_os_str());
+    let tmp = match dir {
+        Some(dir) => dir.join(format!(
+            ".{}.{}",
+            name.to_string_lossy(),
+            std::process::id()
+        )),
+        None => PathBuf::from(format!(
+            ".{}.{}",
+            name.to_string_lossy(),
+            std::process::id()
+        )),
+    };
+
+    // `create_new` guarantees we are the creator, which is what makes `mode` apply.
+    let _ = fs::remove_file(&tmp);
+    let write = || -> std::io::Result<()> {
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()
+    };
+    if let Err(e) = write() {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    if let Err(e) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    fs::write(path, bytes)
 }
 
 #[cfg(test)]
