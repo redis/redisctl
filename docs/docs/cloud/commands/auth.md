@@ -255,8 +255,11 @@ redisctl cloud auth status --wait --timeout 300
     no stored credentials today, and the refresh token is kept in the same place — so silent
     re-auth is gone with it.
 
-    Commands report this rather than blaming the config, and the fix is to run
-    `redisctl cloud auth login` again. `cloud auth status` reports `authenticated: false`.
+    Commands report this rather than blaming the config, and the fix is to sign in again with
+    `redisctl --profile <name> cloud auth login`. Name the profile: the message comes from the
+    credential layer, which knows the keyring entry but not which profile referenced it, and a
+    bare `login` would repair the default profile rather than the one that failed. `cloud auth
+    status` reports `authenticated: false`.
 
 ## Log Out
 
