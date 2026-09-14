@@ -771,30 +771,71 @@ async fn logout(
     }
     save_config(conn_mgr, &config)?;
 
-    match &revoked {
-        Revocation::Done { key } => eprintln!(
-            "\n\u{2713} Logged out of profile '{profile_name}'. Revoked the API key {key} and the \
-             stored sign-in."
+    match (&revoked.key, &revoked.session) {
+        (Ok(key), Ok(())) => eprintln!(
+            "\n\u{2713} Logged out of profile '{profile_name}'. Revoked the API key {key} and \
+             the stored sign-in."
         ),
-        Revocation::Skipped(reason) => eprintln!(
-            "\n\u{2713} Logged out of profile '{profile_name}' locally.\n  note: {reason} Revoke \
-             the key in the Redis Cloud console (Access Management > API Keys)."
+        (Ok(key), Err(_)) => eprintln!(
+            "\n\u{2713} Logged out of profile '{profile_name}'. Revoked the API key {key}."
         ),
+        (Err(_), Ok(())) => eprintln!(
+            "\n\u{2713} Logged out of profile '{profile_name}'. Revoked the stored sign-in."
+        ),
+        (Err(_), Err(_)) => {
+            eprintln!("\n\u{2713} Logged out of profile '{profile_name}' locally.")
+        }
+    }
+    for note in revoked.notes() {
+        eprintln!("  note: {note}");
     }
     print_formatted_output(
         serde_json::json!({
             "status": "ok",
             "profile": profile_name,
             "logged_out": true,
-            "revoked": matches!(revoked, Revocation::Done { .. }),
+            "revoked": revoked.key.is_ok() && revoked.session.is_ok(),
+            "key_revoked": revoked.key.is_ok(),
+            "session_revoked": revoked.session.is_ok(),
         }),
         output,
     )
 }
 
-enum Revocation {
-    Done { key: String },
-    Skipped(String),
+/// What logout managed to revoke server-side. The two are independent on purpose: a key that
+/// cannot be deleted must not stop the sign-in being revoked, because a live refresh token can
+/// mint another key.
+struct Revocation {
+    /// The name of the key that was revoked, or why it wasn't.
+    key: Result<String, String>,
+    /// Whether the stored sign-in was revoked at the identity provider, or why it wasn't.
+    session: Result<(), String>,
+}
+
+impl Revocation {
+    /// Both halves failing for the same reason — no sign-in to act with, or no endpoints to
+    /// reach.
+    fn blocked(key_note: String, session_note: String) -> Self {
+        Self {
+            key: Err(key_note),
+            session: Err(session_note),
+        }
+    }
+
+    fn notes(&self) -> Vec<String> {
+        let mut notes = Vec::new();
+        if let Err(why) = &self.key {
+            notes.push(format!(
+                "{why} Revoke the key in the Redis Cloud console (Access Management > API Keys)."
+            ));
+        }
+        if let Err(why) = &self.session {
+            notes.push(format!(
+                "{why} It stays valid at the identity provider until it expires."
+            ));
+        }
+        notes
+    }
 }
 
 /// Revoke the minted key and the stored sign-in, or explain why it could not be done.
@@ -806,49 +847,65 @@ async fn revoke_remotely(
     store: &CredentialStore,
 ) -> Revocation {
     let auth_cfg = conn_mgr.config.resolve_cloud_auth(profile_name);
-    let Some(key_name) = auth_cfg.capi_key_name.clone() else {
-        return Revocation::Skipped(
-            "this profile does not record which API key it holds, so there is nothing to revoke              by name."
-                .to_string(),
-        );
+    let recorded_key = auth_cfg.capi_key_name.clone();
+    // Phrases the key half of a shared failure; whether a key is even known changes the wording.
+    let no_key_because = |why: &str| match &recorded_key {
+        Some(key) => format!("{why}, so the key {key} could not be revoked."),
+        None => format!("{why}, and this profile does not record a key to revoke by name."),
     };
+
     let Ok(refresh_token) =
         store.get_credential(&format!("keyring:{profile_name}-okta-refresh"), None)
     else {
-        return Revocation::Skipped(format!(
-            "no stored sign-in for '{profile_name}', so the key {key_name} could not be revoked."
-        ));
+        let why = format!("there is no stored sign-in for '{profile_name}'");
+        return Revocation::blocked(no_key_because(&why), format!("{why}, so none was revoked."));
     };
     let (_, authenticator, _) = match prepare(conn_mgr, Some(profile_name)) {
         Ok(parts) => parts,
         Err(_) => {
-            return Revocation::Skipped(format!(
-                "login endpoints are not configured, so the key {key_name} could not be revoked."
-            ));
+            let why = "login endpoints are not configured";
+            return Revocation::blocked(
+                no_key_because(why),
+                format!("{why}, so the stored sign-in could not be revoked."),
+            );
         }
     };
     let tokens = match authenticator.refresh(&refresh_token).await {
         Ok(tokens) => tokens,
         Err(_) => {
-            return Revocation::Skipped(format!(
-                "the stored sign-in is no longer valid, so the key {key_name} could not be revoked."
-            ));
+            let why = "the stored sign-in is no longer valid";
+            return Revocation::blocked(
+                no_key_because(why),
+                format!("{why}, so there was nothing to revoke."),
+            );
         }
     };
-    match authenticator.revoke_capi_key(&tokens, &key_name).await {
-        Ok(true) => {}
-        Ok(false) => {
-            return Revocation::Skipped(format!(
+
+    // Independent from here. The key goes first because deleting it needs the sign-in, but its
+    // outcome must not gate the sign-in's: a refresh token left alive can mint another key,
+    // which is the risk this is here to close.
+    let key = match &recorded_key {
+        None => Err(
+            "this profile does not record which API key it holds, so there was nothing to \
+             revoke by name."
+                .to_string(),
+        ),
+        Some(key_name) => match authenticator.revoke_capi_key(&tokens, key_name).await {
+            Ok(true) => Ok(key_name.clone()),
+            Ok(false) => Err(format!(
                 "the key {key_name} was not found on this account; it may already be revoked."
-            ));
-        }
-        Err(e) => return Revocation::Skipped(format!("could not revoke the key {key_name}: {e}.")),
-    }
+            )),
+            Err(e) => Err(format!("could not revoke the key {key_name}: {e}.")),
+        },
+    };
     // The refresh above rotated the token, so revoke the one we now hold; the previous value is
     // already invalid at the IdP.
     let newest = tokens.refresh_token.as_deref().unwrap_or(&refresh_token);
-    let _ = authenticator.revoke_refresh_token(newest).await;
-    Revocation::Done { key: key_name }
+    let session = authenticator
+        .revoke_refresh_token(newest)
+        .await
+        .map_err(|e| format!("could not revoke the stored sign-in: {e}."));
+    Revocation { key, session }
 }
 
 // ---- pending device-authorization store (bridges the non-blocking login and status --wait) ----
@@ -992,6 +1049,39 @@ fn open_browser(url: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each half is reported on its own. A key that could not be deleted must not be able to
+    /// hide a sign-in that is still live, and vice versa — one bit could not say both.
+    #[test]
+    fn logout_reports_each_revocation_separately() {
+        let both = Revocation {
+            key: Ok("redisctl-cli-1".to_string()),
+            session: Ok(()),
+        };
+        assert!(both.notes().is_empty());
+
+        let key_only = Revocation {
+            key: Ok("redisctl-cli-1".to_string()),
+            session: Err("could not revoke the stored sign-in: 503.".to_string()),
+        };
+        let notes = key_only.notes();
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].contains("stays valid at the identity provider"));
+
+        let session_only = Revocation {
+            key: Err("could not revoke the key redisctl-cli-1: 500.".to_string()),
+            session: Ok(()),
+        };
+        let notes = session_only.notes();
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].contains("Access Management > API Keys"));
+
+        let neither = Revocation {
+            key: Err("a".to_string()),
+            session: Err("b".to_string()),
+        };
+        assert_eq!(neither.notes().len(), 2);
+    }
 
     /// The prompt runs before the code for that attempt is submitted, so the count includes the
     /// one being typed: with three allowed, the second prompt still has two submissions left.

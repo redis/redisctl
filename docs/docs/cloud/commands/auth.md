@@ -266,7 +266,12 @@ what was left behind:
 
 That happens when the sign-in has expired, when credentials were stored with `--allow-plaintext`
 (no refresh token is kept), or for a profile created before redisctl recorded which key it holds.
-`-o json` reports `revoked` so a script can tell the two apart.
+
+The key and the sign-in are revoked independently, and either can fail on its own — so one can be
+reported gone while the other is reported left behind. They are not interchangeable: a key is one
+credential, while a sign-in that survives can mint more. `-o json` reports `key_revoked` and
+`session_revoked` separately, plus `revoked` for "both", which is the one to branch on when a
+script just needs to know whether anything is outstanding.
 
 ## Who can use `cloud auth login`
 
