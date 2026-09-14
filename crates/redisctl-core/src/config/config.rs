@@ -804,18 +804,53 @@ fn default_cloud_url() -> String {
     "https://api.redislabs.com/v1".to_string()
 }
 
+/// Write `bytes` to `path` so that only the owner can read them.
+///
+/// Via a fresh sibling file rather than in place: `mode()` is ignored for a file that already
+/// exists, and tightening one afterwards leaves the secret briefly readable and does nothing
+/// about a descriptor already open on it. The rename is atomic within the directory and carries
+/// the new file's mode, so a reader either sees the old contents at the old permissions or the
+/// new contents at `0600`.
 #[cfg(unix)]
 fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    let mut f = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)?;
-    f.write_all(bytes)?;
-    f.set_permissions(std::fs::Permissions::from_mode(0o600))
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
+    let name = path.file_name().unwrap_or(path.as_os_str());
+    let tmp = match dir {
+        Some(dir) => dir.join(format!(
+            ".{}.{}",
+            name.to_string_lossy(),
+            std::process::id()
+        )),
+        None => PathBuf::from(format!(
+            ".{}.{}",
+            name.to_string_lossy(),
+            std::process::id()
+        )),
+    };
+
+    // `create_new` guarantees we are the creator, which is what makes `mode` apply.
+    let _ = fs::remove_file(&tmp);
+    let write = || -> std::io::Result<()> {
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()
+    };
+    if let Err(e) = write() {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    if let Err(e) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
 }
 
 #[cfg(not(unix))]

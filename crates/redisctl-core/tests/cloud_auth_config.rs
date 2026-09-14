@@ -251,4 +251,25 @@ fn owner_only_save_is_0600_and_tightens_an_existing_file() {
         mode, 0o600,
         "an existing loose file is tightened, got {mode:o}"
     );
+    // Written via a sibling and renamed, so nothing is left behind and the secret is never on
+    // disk at the looser permissions.
+    let strays: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+        .unwrap()
+        .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().to_string()))
+        .filter(|n| n != "config.toml")
+        .collect();
+    assert!(strays.is_empty(), "left temporary files behind: {strays:?}");
+
+    // A descriptor opened before the save keeps the *old* inode, so it cannot read the secret
+    // written afterwards — which is what the in-place variant could not promise.
+    let mut prior = std::fs::File::open(&path).unwrap();
+    let mut config = config.clone();
+    config.profiles.remove("qa");
+    config.save_to_path_owner_only(&path).unwrap();
+    let mut seen = String::new();
+    std::io::Read::read_to_string(&mut prior, &mut seen).unwrap();
+    assert!(
+        seen.contains("[profiles.qa]"),
+        "a pre-existing handle should still see the old contents"
+    );
 }
