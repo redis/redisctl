@@ -64,7 +64,7 @@ The connection string and password are written **only to the file** — never to
 ```json
 {
   "status": "ok",
-  "database": { "id": "9001", "name": "my-app", "region": "us-east-1", "plan": "free", "tls": true },
+  "database": { "id": "9001", "name": "my-app", "region": "us-east-1", "plan": "free", "tls": false },
   "credentials_written_to": "./.env",
   "credentials_variable": "REDIS_URL"
 }
@@ -74,13 +74,20 @@ The connection string and password are written **only to the file** — never to
 when one with that name already existed. The file receives the URL plus broken-out fields:
 
 ```dotenv
-REDIS_URL=rediss://default:••••••@host.example.com:12000
+REDIS_URL=redis://default:••••••@host.example.com:12000
 REDIS_HOST=host.example.com
 REDIS_PORT=12000
 REDIS_PASSWORD=••••••
 REDIS_USERNAME=default
-REDIS_TLS=true
+REDIS_TLS=false
 ```
+
+!!! warning "Free databases are not encrypted, and are reachable from anywhere"
+    Essentials free plans report `supportSsl: false`, so TLS cannot be enabled on them — the
+    connection string is `redis://`, not `rediss://`, and traffic is unencrypted. The database is
+    also created with `sourceIps: ["0.0.0.0/0"]`, so it accepts connections from any address, with
+    the password as the only protection. Fine for a local prototype; move to a paid plan for
+    anything else.
 
 It is created `0600` (unix) and auto-added to `.gitignore` inside a git repo. On failure the
 command emits a machine-branchable envelope and a mapped exit code — see

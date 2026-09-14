@@ -386,7 +386,7 @@ fn connection_parts(db: &FixedDatabase) -> QResult<ConnParts> {
             QuickDatabaseError::Other("database has no public endpoint yet".to_string())
         })?;
     let security = db.security.as_ref();
-    let tls = security.and_then(|s| s.enable_tls).unwrap_or(true);
+    let tls = security.and_then(|s| s.enable_tls).unwrap_or(false);
     let password = security
         .and_then(|s| s.password.as_deref())
         .ok_or_else(|| {
@@ -514,6 +514,31 @@ mod tests {
         assert_eq!(p.username, "default");
         assert!(p.tls);
         assert_eq!(p.url, "rediss://default:s3cr3t@host.example.com:12000");
+    }
+
+    /// An absent `enableTls` must not be read as TLS. Free Essentials plans report
+    /// `supportSsl: false`, so claiming `rediss://` would tell the user their traffic is
+    /// encrypted when it is not.
+    #[test]
+    fn connection_parts_does_not_assume_tls_when_the_field_is_absent() {
+        let db: FixedDatabase = serde_json::from_value(serde_json::json!({
+            "publicEndpoint": "host.example.com:12000",
+            "security": { "password": "s3cr3t" }
+        }))
+        .unwrap();
+        let p = connection_parts(&db).unwrap();
+        assert!(!p.tls);
+        assert_eq!(p.url, "redis://default:s3cr3t@host.example.com:12000");
+    }
+
+    #[test]
+    fn connection_parts_reports_tls_when_the_api_says_so() {
+        let db: FixedDatabase = serde_json::from_value(serde_json::json!({
+            "publicEndpoint": "host.example.com:12000",
+            "security": { "enableTls": false, "password": "s3cr3t" }
+        }))
+        .unwrap();
+        assert!(!connection_parts(&db).unwrap().tls);
     }
 
     #[test]

@@ -37,7 +37,7 @@ Step 2 prints only metadata:
 ```json
 {
   "status": "ok",
-  "database": { "id": "9001", "name": "my-app", "region": "us-east-1", "plan": "free", "tls": true },
+  "database": { "id": "9001", "name": "my-app", "region": "us-east-1", "plan": "free", "tls": false },
   "credentials_written_to": "./.env",
   "credentials_variable": "REDIS_URL"
 }
@@ -49,12 +49,12 @@ Step 2 prints only metadata:
 it expects:
 
 ```dotenv
-REDIS_URL=rediss://default:••••••@host.example.com:12000
+REDIS_URL=redis://default:••••••@host.example.com:12000
 REDIS_HOST=host.example.com
 REDIS_PORT=12000
 REDIS_PASSWORD=••••••
 REDIS_USERNAME=default
-REDIS_TLS=true
+REDIS_TLS=false
 ```
 
 The file is created `0600` (unix) and auto-added to `.gitignore` inside a git repo.
@@ -80,9 +80,13 @@ esac
 
 ## Security conventions (important)
 
+- **A free database has no TLS and is open to any address.** Essentials free plans report
+  `supportSsl: false`, so the URL is `redis://` and traffic is unencrypted; the database is created
+  with `sourceIps: ["0.0.0.0/0"]`. Say so if you tell the user their database is ready.
+
 - **Never read the credentials file back to display it, and never echo `REDIS_URL`/`REDIS_PASSWORD`.**
   Pass them through by reference (`-u "$REDIS_URL"`, `$REDIS_PASSWORD`), not by printing.
-- **Use placeholders in any docs, READMEs, or code you generate** (`rediss://…`, `${REDIS_URL}`),
+- **Use placeholders in any docs, READMEs, or code you generate** (`redis://…`, `${REDIS_URL}`),
   never the real value.
 - **Verify connectivity with a ping**, not by importing a client library that echoes the URL.
 - **Don't fetch credentials via `redisctl cloud database get`** — it can print the password by
