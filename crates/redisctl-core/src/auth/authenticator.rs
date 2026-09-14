@@ -362,7 +362,7 @@ impl CloudAuthenticator {
 
 /// How many TOTP codes a single login will accept before giving up. SM enforces its own quota
 /// (`mfa-quota-exceeded`); this only bounds our prompting.
-const MFA_MAX_ATTEMPTS: u32 = 3;
+pub const MFA_MAX_ATTEMPTS: u32 = 3;
 
 /// Choose the account matching `current_account_id` (the logged-in user context); fall back to
 /// the first account only when the id is absent or not present in the list.

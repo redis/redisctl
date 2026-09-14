@@ -19,6 +19,8 @@ pub enum DeliveryError {
         #[source]
         source: std::io::Error,
     },
+    #[error("refusing to write credentials to {path}: {reason}")]
+    Refused { path: String, reason: String },
 }
 
 impl DeliveryError {
@@ -26,6 +28,13 @@ impl DeliveryError {
         Self::Io {
             path: path.display().to_string(),
             source,
+        }
+    }
+
+    fn refused(path: &Path, reason: &str) -> Self {
+        Self::Refused {
+            path: path.display().to_string(),
+            reason: reason.to_string(),
         }
     }
 }
@@ -63,6 +72,17 @@ pub fn deliver(path: &Path, variable: &str, value: &str) -> Result<DeliveryOutco
 /// `vars` must be non-empty; the first pair is treated as the primary variable for reporting.
 pub fn deliver_vars(path: &Path, vars: &[(&str, &str)]) -> Result<DeliveryOutcome, DeliveryError> {
     let primary = vars.first().map(|(k, _)| k.to_string()).unwrap_or_default();
+
+    if fs::symlink_metadata(path)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        return Err(DeliveryError::refused(
+            path,
+            "the path is a symlink; writing credentials through it could target a file you did \
+             not choose",
+        ));
+    }
 
     if path.exists() {
         let original = fs::read_to_string(path).map_err(|e| DeliveryError::io(path, e))?;
@@ -157,18 +177,24 @@ fn upsert_vars(original: &str, vars: &[(&str, &str)]) -> (String, bool) {
     let mut remaining: Vec<(&str, &str)> = vars.to_vec();
     let mut replaced_any = false;
     let mut out_lines: Vec<String> = Vec::new();
+    let mut written: Vec<&str> = Vec::new();
 
     for line in original.lines() {
         let trimmed = line.trim_start();
-        if let Some(pos) = remaining
+        match vars
             .iter()
-            .position(|(k, _)| trimmed.starts_with(&format!("{k}=")))
+            .find(|(k, _)| trimmed.starts_with(&format!("{k}=")))
         {
-            let (k, v) = remaining.remove(pos);
-            out_lines.push(format!("{k}={v}"));
-            replaced_any = true;
-        } else {
-            out_lines.push(line.to_string());
+            Some((k, v)) => {
+                remaining.retain(|(rk, _)| rk != k);
+                replaced_any = true;
+                if written.contains(k) {
+                    continue;
+                }
+                written.push(k);
+                out_lines.push(format!("{k}={v}"));
+            }
+            None => out_lines.push(line.to_string()),
         }
     }
 
@@ -403,5 +429,36 @@ mod tests {
         assert!(!changed);
         let gi = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
         assert_eq!(gi.matches(".env").count(), 1);
+    }
+
+    /// A duplicate key must not survive the rewrite: dotenv loaders honour the last occurrence,
+    /// so a leftover second line would silently win with the stale value.
+    #[test]
+    fn upsert_replaces_every_occurrence_of_a_key() {
+        let original = "REDIS_URL=old-one\nOTHER=keep\nREDIS_URL=old-two\n";
+        let (out, replaced) = upsert_vars(original, &[("REDIS_URL", "new")]);
+        assert!(replaced);
+        assert_eq!(out.matches("REDIS_URL=").count(), 1, "got {out:?}");
+        assert!(out.contains("REDIS_URL=new"));
+        assert!(!out.contains("old-two"));
+        assert!(out.contains("OTHER=keep"), "unrelated lines are preserved");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deliver_refuses_a_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("real-file");
+        std::fs::write(&target, "SECRET=already-here\n").unwrap();
+        let link = dir.path().join("link.env");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let err = deliver_vars(&link, &[("REDIS_URL", "redis://x")]).unwrap_err();
+        assert!(matches!(err, DeliveryError::Refused { .. }), "got {err:?}");
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "SECRET=already-here\n",
+            "the symlink target must be untouched"
+        );
     }
 }
