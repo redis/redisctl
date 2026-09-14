@@ -179,6 +179,38 @@ impl CloudAuthenticator {
         super::oidc::refresh(&self.issuer, &self.client_id, refresh_token).await
     }
 
+    /// Invalidate a stored refresh token at the identity provider.
+    pub async fn revoke_refresh_token(&self, refresh_token: &str) -> Result<(), AuthError> {
+        super::oidc::revoke_refresh_token(&self.issuer, &self.client_id, refresh_token).await
+    }
+
+    /// Revoke a minted CAPI key by name, using a session established from `tokens`.
+    ///
+    /// Returns whether a key of that name was found. Deleting is scoped to the session's account,
+    /// so a key on a different account is simply not visible here.
+    pub async fn revoke_capi_key(
+        &self,
+        tokens: &TokenSet,
+        key_name: &str,
+    ) -> Result<bool, AuthError> {
+        let mut sm = SmApiClient::with_http_client(
+            self.sm_api_url.clone(),
+            self.http.clone(),
+            LoginFlow::Switch,
+        );
+        sm.login(&tokens.access_token, None).await?;
+        let Some((id, _)) = sm
+            .fetch_capi_key_entries()
+            .await?
+            .into_iter()
+            .find(|(_, name)| name == key_name)
+        else {
+            return Ok(false);
+        };
+        sm.delete_capi_key(id).await?;
+        Ok(true)
+    }
+
     /// Given tokens from a flow, run the SM exchange and mint a CAPI key named `key_name`.
     ///
     /// Propagates [`AuthError::MfaRequired`] if the account is MFA-protected; use

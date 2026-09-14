@@ -10,7 +10,7 @@ use oauth2::basic::{BasicClient, BasicRequestTokenError, BasicTokenResponse};
 use oauth2::{
     AuthType, AuthUrl, ClientId, DeviceAuthorizationUrl, DeviceCodeErrorResponse,
     DeviceCodeErrorResponseType, EndpointNotSet, EndpointSet, RefreshToken, RequestTokenError,
-    TokenResponse, TokenUrl,
+    RevocationUrl, StandardRevocableToken, TokenResponse, TokenUrl,
 };
 use thiserror::Error;
 use url::Url;
@@ -115,7 +115,7 @@ pub enum AuthError {
 /// A `BasicClient` with the Okta authorize / token / device-authorization endpoints set. The
 /// remaining typestate slots (introspection, revocation) stay unset — we never call those.
 pub(crate) type OktaClient =
-    BasicClient<EndpointSet, EndpointSet, EndpointNotSet, EndpointNotSet, EndpointSet>;
+    BasicClient<EndpointSet, EndpointSet, EndpointNotSet, EndpointSet, EndpointSet>;
 
 /// Build `{issuer}/{path}`, tolerant of a trailing slash on the issuer.
 pub(crate) fn endpoint(issuer: &Url, path: &str) -> String {
@@ -139,10 +139,13 @@ pub(crate) fn okta_client(issuer: &Url, client_id: &str) -> Result<OktaClient, A
         .map_err(|e| AuthError::Protocol(format!("invalid token URL: {e}")))?;
     let device = DeviceAuthorizationUrl::new(endpoint(issuer, "v1/device/authorize"))
         .map_err(|e| AuthError::Protocol(format!("invalid device-authorization URL: {e}")))?;
+    let revocation = RevocationUrl::new(endpoint(issuer, "v1/revoke"))
+        .map_err(|e| AuthError::Protocol(format!("invalid revocation URL: {e}")))?;
     Ok(BasicClient::new(ClientId::new(client_id.to_string()))
         .set_auth_uri(auth)
         .set_token_uri(token)
         .set_device_authorization_url(device)
+        .set_revocation_url(revocation)
         .set_auth_type(AuthType::RequestBody))
 }
 
@@ -162,6 +165,28 @@ pub(crate) fn default_http_client() -> reqwest::Client {
         .user_agent(crate::USER_AGENT)
         .build()
         .expect("building the reqwest client should not fail")
+}
+
+/// Ask the IdP to invalidate a refresh token (`{issuer}/v1/revoke`, RFC 7009).
+///
+/// Revocation is defined to succeed for an already-invalid token, so a failure here means the
+/// request itself did not get through.
+pub(crate) async fn revoke_refresh_token(
+    issuer: &Url,
+    client_id: &str,
+    refresh_token: &str,
+) -> Result<(), AuthError> {
+    let client = okta_client(issuer, client_id)?;
+    let http = oauth_http_client()?;
+    client
+        .revoke_token(StandardRevocableToken::RefreshToken(RefreshToken::new(
+            refresh_token.to_string(),
+        )))
+        .map_err(|e| AuthError::Protocol(format!("could not build the revocation request: {e}")))?
+        .request_async(&http)
+        .await
+        .map_err(|e| AuthError::Protocol(format!("token revocation failed: {e}")))?;
+    Ok(())
 }
 
 /// Convert a successful [`oauth2`] token response into a [`TokenSet`].

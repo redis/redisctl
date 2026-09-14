@@ -246,12 +246,32 @@ redisctl cloud auth status --wait --timeout 300
 redisctl cloud auth logout
 ```
 
-Removes the locally stored credentials for the profile (keyring entries and the profile), while
-preserving the `[cloud_auth.<profile>]` login endpoints so you can log in again.
+Revokes the API key this profile holds and the stored sign-in, then removes the local credentials
+(keyring entries and the profile). The `[cloud_auth.<profile>]` login endpoints are preserved so
+you can log in again.
 
-!!! note
-    The minted API key still exists in the Redis Cloud console until you revoke it there —
-    server-side revocation on logout is a planned follow-up.
+```
+✓ Logged out of profile 'cloud'. Revoked the API key redisctl-cli-1 and the stored sign-in.
+```
+
+Revocation needs the stored sign-in to authenticate with, so it cannot always happen. Logout still
+completes locally — leaving secrets on disk because the network was down would be worse — and says
+what was left behind:
+
+```
+✓ Logged out of profile 'cloud' locally.
+  note: the stored sign-in is no longer valid, so the key redisctl-cli-1 could not be revoked.
+  Revoke the key in the Redis Cloud console (Access Management > API Keys).
+```
+
+That happens when the sign-in has expired, when credentials were stored with `--allow-plaintext`
+(no refresh token is kept), or for a profile created before redisctl recorded which key it holds.
+
+The key and the sign-in are revoked independently, and either can fail on its own — so one can be
+reported gone while the other is reported left behind. They are not interchangeable: a key is one
+credential, while a sign-in that survives can mint more. `-o json` reports `key_revoked` and
+`session_revoked` separately, plus `revoked` for "both", which is the one to branch on when a
+script just needs to know whether anything is outstanding.
 
 ## Who can use `cloud auth login`
 

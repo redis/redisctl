@@ -78,6 +78,10 @@ pub struct CloudAuthConfig {
     /// existed, or set up by hand.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_id: Option<u64>,
+    /// Name of the `redisctl-*` CAPI key this profile holds, so `logout` can revoke that one
+    /// rather than guessing. Absent for profiles written before this existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capi_key_name: Option<String>,
 }
 
 fn default_prod_capi_url() -> String {
@@ -95,6 +99,7 @@ impl CloudAuthConfig {
             sm_api_url: "https://cloud.redis.io/api/v1".to_string(),
             capi_url: default_prod_capi_url(),
             account_id: None,
+            capi_key_name: None,
         }
     }
 
@@ -705,6 +710,7 @@ impl Config {
             // Remember the account this key is for, so a later switch can say which one the
             // profile is on without asking the server (which would report the user's default).
             auth.account_id = creds.account_id;
+            auth.capi_key_name = Some(creds.capi_key_name.clone());
             self.cloud_auth.insert(profile_name.to_string(), auth);
         }
         // Only a login bootstraps a profile; re-pointing the default is not something a caller
