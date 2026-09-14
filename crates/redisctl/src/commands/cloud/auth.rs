@@ -1011,11 +1011,19 @@ fn parse_url(value: &str, field: &str) -> CliResult<Url> {
         |why: &str| RedisCtlError::Configuration(format!("invalid {field} ({value:?}): {why}"));
     let url = Url::parse(value)
         .map_err(|e| RedisCtlError::Configuration(format!("invalid {field} ({value:?}): {e}")))?;
-    let host = url.host_str().unwrap_or_default();
-    if host.is_empty() {
+    let Some(host) = url.host() else {
+        return Err(reject("no host"));
+    };
+    if matches!(host, url::Host::Domain("")) {
         return Err(reject("no host"));
     }
-    let loopback = matches!(host, "localhost" | "127.0.0.1" | "::1");
+    // Matched on the parsed host: `host_str` brackets an IPv6 literal, so `"::1"` never compares
+    // equal to it.
+    let loopback = match host {
+        url::Host::Domain(name) => name == "localhost",
+        url::Host::Ipv4(ip) => ip.is_loopback(),
+        url::Host::Ipv6(ip) => ip.is_loopback(),
+    };
     if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
         return Err(reject(
             "must use https (http is allowed only for localhost)",
@@ -1156,11 +1164,16 @@ mod tests {
             "https://app.example.com/api/v1",
             "http://127.0.0.1:8899/oauth2/default",
             "http://localhost:1234/api/v1",
+            // `host_str` renders this as "[::1]", so a string comparison misses it.
+            "http://[::1]:1234/api/v1",
         ] {
             assert!(parse_url(ok, "f").is_ok(), "{ok} should be accepted");
         }
         for bad in [
             "http://auth.redis.com/oauth2/default",
+            // Not loopback: only ::1 and 127/8 are exempt, not any IPv6 literal.
+            "http://[2606:4700::1111]/api/v1",
+            "http://[fe80::1]/api/v1",
             "https://user:pass@auth.redis.com/",
             "https://user@auth.redis.com/",
             "ftp://auth.redis.com/",
