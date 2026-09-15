@@ -237,6 +237,7 @@ impl CloudAuthenticator {
     ) -> Result<MintedCredentials, AuthError> {
         self.complete_login_with_mfa(tokens, key_name, flow, account, None, |_, _| Ok(None))
             .await
+            .map(|(creds, _)| creds)
     }
 
     /// As [`CloudAuthenticator::complete_login`], but `mfa_prompt` is consulted when SM challenges
@@ -254,7 +255,7 @@ impl CloudAuthenticator {
         account: AccountChoice,
         superseded: Option<SupersededKey>,
         mut mfa_prompt: F,
-    ) -> Result<MintedCredentials, AuthError>
+    ) -> Result<(MintedCredentials, Option<SupersededRevoker>), AuthError>
     where
         F: FnMut(&[String], u32) -> Result<Option<String>, AuthError>,
     {
@@ -304,10 +305,6 @@ impl CloudAuthenticator {
             AuthError::Protocol("account has no CAPI access key after enabling CAPI".into())
         })?;
         let minted = sm.mint_capi_key(key_name, user.user_account()?).await?;
-        let superseded_revoked = match superseded {
-            Some(previous) => Some(revoke_superseded(&sm, &previous).await),
-            None => None,
-        };
         // Best-effort: count our keys so the CLI can warn about sprawl (D5). Never fail login
         // over this — a listing error just means no warning.
         let redisctl_key_count = sm
@@ -315,20 +312,24 @@ impl CloudAuthenticator {
             .await
             .map(|keys| keys.iter().filter(|n| n.starts_with("redisctl-")).count())
             .unwrap_or(0);
-        Ok(MintedCredentials {
-            account_id,
-            email: user.email,
-            api_key,
-            api_secret: minted.secret_key,
-            api_url: self.capi_url.clone(),
-            refresh_token: tokens.refresh_token.clone(),
-            capi_key_name: minted.name,
-            redisctl_key_count,
-            account_name,
-            capi_newly_enabled,
-            superseded_revoked,
-            accounts: all_accounts,
-        })
+        Ok((
+            MintedCredentials {
+                account_id,
+                email: user.email,
+                api_key,
+                api_secret: minted.secret_key,
+                api_url: self.capi_url.clone(),
+                refresh_token: tokens.refresh_token.clone(),
+                capi_key_name: minted.name,
+                redisctl_key_count,
+                account_name,
+                capi_newly_enabled,
+                // Nothing has been revoked yet; the caller records what the revoker reports.
+                superseded_revoked: None,
+                accounts: all_accounts,
+            },
+            superseded.map(|previous| SupersededRevoker { sm, previous }),
+        ))
     }
 
     /// Point the session at `want` before anything account-scoped happens.
@@ -437,6 +438,34 @@ fn login_accounts(accounts: &[SmAccount]) -> Vec<LoginAccount> {
 
 /// Revoke `previous` using the current session, which has to be pointed at its account first
 /// because the delete is scoped to the session's account.
+/// Revokes the key a freshly minted one replaces, using the session that minted it.
+///
+/// Handed back rather than run during the mint so a caller can store the new credentials first:
+/// revoking before they are safely stored can leave a profile with the old key dead and the new
+/// secret lost, since Redis Cloud returns a key's secret only when it is created.
+pub struct SupersededRevoker {
+    sm: SmApiClient,
+    previous: SupersededKey,
+}
+
+impl SupersededRevoker {
+    /// Which key this would revoke, for a caller that wants to report it.
+    pub fn key_name(&self) -> &str {
+        &self.previous.key_name
+    }
+
+    /// The account holding that key. A caller comparing this with the account it just minted on
+    /// can tell whether the revoke will remove a key from that same account.
+    pub fn account_id(&self) -> u64 {
+        self.previous.account_id
+    }
+
+    /// Best-effort: `false` means the old key may still be live, never that the new one is bad.
+    pub async fn revoke(self) -> bool {
+        revoke_superseded(&self.sm, &self.previous).await
+    }
+}
+
 async fn revoke_superseded(sm: &SmApiClient, previous: &SupersededKey) -> bool {
     if sm.set_current_account(previous.account_id).await.is_err() {
         return false;
@@ -966,6 +995,70 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(creds.account_id, Some(111));
+    }
+
+    /// The mint must not revoke anything: the caller stores the new credentials first, and only
+    /// then runs the revoker. No DELETE is mounted here, so revoking during the mint would 404.
+    #[tokio::test]
+    async fn the_mint_defers_revocation_to_the_caller() {
+        let server = MockServer::start().await;
+        common_login_mocks(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/users/me"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"id": "1", "current_account_id": "111", "email": "u@e.com"}),
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/accounts"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "accounts": [{"id": 111, "name": "One", "api_access_key": "KEY-111"}]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/accounts/cloud-api/cloudApiKeys"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "cloudApiKeys": [{"id": 7, "name": "redisctl-cli-1"}]
+            })))
+            .mount(&server)
+            .await;
+
+        let (creds, revoker) = authenticator(&server)
+            .complete_login_with_mfa(
+                &tokens(),
+                "redisctl-cli-2",
+                LoginFlow::Loopback,
+                AccountChoice::Current,
+                Some(SupersededKey {
+                    account_id: 111,
+                    key_name: "redisctl-cli-1".to_string(),
+                }),
+                |_, _| Ok(None),
+            )
+            .await
+            .unwrap();
+        // Credentials are complete and usable, and nothing has been taken away yet.
+        assert!(!creds.api_secret.is_empty());
+        assert_eq!(creds.superseded_revoked, None);
+        let revoker = revoker.expect("a superseded key was given, so a revoker comes back");
+        assert_eq!(revoker.key_name(), "redisctl-cli-1");
+
+        // Firing it is what issues the delete. It points the session at the key's account
+        // first, which is why that is mounted only now too.
+        Mock::given(method("POST"))
+            .and(path("/accounts/setcurrent/111"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/accounts/cloud-api/cloudApiKeys/7"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(revoker.revoke().await);
     }
 
     #[tokio::test]

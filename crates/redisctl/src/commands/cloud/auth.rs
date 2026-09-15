@@ -560,18 +560,8 @@ async fn complete_and_persist(
     auth_cfg: CloudAuthConfig,
     run: LoginRun,
 ) -> CliResult<MintedCredentials> {
-    let creds = authenticator
-        .complete_login_with_mfa(
-            tokens,
-            &default_key_name(),
-            run.flow,
-            run.account,
-            run.superseded,
-            prompt_mfa_code,
-        )
-        .await
-        .map_err(auth_err)?;
-
+    // Resolved before anything is minted: on a machine with no keyring this refuses, and
+    // refusing after a mint would burn a key whose secret is only returned at creation.
     let store = if run.allow_plaintext {
         CredentialStore::plaintext()
     } else {
@@ -587,6 +577,19 @@ async fn complete_and_persist(
         }
         store
     };
+
+    let (mut creds, revoker) = authenticator
+        .complete_login_with_mfa(
+            tokens,
+            &default_key_name(),
+            run.flow,
+            run.account,
+            run.superseded,
+            prompt_mfa_code,
+        )
+        .await
+        .map_err(auth_err)?;
+
     let mut config = conn_mgr.config.clone();
     // On the keyring path, a store failure means the OS secret service is unavailable (D4):
     // surface a distinct `keyring_unavailable` (exit 2) pointing at `--allow-plaintext`.
@@ -610,6 +613,19 @@ async fn complete_and_persist(
             }
         })?;
     save_config_for_store(conn_mgr, &config, &store)?;
+
+    // Only now: the replacement is stored, so revoking what it replaced cannot leave this
+    // profile without a working key.
+    if let Some(revoker) = revoker {
+        let same_account = Some(revoker.account_id()) == creds.account_id;
+        let revoked = revoker.revoke().await;
+        creds.superseded_revoked = Some(revoked);
+        // The count was taken while minting, before this revoke, so a key just removed from the
+        // same account is still included in it.
+        if revoked && same_account {
+            creds.redisctl_key_count = creds.redisctl_key_count.saturating_sub(1);
+        }
+    }
     Ok(creds)
 }
 
