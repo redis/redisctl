@@ -5036,6 +5036,9 @@ async fn cloud_quick_database_response_carries_no_secret() {
 
     let dir = tempfile::tempdir().unwrap();
     let env_path = dir.path().join(".env");
+    // Credentials may only be written inside the working directory or a directory named here.
+    // SAFETY: no other test reads this variable.
+    unsafe { std::env::set_var("REDISCTL_MCP_OUTPUT_DIRS", dir.path()) };
 
     // write-tier tool → full-policy state so the write guard passes.
     let state = full_policy_state(server.client());

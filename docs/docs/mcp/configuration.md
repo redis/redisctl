@@ -26,6 +26,19 @@ This page covers all three, with emphasis on `--tools` for controlling the tool 
 | `--max-concurrent` | -- | -- | `10` | Maximum concurrent requests |
 | `--request-timeout-secs` | -- | -- | `30` | Request timeout in seconds (HTTP transport only) |
 | `--log-level` | -- | `RUST_LOG` | `info` | Log level |
+| -- | -- | `REDISCTL_MCP_OUTPUT_DIRS` | working directory | Colon-separated directories `cloud_quick_database` may write credentials into |
+
+!!! note "Where credentials may be written"
+    `cloud_quick_database` writes a connection string to a file, so its destination is
+    constrained: the name has to be an env file (`.env`, `.env.local`, `something.env`) **and**
+    the directory has to be the server's working directory or one named in
+    `REDISCTL_MCP_OUTPUT_DIRS`. The destination is resolved through symlinks before the check, so
+    a link in any part of the path cannot carry the write outside a permitted directory.
+
+    Absolute paths are still accepted — the server's working directory is often not the caller's
+    project — which is why the directory list exists. The CLI's
+    `cloud workflow quick-database` is unaffected: it takes its path from whoever is at the
+    terminal, not from a model.
 
 !!! warning "HTTP transport is preview and does not provide built-in authentication"
     Keep the default loopback bind unless the server is protected by a trusted
