@@ -384,10 +384,21 @@ sm_api_url     = "https://<sm-api-host>/api/v1"
 capi_url       = "https://api.redislabs.com/v1"
 ```
 
-All three endpoints must use `https` and must not embed credentials in the URL — a config that names
-the real identity provider while pointing `sm_api_url` elsewhere would otherwise receive a live
-access token after an ordinary-looking login. `http` is accepted only for `localhost`, `127.0.0.1`
-and `::1`, where there is no network to intercept.
+All three endpoints must use `https` and must not embed credentials in the URL. `http` is accepted
+only for `localhost`, `127.0.0.1` and `::1`, where there is no network to intercept.
+
+They must also be **Redis endpoints** — a host at or under `redis.com`, `redislabs.com` or
+`redis.io`. Transport security only makes the connection private; it says nothing about who is at
+the other end, and these fields decide where an access token is sent. Without the check, a config
+naming the real identity provider while pointing `sm_api_url` at an attacker's HTTPS host would
+receive a live token after an ordinary-looking login. Matching is on a label boundary, so
+`redis.com.example.net` and `notredis.com` do not qualify.
+
+To point at something else — a local mock, or an environment that is not on those domains — set
+`REDISCTL_ALLOW_UNTRUSTED_ENDPOINTS=1`. It is an environment variable rather than a config field on
+purpose: the risk being guarded against is a config file you did not write, and a setting inside
+that file could switch off the check that exists to catch it. Login warns on stderr whenever it is
+in effect, and it relaxes only the host check — `https` is still required off loopback.
 
 ## Error handling (agents)
 
