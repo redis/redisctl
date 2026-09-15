@@ -128,7 +128,7 @@ never have to look an account id up:
 ✓ Signed in as user@example.com. Credentials saved to profile 'cloud'.
   note: the key is for Acme (#316941) — 1 of 3 accounts you belong to:
     Acme (#316941) · Contoso (#481022) · Initech (#502113)
-  To use another: redisctl --profile cloud cloud auth login --account <id>
+  To use another: redisctl --profile cloud cloud auth switch <id>
 ```
 
 Use `--account` to pick one explicitly, without touching the console:
@@ -148,7 +148,18 @@ redisctl --profile contoso cloud auth login --account 481022
 ```
 
 Re-using one profile is fine too, but each login replaces that profile's key, so only the most
-recent account stays usable.
+recent account stays usable. The key it replaces is revoked, on whichever account held it, so
+signing in repeatedly does not leave a trail of live keys behind — the same behaviour as
+[`switch`](#switch-accounts) and [`logout`](#log-out). The new key is minted first, so a failed
+revocation never costs you a working key; it is reported instead, pointing at the console:
+
+```
+  note: could not revoke the key this login replaced — revoke it in the Redis Cloud console
+  (Access Management > API Keys).
+```
+
+`-o json` reports `superseded_revoked`: `true` when the replaced key was revoked, `false` when that
+failed, and `null` when the profile had no earlier key.
 
 !!! note "A new profile name defaults to production"
     A profile with no `[cloud_auth.<name>]` section falls back to the built-in **production**
@@ -181,6 +192,37 @@ the sign-in happens at the identity provider, which never held that password. Si
 address** and accept the prompt to link the account; afterwards `cloud auth login` works normally.
 
 Until that's done, login exits `2` with `migration_required`.
+
+## List Accounts
+
+```bash
+redisctl cloud auth accounts
+```
+
+Lists the accounts this sign-in can reach, with their ids, naming the signed-in user and marking
+the account this profile's key belongs to:
+
+```
+Accounts user@example.com belongs to:
+  Acme (#316941)  (this profile)
+  Contoso (#481022)
+
+To use another: redisctl --profile cloud cloud auth switch <id>
+```
+
+The email matters when a profile could hold either of two sign-ins: account membership is per
+**user**, so the same account can look different depending on who signed in. `-o json` reports it
+as `email`.
+
+It mints nothing and switches nothing — it exists so an id can be looked up without a login. (It
+does store a refreshed sign-in token when the identity provider rotates them, so the next command
+is not left holding the one this call spent.) The
+sign-in stored at login is reused, so no browser opens, but it does sign in to Redis Cloud: on an
+account with MFA it prompts for a code, and exits `2` with `mfa_required` when there is no terminal
+to prompt on.
+
+`cloud auth status` deliberately does **not** list accounts. It is an offline check — no network,
+no sign-in, and so no MFA prompt — which is what makes it safe for an agent to call freely.
 
 ## Switch Accounts
 
