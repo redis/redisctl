@@ -630,6 +630,12 @@ fn emit_signed_in(
             "  To use another: redisctl --profile {profile_name} cloud auth login --account <id>"
         );
     }
+    if creds.capi_newly_enabled {
+        eprintln!(
+            "  note: programmatic (API) access was switched on for this account — it was off \
+             until now, and this applies account-wide, not just to this key."
+        );
+    }
     warn_on_key_sprawl(creds);
     let key_count = creds.redisctl_key_count;
     print_formatted_output(
@@ -646,6 +652,7 @@ fn emit_signed_in(
             })).collect::<Vec<_>>(),
             "email": creds.email,
             "redisctl_key_count": key_count,
+            "capi_newly_enabled": creds.capi_newly_enabled,
         }),
         output,
     )

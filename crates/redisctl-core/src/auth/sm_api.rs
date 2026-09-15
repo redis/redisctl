@@ -471,7 +471,9 @@ impl SmApiClient {
 
     /// `POST /accounts/cloud-api/cloudApiAccessKey` — enable programmatic access. Idempotent:
     /// a `400 account_api_key_already_exists` is treated as success.
-    pub async fn ensure_capi_enabled(&self) -> Result<(), AuthError> {
+    /// Returns whether this call is what switched programmatic access on, so a caller can say so
+    /// rather than enabling an account-wide setting silently.
+    pub async fn ensure_capi_enabled(&self) -> Result<bool, AuthError> {
         let resp = self
             .authed_post_json(
                 "accounts/cloud-api/cloudApiAccessKey",
@@ -479,12 +481,12 @@ impl SmApiClient {
             )
             .await?;
         if resp.status().is_success() {
-            return Ok(());
+            return Ok(true);
         }
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         if body.contains("account_api_key_already_exists") {
-            return Ok(());
+            return Ok(false);
         }
         // The caller's role does not carry the CAPI permission. Nothing the CLI can do, but
         // someone who holds the role can enable it once — after which the call above is a no-op.

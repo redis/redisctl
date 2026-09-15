@@ -176,11 +176,22 @@ impl CredentialStore {
                 let key = value.trim_start_matches(KEYRING_PREFIX);
                 let entry = keyring::Entry::new(SERVICE_NAME, key)
                     .map_err(|e| ConfigError::KeyringError(e.to_string()))?;
-                entry.get_password().map_err(|e| {
-                    ConfigError::KeyringError(format!(
-                        "Failed to retrieve credential '{}' from keyring: {}",
-                        key, e
-                    ))
+                entry.get_password().map_err(|e| match e {
+                    // The entry is gone rather than unreadable. On Linux the backing store is an
+                    // in-memory kernel keyring, so this is expected after a reboot and the config
+                    // itself is fine — say so, because the generic wording sends people to check
+                    // their config file syntax.
+                    keyring::Error::NoEntry => ConfigError::KeyringError(format!(
+                        "credential '{key}' is no longer in the OS keyring, so any profile \
+                         referencing it cannot be used until it is stored again. On Linux the \
+                         keyring does not survive a reboot. Store it again with \
+                         `redisctl profile set <name> --type <cloud|enterprise>`, or for a Redis \
+                         Cloud profile sign in again with \
+                         `redisctl --profile <name> cloud auth login`."
+                    )),
+                    other => ConfigError::KeyringError(format!(
+                        "Failed to retrieve credential '{key}' from keyring: {other}"
+                    )),
                 })
             }
             #[cfg(not(feature = "secure-storage"))]
