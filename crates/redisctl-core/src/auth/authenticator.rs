@@ -1277,6 +1277,126 @@ mod tests {
         assert!(revoker.unwrap().revoke().await);
     }
 
+    /// Revocation deletes the key the profile recorded and nothing else. The account can hold
+    /// other `redisctl-*` keys — a second machine, a second profile — and they belong to whoever
+    /// minted them.
+    #[tokio::test]
+    async fn revocation_targets_the_recorded_key_alone() {
+        let server = MockServer::start().await;
+        common_login_mocks(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/users/me"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"id": "1", "current_account_id": "111", "email": "u@e.com"}),
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/accounts"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "accounts": [{"id": 111, "name": "One", "api_access_key": "KEY-111"}]
+            })))
+            .mount(&server)
+            .await;
+        // Names that sort around the recorded one, and one that only differs by suffix.
+        Mock::given(method("GET"))
+            .and(path("/accounts/cloud-api/cloudApiKeys"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "cloudApiKeys": [
+                    {"id": 1, "name": "redisctl-cli-0"},
+                    {"id": 2, "name": "redisctl-cli-11"},
+                    {"id": 3, "name": "redisctl-cli-1"},
+                    {"id": 4, "name": "someone-elses-key"},
+                ]
+            })))
+            .mount(&server)
+            .await;
+        // Only id 3 may be deleted. Any other id 404s, which makes the revoke report false.
+        Mock::given(method("DELETE"))
+            .and(path("/accounts/cloud-api/cloudApiKeys/3"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .named("delete the recorded key, by exact name")
+            .mount(&server)
+            .await;
+
+        let (_, revoker) = authenticator(&server)
+            .complete_login_with_mfa(
+                &tokens(),
+                "redisctl-cli-2",
+                LoginFlow::Loopback,
+                AccountChoice::Current,
+                Some(SupersededKey {
+                    account_id: 111,
+                    key_name: "redisctl-cli-1".to_string(),
+                }),
+                |_, _| Ok(None),
+            )
+            .await
+            .unwrap();
+        assert!(revoker.unwrap().revoke().await);
+    }
+
+    /// A recorded key that is not on the account deletes nothing. Reporting `false` and leaving
+    /// the console to the user is the right outcome: the alternative is guessing which key was
+    /// meant.
+    #[tokio::test]
+    async fn revocation_deletes_nothing_when_the_recorded_key_is_gone() {
+        let server = MockServer::start().await;
+        common_login_mocks(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/users/me"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"id": "1", "current_account_id": "111", "email": "u@e.com"}),
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/accounts"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "accounts": [{"id": 111, "name": "One", "api_access_key": "KEY-111"}]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/accounts/cloud-api/cloudApiKeys"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "cloudApiKeys": [{"id": 9, "name": "a-key-someone-else-minted"}]
+            })))
+            .mount(&server)
+            .await;
+        // No DELETE is mounted: issuing one for any id would 404 and fail the assertion below
+        // by a different route, but the point is that none is issued at all.
+
+        let (_, revoker) = authenticator(&server)
+            .complete_login_with_mfa(
+                &tokens(),
+                "redisctl-cli-2",
+                LoginFlow::Loopback,
+                AccountChoice::Current,
+                Some(SupersededKey {
+                    account_id: 111,
+                    key_name: "redisctl-cli-1".to_string(),
+                }),
+                |_, _| Ok(None),
+            )
+            .await
+            .unwrap();
+        assert!(
+            !revoker.unwrap().revoke().await,
+            "a key that is not there cannot be reported as revoked"
+        );
+        assert!(
+            !server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .any(|r| r.method == wiremock::http::Method::DELETE),
+            "no delete should be issued when the recorded key is absent"
+        );
+    }
+
     #[tokio::test]
     async fn complete_login_errors_when_login_rejected() {
         let server = MockServer::start().await;

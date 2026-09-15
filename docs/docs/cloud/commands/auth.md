@@ -342,6 +342,44 @@ credential, while a sign-in that survives can mint more. `-o json` reports `key_
 `session_revoked` separately, plus `revoked` for "both", which is the one to branch on when a
 script just needs to know whether anything is outstanding.
 
+## When a key is left behind
+
+Every path that replaces a key revokes the one it replaces — `login`, `switch` and `logout` — and
+each is best-effort by design: a revocation that cannot reach Redis Cloud must not fail the command
+that needed to succeed. So there is one outcome to know how to clean up after.
+
+**What is revoked, and where.** A profile records the account id and the key name it holds. The
+revocation points the session at *that* account and deletes *that* name — not the account you
+happen to be on, and not any other `redisctl-*` key the account holds, which may belong to another
+machine or another profile. If the recorded name is not on the account, nothing is deleted and the
+command says so rather than guessing.
+
+**What a failure looks like.** The key name is always named, so there is something to search for:
+
+```
+  note: could not revoke the key redisctl-cli-1712... — revoke it in the Redis Cloud console
+  (Access Management > API Keys).
+```
+
+`-o json` carries the same outcome as `superseded_revoked` (`login`, `switch`) or `key_revoked` and
+`session_revoked` (`logout`). For the reason it failed, re-run with `-v`: the account it could not
+reach, the keys the account does hold, or the refusal itself is logged.
+
+**Cleaning up.** Delete the named key in the console under **Access Management > API Keys**. To
+find keys nothing refers to any more, the account's own audit trail lists every mint and every
+revocation with the acting user's email:
+
+```bash
+redisctl cloud account get-system-logs -o json | jq '.[] | select(.type | test("ApiSecretKey"))'
+```
+
+That is also the check worth running if you ever want to know whether a `redisctl-*` key appeared
+when nobody was at the keyboard.
+
+**A storage failure leaves nothing to clean up.** The new key is minted, stored, and only then is
+the old one revoked. If storing fails, the old key is still the one the profile holds and still
+works — the login or switch reports the failure and changes nothing.
+
 ## Who can use `cloud auth login`
 
 `cloud auth login` signs in through Redis Cloud's identity provider, so it works for accounts whose
