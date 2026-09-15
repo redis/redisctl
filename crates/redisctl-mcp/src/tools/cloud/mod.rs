@@ -94,3 +94,9 @@ pub fn router(state: Arc<AppState>) -> McpRouter {
         .merge(raw::router(state.clone()))
         .merge(provisioning::router(state))
 }
+
+/// Serialize a database read with `security.password` redacted.
+pub(crate) fn without_database_password<T: serde::Serialize>(value: &T) -> serde_json::Value {
+    let json = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
+    crate::audit::redact_value(&json, &["password".to_string()])
+}
