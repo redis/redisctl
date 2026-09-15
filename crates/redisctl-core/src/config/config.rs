@@ -618,6 +618,53 @@ impl Config {
         self.save_to_path(&config_path)
     }
 
+    /// Names in `${NAME}` references, in the order they appear.
+    fn env_reference_names(content: &str) -> Vec<String> {
+        let mut names = Vec::new();
+        let mut rest = content;
+        while let Some(start) = rest.find("${") {
+            rest = &rest[start + 2..];
+            let Some(end) = rest.find('}') else { break };
+            let name = &rest[..end];
+            if !name.is_empty()
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && !names.iter().any(|n| n == name)
+            {
+                names.push(name.to_string());
+            }
+            rest = &rest[end + 1..];
+        }
+        names
+    }
+
+    /// Put `${NAME}` back wherever the value about to be written is what it resolves to.
+    ///
+    /// References are expanded when the file is read, so by the time there is a `Config` the
+    /// placeholders are gone and a plain save would write the resolved secret to disk — for
+    /// every profile in the file, not just the one a command touched. The references are
+    /// recovered from the file being overwritten rather than carried on the struct, which keeps
+    /// `Config` the same shape for anyone embedding this crate.
+    ///
+    /// Whole quoted values only. A value deliberately changed since the load no longer matches
+    /// what the variable resolves to, so it is written literally, as it should be.
+    fn restore_env_references(config_path: &Path, content: String) -> String {
+        let Ok(previous) = fs::read_to_string(config_path) else {
+            return content;
+        };
+        let mut refs: Vec<(String, String)> = Self::env_reference_names(&previous)
+            .into_iter()
+            .filter_map(|name| {
+                let value = std::env::var(&name).ok()?;
+                (!value.is_empty()).then(|| (value, format!("${{{name}}}")))
+            })
+            .collect();
+        // Longest first, so a value that is a substring of another cannot claim part of it.
+        refs.sort_by_key(|(value, _)| std::cmp::Reverse(value.len()));
+        refs.iter().fold(content, |acc, (value, reference)| {
+            acc.replace(&format!("\"{value}\""), &format!("\"{reference}\""))
+        })
+    }
+
     /// Save configuration to a specific path
     pub fn save_to_path(&self, config_path: &Path) -> Result<()> {
         // Create parent directories if they don't exist
@@ -628,7 +675,7 @@ impl Config {
             })?;
         }
 
-        let content = toml::to_string_pretty(self)?;
+        let content = Self::restore_env_references(config_path, toml::to_string_pretty(self)?);
 
         fs::write(config_path, content).map_err(|e| ConfigError::SaveError {
             path: config_path.display().to_string(),
@@ -646,7 +693,7 @@ impl Config {
                 source: e,
             })?;
         }
-        let content = toml::to_string_pretty(self)?;
+        let content = Self::restore_env_references(config_path, toml::to_string_pretty(self)?);
         write_owner_only(config_path, content.as_bytes()).map_err(|e| ConfigError::SaveError {
             path: config_path.display().to_string(),
             source: e,
