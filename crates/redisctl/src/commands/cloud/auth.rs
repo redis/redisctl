@@ -20,7 +20,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use redisctl_core::AuthError;
 use redisctl_core::auth::{
-    AccountChoice, CloudAuthenticator, LoginAccount, LoginFlow, MFA_MAX_ATTEMPTS, MintedCredentials,
+    AccountChoice, CloudAuthenticator, LoginAccount, LoginFlow, MFA_MAX_ATTEMPTS,
+    MintedCredentials, SupersededKey,
 };
 use redisctl_core::{CloudAuthConfig, Config, CredentialStore, DeviceAuthorization, TokenSet};
 use serde::{Deserialize, Serialize};
@@ -167,6 +168,7 @@ async fn login(
                 Some(id) => AccountChoice::Id(id),
                 None => AccountChoice::Current,
             },
+            superseded: None,
             allow_plaintext,
             make_default: true,
         },
@@ -188,8 +190,16 @@ async fn switch(
 ) -> CliResult<()> {
     let (profile_name, authenticator, auth_cfg) = prepare(conn_mgr, profile)?;
 
-    // Which account this profile is on today, as recorded at the last login/switch.
+    // Which account this profile is on today, and which key it holds, as recorded at the last
+    // login/switch. Read before `auth_cfg` is consumed below.
     let on_account = auth_cfg.account_id;
+    let superseded = match (on_account, auth_cfg.capi_key_name.clone()) {
+        (Some(account_id), Some(key_name)) => Some(SupersededKey {
+            account_id,
+            key_name,
+        }),
+        _ => None,
+    };
 
     // Already there: minting another key for the same account would just add to the sprawl.
     if let Some(want) = account
@@ -270,6 +280,7 @@ async fn switch(
                     prompt_account(accounts, on_account)
                 })),
             },
+            superseded,
             // A refresh token only exists on the keyring path, so this is never plaintext.
             allow_plaintext: false,
             // Changing an existing profile's account is not a reason to make it the default.
@@ -286,6 +297,14 @@ async fn switch(
         "\n\u{2713} Profile '{profile_name}' now uses {}.",
         creds.account_label()
     );
+    match creds.superseded_revoked {
+        Some(true) => eprintln!("  the key it replaced has been revoked."),
+        Some(false) => eprintln!(
+            "  note: could not revoke the key it replaced — revoke it in the Redis Cloud console \
+             (Access Management > API Keys)."
+        ),
+        None => {}
+    }
     warn_on_key_sprawl(&creds);
     print_formatted_output(
         serde_json::json!({
@@ -299,6 +318,7 @@ async fn switch(
             })).collect::<Vec<_>>(),
             "email": creds.email,
             "redisctl_key_count": creds.redisctl_key_count,
+            "superseded_revoked": creds.superseded_revoked,
             "changed": true,
         }),
         output,
@@ -523,6 +543,8 @@ struct LoginRun {
     flow: LoginFlow,
     /// Which account to mint for: the session's current one, an explicit id, or a picker.
     account: AccountChoice,
+    /// The key this run replaces, revoked once its successor exists.
+    superseded: Option<SupersededKey>,
     allow_plaintext: bool,
     /// Whether to make this the default cloud profile. True when logging in (it bootstraps the
     /// profile), false when only changing which account an existing profile targets.
@@ -538,17 +560,8 @@ async fn complete_and_persist(
     auth_cfg: CloudAuthConfig,
     run: LoginRun,
 ) -> CliResult<MintedCredentials> {
-    let creds = authenticator
-        .complete_login_with_mfa(
-            tokens,
-            &default_key_name(),
-            run.flow,
-            run.account,
-            prompt_mfa_code,
-        )
-        .await
-        .map_err(auth_err)?;
-
+    // Resolved before anything is minted: on a machine with no keyring this refuses, and
+    // refusing after a mint would burn a key whose secret is only returned at creation.
     let store = if run.allow_plaintext {
         CredentialStore::plaintext()
     } else {
@@ -564,6 +577,19 @@ async fn complete_and_persist(
         }
         store
     };
+
+    let (mut creds, revoker) = authenticator
+        .complete_login_with_mfa(
+            tokens,
+            &default_key_name(),
+            run.flow,
+            run.account,
+            run.superseded,
+            prompt_mfa_code,
+        )
+        .await
+        .map_err(auth_err)?;
+
     let mut config = conn_mgr.config.clone();
     // On the keyring path, a store failure means the OS secret service is unavailable (D4):
     // surface a distinct `keyring_unavailable` (exit 2) pointing at `--allow-plaintext`.
@@ -587,6 +613,19 @@ async fn complete_and_persist(
             }
         })?;
     save_config_for_store(conn_mgr, &config, &store)?;
+
+    // Only now: the replacement is stored, so revoking what it replaced cannot leave this
+    // profile without a working key.
+    if let Some(revoker) = revoker {
+        let same_account = Some(revoker.account_id()) == creds.account_id;
+        let revoked = revoker.revoke().await;
+        creds.superseded_revoked = Some(revoked);
+        // The count was taken while minting, before this revoke, so a key just removed from the
+        // same account is still included in it.
+        if revoked && same_account {
+            creds.redisctl_key_count = creds.redisctl_key_count.saturating_sub(1);
+        }
+    }
     Ok(creds)
 }
 
@@ -687,6 +726,7 @@ async fn status(
                             Some(id) => AccountChoice::Id(id),
                             None => AccountChoice::Current,
                         },
+                        superseded: None,
                         allow_plaintext: pending.allow_plaintext,
                         make_default: true,
                     },
