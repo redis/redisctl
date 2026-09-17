@@ -61,8 +61,9 @@ pub fn cloud_auth_status(state: std::sync::Arc<crate::state::AppState>) -> tower
         .build()
 }
 
-/// Extra directories credentials may be written into, beyond the working directory. Colon-
-/// separated, absolute. For a server whose working directory is not the caller's project.
+/// Extra directories credentials may be written into, beyond the working directory. Absolute, and
+/// separated the way `PATH` is on the platform — `:` on Unix, `;` on Windows. For a server whose
+/// working directory is not the caller's project.
 const OUTPUT_ROOTS_ENV: &str = "REDISCTL_MCP_OUTPUT_DIRS";
 
 /// Where credentials may be written: the working directory, plus anything in
@@ -72,13 +73,10 @@ fn permitted_output_roots() -> Vec<std::path::PathBuf> {
     if let Ok(cwd) = std::env::current_dir() {
         roots.push(cwd);
     }
-    if let Ok(extra) = std::env::var(OUTPUT_ROOTS_ENV) {
-        roots.extend(
-            extra
-                .split(':')
-                .filter(|p| !p.is_empty())
-                .map(std::path::PathBuf::from),
-        );
+    if let Some(extra) = std::env::var_os(OUTPUT_ROOTS_ENV) {
+        // `split_paths` uses the platform separator, so a Windows root keeps its drive letter —
+        // splitting on ':' would cut `C:\project` into `C` and `\project`.
+        roots.extend(std::env::split_paths(&extra));
     }
     roots.iter().filter_map(|r| r.canonicalize().ok()).collect()
 }
@@ -225,9 +223,15 @@ mod tests {
             "an absolute path outside every root should be refused"
         );
 
+        // Joined the platform way, which is how a user would set it: on Windows a drive letter
+        // makes ':' the wrong separator, so this must not be hand-rolled.
+        let second = tempfile::tempdir().unwrap();
+        let value = std::env::join_paths([project.path(), second.path()]).unwrap();
         // SAFETY: single-threaded test, and this is the only reader of the variable.
-        unsafe { std::env::set_var(OUTPUT_ROOTS_ENV, project.path()) };
+        unsafe { std::env::set_var(OUTPUT_ROOTS_ENV, &value) };
         let permitted = credentials_path_is_permitted(inside).is_ok();
+        let second_ok =
+            credentials_path_is_permitted(second.path().join(".env").to_str().unwrap()).is_ok();
 
         // A symlink in the path cannot carry the write out of the permitted root, which a
         // filename check on its own cannot prevent.
@@ -247,6 +251,10 @@ mod tests {
         assert!(
             permitted,
             "a directory named in {OUTPUT_ROOTS_ENV} should be accepted"
+        );
+        assert!(
+            second_ok,
+            "every directory in the list should be accepted, not just the first"
         );
         assert!(escaped, "a symlink out of the root should be refused");
         assert!(
