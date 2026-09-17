@@ -1157,7 +1157,11 @@ const TRUSTED_ENDPOINT_SUFFIXES: [&str; 3] = ["redis.com", "redislabs.com", "red
 const TRUST_OVERRIDE_ENV: &str = "REDISCTL_ALLOW_UNTRUSTED_ENDPOINTS";
 
 fn endpoint_trust_disabled() -> bool {
-    std::env::var(TRUST_OVERRIDE_ENV).is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    trust_override_requested(std::env::var(TRUST_OVERRIDE_ENV).ok().as_deref())
+}
+
+fn trust_override_requested(value: Option<&str>) -> bool {
+    value.is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
 }
 
 fn is_trusted_endpoint_host(host: &url::Host<&str>) -> bool {
@@ -1180,6 +1184,13 @@ fn host_display(host: &url::Host<&str>) -> String {
 }
 
 fn parse_url(value: &str, field: &str) -> CliResult<Url> {
+    parse_endpoint(value, field, endpoint_trust_disabled())
+}
+
+/// Takes the override as an argument rather than reading it, so a test can exercise both sides
+/// without moving a process-wide variable: `cargo test` runs tests on several threads in one
+/// process, so one that sets a variable changes what its neighbours see.
+fn parse_endpoint(value: &str, field: &str, trust_disabled: bool) -> CliResult<Url> {
     let reject =
         |why: &str| RedisCtlError::Configuration(format!("invalid {field} ({value:?}): {why}"));
     let url = Url::parse(value)
@@ -1206,7 +1217,7 @@ fn parse_url(value: &str, field: &str) -> CliResult<Url> {
     // file names where an access token is sent, so the host has to be one we trust to receive
     // it — an attacker-controlled HTTPS host is still attacker-controlled.
     if !loopback && !is_trusted_endpoint_host(&host) {
-        if !endpoint_trust_disabled() {
+        if !trust_disabled {
             return Err(reject(&format!(
                 "host is not a Redis endpoint ({}). Trusted: {}, or loopback. Set                  {TRUST_OVERRIDE_ENV}=1 to use another host",
                 host_display(&host),
@@ -1358,7 +1369,10 @@ mod tests {
             // `host_str` renders this as "[::1]", so a string comparison misses it.
             "http://[::1]:1234/api/v1",
         ] {
-            assert!(parse_url(ok, "f").is_ok(), "{ok} should be accepted");
+            assert!(
+                parse_endpoint(ok, "f", false).is_ok(),
+                "{ok} should be accepted"
+            );
         }
         for bad in [
             "http://auth.redis.com/oauth2/default",
@@ -1379,7 +1393,10 @@ mod tests {
             "file:///etc/passwd",
             "https://",
         ] {
-            assert!(parse_url(bad, "f").is_err(), "{bad:?} should be rejected");
+            assert!(
+                parse_endpoint(bad, "f", false).is_err(),
+                "{bad:?} should be rejected"
+            );
         }
     }
 
@@ -1387,24 +1404,34 @@ mod tests {
     /// variable rather than a config field, because the finding it answers is a config file that
     /// names someone else's host.
     #[test]
-    fn untrusted_endpoints_need_the_environment_override() {
+    fn the_override_admits_another_host_but_not_another_scheme() {
         let host = "https://app.example.com/api/v1";
-        assert!(parse_url(host, "sm_api_url").is_err());
-
-        // SAFETY: single-threaded test; restored before returning.
-        unsafe { std::env::set_var(TRUST_OVERRIDE_ENV, "1") };
-        let allowed = parse_url(host, "sm_api_url").is_ok();
-        unsafe { std::env::remove_var(TRUST_OVERRIDE_ENV) };
-        assert!(allowed, "the override should admit a non-Redis host");
-
-        // It admits a host, not a scheme: http stays refused off loopback.
-        unsafe { std::env::set_var(TRUST_OVERRIDE_ENV, "1") };
-        let still_refused = parse_url("http://app.example.com/api/v1", "sm_api_url").is_err();
-        unsafe { std::env::remove_var(TRUST_OVERRIDE_ENV) };
+        assert!(parse_endpoint(host, "sm_api_url", false).is_err());
         assert!(
-            still_refused,
+            parse_endpoint(host, "sm_api_url", true).is_ok(),
+            "the override should admit a non-Redis host"
+        );
+        assert!(
+            parse_endpoint("http://app.example.com/api/v1", "sm_api_url", true).is_err(),
             "the override must not relax transport security"
         );
+    }
+
+    #[test]
+    fn the_override_is_opt_in_by_exact_value() {
+        for on in ["1", "true", "TRUE", "True"] {
+            assert!(trust_override_requested(Some(on)), "{on:?} should opt in");
+        }
+        for off in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("false"),
+            Some("yes"),
+            Some("2"),
+        ] {
+            assert!(!trust_override_requested(off), "{off:?} should not opt in");
+        }
     }
 
     #[test]
