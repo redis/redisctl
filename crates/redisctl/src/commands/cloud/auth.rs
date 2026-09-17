@@ -1191,10 +1191,14 @@ fn parse_url(value: &str, field: &str) -> CliResult<Url> {
 /// without moving a process-wide variable: `cargo test` runs tests on several threads in one
 /// process, so one that sets a variable changes what its neighbours see.
 fn parse_endpoint(value: &str, field: &str, trust_disabled: bool) -> CliResult<Url> {
-    let reject =
-        |why: &str| RedisCtlError::Configuration(format!("invalid {field} ({value:?}): {why}"));
-    let url = Url::parse(value)
-        .map_err(|e| RedisCtlError::Configuration(format!("invalid {field} ({value:?}): {e}")))?;
+    // Structured rather than `RedisCtlError::Configuration`, which prints to stderr and exits 3
+    // — the code this surface's contract defines as retryable. A config file is not retryable.
+    let reject = |why: &str| {
+        RedisCtlError::Structured(Box::new(StructuredError::invalid_endpoint(format!(
+            "invalid {field} ({value:?}): {why}"
+        ))))
+    };
+    let url = Url::parse(value).map_err(|e| reject(&e.to_string()))?;
     let Some(host) = url.host() else {
         return Err(reject("no host"));
     };
@@ -1219,7 +1223,8 @@ fn parse_endpoint(value: &str, field: &str, trust_disabled: bool) -> CliResult<U
     if !loopback && !is_trusted_endpoint_host(&host) {
         if !trust_disabled {
             return Err(reject(&format!(
-                "host is not a Redis endpoint ({}). Trusted: {}, or loopback. Set                  {TRUST_OVERRIDE_ENV}=1 to use another host",
+                "host is not a Redis endpoint ({}). Trusted: {}, or loopback. Set \
+                 {TRUST_OVERRIDE_ENV}=1 to use another host",
                 host_display(&host),
                 TRUSTED_ENDPOINT_SUFFIXES.join(", "),
             )));

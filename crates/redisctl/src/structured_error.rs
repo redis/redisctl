@@ -69,6 +69,14 @@ impl StructuredError {
             "login has not been approved yet; approve it and retry",
         )
     }
+    /// A configured endpoint cannot be used — not transport-secure, not a Redis host, or
+    /// unparseable. Exit 2, not retryable: no amount of retrying makes a config file correct,
+    /// and the CLI's own `configuration` error exits 3, which this contract defines as
+    /// retryable.
+    pub fn invalid_endpoint(message: impl Into<String>) -> Self {
+        Self::new("invalid_endpoint", 2, false, message)
+    }
+
     pub fn not_authenticated(message: impl Into<String>) -> Self {
         Self::new("not_authenticated", 2, false, message)
     }

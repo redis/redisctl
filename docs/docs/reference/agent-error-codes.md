@@ -38,6 +38,7 @@ keeps today's `0` / `1` exit behavior.
 | Code | Exit | Retryable | Meaning |
 |------|------|-----------|---------|
 | `not_authenticated` | 2 | no | No usable credentials for the profile. Run `redisctl cloud auth login`. |
+| `invalid_endpoint` | 2 | no | A configured endpoint cannot be used: not `https`, not a Redis host, or unparseable. The message names the field. Fix the profile's `[cloud_auth.<name>]` section; retrying changes nothing. |
 | `auth_denied` | 2 | no | The sign-in request was denied. |
 | `keyring_unavailable` | 2 | no | No OS keyring available to store the key. Re-run with `--allow-plaintext`. |
 | `migration_required` | 2 | no | The account signs in with a password and must be linked to Google/GitHub once in the Redis Cloud console. |
