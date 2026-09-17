@@ -1229,8 +1229,11 @@ fn parse_endpoint(value: &str, field: &str, trust_disabled: bool) -> CliResult<U
                 TRUSTED_ENDPOINT_SUFFIXES.join(", "),
             )));
         }
-        tracing::warn!(
-            "{TRUST_OVERRIDE_ENV} is set, so {field} points at {} without an endpoint check",
+        // Straight to stderr, not through tracing: this records that a security check was
+        // switched off, and a log level must not be able to suppress it.
+        eprintln!(
+            "warning: {TRUST_OVERRIDE_ENV} is set, so {field} points at {} without an \
+             endpoint check",
             host_display(&host)
         );
     }
