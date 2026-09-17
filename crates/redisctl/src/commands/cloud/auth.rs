@@ -1146,11 +1146,59 @@ fn validate_client_id(client_id: &str) -> CliResult<()> {
 /// points `sm_api_url` somewhere else receives a live access token after an otherwise ordinary
 /// login. `http` is allowed only on loopback, where there is no network to intercept, which is
 /// also what RFC 8252 does for redirect URIs.
+/// Domains whose hosts may receive a Redis Cloud access token. Suffix-matched on a label
+/// boundary, so `notredis.com` does not pass for `redis.com`.
+const TRUSTED_ENDPOINT_SUFFIXES: [&str; 3] = ["redis.com", "redislabs.com", "redis.io"];
+
+/// Opt out of the endpoint check for a host that is not a Redis domain — a local mock or a test
+/// environment. Deliberately an environment variable and not a config field: the threat is a
+/// config file that names an attacker's host, and a setting inside that file could switch off
+/// the check that exists to catch it.
+const TRUST_OVERRIDE_ENV: &str = "REDISCTL_ALLOW_UNTRUSTED_ENDPOINTS";
+
+fn endpoint_trust_disabled() -> bool {
+    trust_override_requested(std::env::var(TRUST_OVERRIDE_ENV).ok().as_deref())
+}
+
+fn trust_override_requested(value: Option<&str>) -> bool {
+    value.is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+}
+
+fn is_trusted_endpoint_host(host: &url::Host<&str>) -> bool {
+    let url::Host::Domain(name) = host else {
+        // A bare IP is never a Redis endpoint; loopback is handled by its own exception.
+        return false;
+    };
+    let name = name.trim_end_matches('.').to_ascii_lowercase();
+    TRUSTED_ENDPOINT_SUFFIXES
+        .iter()
+        .any(|suffix| name == *suffix || name.ends_with(&format!(".{suffix}")))
+}
+
+fn host_display(host: &url::Host<&str>) -> String {
+    match host {
+        url::Host::Domain(name) => (*name).to_string(),
+        url::Host::Ipv4(ip) => ip.to_string(),
+        url::Host::Ipv6(ip) => format!("[{ip}]"),
+    }
+}
+
 fn parse_url(value: &str, field: &str) -> CliResult<Url> {
-    let reject =
-        |why: &str| RedisCtlError::Configuration(format!("invalid {field} ({value:?}): {why}"));
-    let url = Url::parse(value)
-        .map_err(|e| RedisCtlError::Configuration(format!("invalid {field} ({value:?}): {e}")))?;
+    parse_endpoint(value, field, endpoint_trust_disabled())
+}
+
+/// Takes the override as an argument rather than reading it, so a test can exercise both sides
+/// without moving a process-wide variable: `cargo test` runs tests on several threads in one
+/// process, so one that sets a variable changes what its neighbours see.
+fn parse_endpoint(value: &str, field: &str, trust_disabled: bool) -> CliResult<Url> {
+    // Structured rather than `RedisCtlError::Configuration`, which prints to stderr and exits 3
+    // — the code this surface's contract defines as retryable. A config file is not retryable.
+    let reject = |why: &str| {
+        RedisCtlError::Structured(Box::new(StructuredError::invalid_endpoint(format!(
+            "invalid {field} ({value:?}): {why}"
+        ))))
+    };
+    let url = Url::parse(value).map_err(|e| reject(&e.to_string()))?;
     let Some(host) = url.host() else {
         return Err(reject("no host"));
     };
@@ -1168,6 +1216,26 @@ fn parse_url(value: &str, field: &str) -> CliResult<Url> {
         return Err(reject(
             "must use https (http is allowed only for localhost)",
         ));
+    }
+    // Transport security says the connection is private, not who is on the other end. A config
+    // file names where an access token is sent, so the host has to be one we trust to receive
+    // it — an attacker-controlled HTTPS host is still attacker-controlled.
+    if !loopback && !is_trusted_endpoint_host(&host) {
+        if !trust_disabled {
+            return Err(reject(&format!(
+                "host is not a Redis endpoint ({}). Trusted: {}, or loopback. Set \
+                 {TRUST_OVERRIDE_ENV}=1 to use another host",
+                host_display(&host),
+                TRUSTED_ENDPOINT_SUFFIXES.join(", "),
+            )));
+        }
+        // Straight to stderr, not through tracing: this records that a security check was
+        // switched off, and a log level must not be able to suppress it.
+        eprintln!(
+            "warning: {TRUST_OVERRIDE_ENV} is set, so {field} points at {} without an \
+             endpoint check",
+            host_display(&host)
+        );
     }
     if !url.username().is_empty() || url.password().is_some() {
         return Err(reject("must not embed credentials"));
@@ -1301,19 +1369,31 @@ mod tests {
     fn endpoints_must_be_https_or_loopback() {
         for ok in [
             "https://auth.redis.com/oauth2/default",
-            "https://app.example.com/api/v1",
+            "https://api.redislabs.com/v1",
+            "https://anything.redis.io/",
+            // The suffix is matched on a label boundary, so a subdomain is fine…
             "http://127.0.0.1:8899/oauth2/default",
             "http://localhost:1234/api/v1",
             // `host_str` renders this as "[::1]", so a string comparison misses it.
             "http://[::1]:1234/api/v1",
         ] {
-            assert!(parse_url(ok, "f").is_ok(), "{ok} should be accepted");
+            assert!(
+                parse_endpoint(ok, "f", false).is_ok(),
+                "{ok} should be accepted"
+            );
         }
         for bad in [
             "http://auth.redis.com/oauth2/default",
             // Not loopback: only ::1 and 127/8 are exempt, not any IPv6 literal.
             "http://[2606:4700::1111]/api/v1",
             "http://[fe80::1]/api/v1",
+            // …and a host that merely ends in the same letters is not.
+            "https://app.example.com/api/v1",
+            "https://notredis.com/v1",
+            "https://redis.com.attacker.example/v1",
+            "https://evil-redis.io/v1",
+            // Transport-secure but nobody we send tokens to.
+            "https://198.51.100.7/v1",
             "https://user:pass@auth.redis.com/",
             "https://user@auth.redis.com/",
             "ftp://auth.redis.com/",
@@ -1321,7 +1401,44 @@ mod tests {
             "file:///etc/passwd",
             "https://",
         ] {
-            assert!(parse_url(bad, "f").is_err(), "{bad:?} should be rejected");
+            assert!(
+                parse_endpoint(bad, "f", false).is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
+    }
+
+    /// The override exists for local mocks and test environments. It has to be an environment
+    /// variable rather than a config field, because the finding it answers is a config file that
+    /// names someone else's host.
+    #[test]
+    fn the_override_admits_another_host_but_not_another_scheme() {
+        let host = "https://app.example.com/api/v1";
+        assert!(parse_endpoint(host, "sm_api_url", false).is_err());
+        assert!(
+            parse_endpoint(host, "sm_api_url", true).is_ok(),
+            "the override should admit a non-Redis host"
+        );
+        assert!(
+            parse_endpoint("http://app.example.com/api/v1", "sm_api_url", true).is_err(),
+            "the override must not relax transport security"
+        );
+    }
+
+    #[test]
+    fn the_override_is_opt_in_by_exact_value() {
+        for on in ["1", "true", "TRUE", "True"] {
+            assert!(trust_override_requested(Some(on)), "{on:?} should opt in");
+        }
+        for off in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("false"),
+            Some("yes"),
+            Some("2"),
+        ] {
+            assert!(!trust_override_requested(off), "{off:?} should not opt in");
         }
     }
 
