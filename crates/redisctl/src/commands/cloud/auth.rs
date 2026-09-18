@@ -388,8 +388,9 @@ async fn switch(
     match creds.superseded_revoked {
         Some(true) => eprintln!("  the key it replaced has been revoked."),
         Some(false) => eprintln!(
-            "  note: could not revoke the key it replaced — revoke it in the Redis Cloud console \
-             (Access Management > API Keys)."
+            "  note: could not revoke {} — revoke it in the Redis Cloud console \
+             (Access Management > API Keys).",
+            superseded_label(&creds)
         ),
         None => {}
     }
@@ -407,6 +408,7 @@ async fn switch(
             "email": creds.email,
             "redisctl_key_count": creds.redisctl_key_count,
             "superseded_revoked": creds.superseded_revoked,
+            "superseded_key": creds.superseded_key_name,
             "changed": true,
         }),
         output,
@@ -415,6 +417,15 @@ async fn switch(
 
 /// D5: every login *and* every switch mints a new `redisctl-*` CAPI key. Warn (don't delete)
 /// when they pile up — switching makes that happen faster than logging in does.
+/// Names the key a failed revocation left behind. Without the name there is nothing to search
+/// for in the console, and it cannot be recovered afterwards — the profile records the new key.
+fn superseded_label(creds: &MintedCredentials) -> String {
+    match &creds.superseded_key_name {
+        Some(key) => format!("the key {key} that this replaced"),
+        None => "the key this replaced".to_string(),
+    }
+}
+
 fn warn_on_key_sprawl(creds: &MintedCredentials) {
     let key_count = creds.redisctl_key_count;
     if key_count > STALE_KEY_WARN_THRESHOLD {
@@ -690,22 +701,39 @@ async fn complete_and_persist(
             run.make_default,
         )
         .map_err(|e| {
+            // The key exists server-side by now and its secret is only returned at creation, so
+            // nothing can recover it — say which one was left behind while the name is still here.
+            let orphan = format!(
+                " The key {} was created but not stored; revoke it in the Redis Cloud console \
+                 (Access Management > API Keys).",
+                creds.capi_key_name
+            );
             if run.allow_plaintext {
-                RedisCtlError::from(e)
+                RedisCtlError::Structured(Box::new(StructuredError::keyring_unavailable(format!(
+                    "failed to store credentials ({e}).{orphan}"
+                ))))
             } else {
                 RedisCtlError::Structured(Box::new(StructuredError::keyring_unavailable(format!(
                     "failed to store credentials in the OS keyring ({e}). Re-run \
                      `redisctl cloud auth login --allow-plaintext` to store them in the config \
-                     file (0600) instead."
+                     file (0600) instead.{orphan}"
                 ))))
             }
         })?;
-    save_config_for_store(conn_mgr, &config, &store)?;
+    save_config_for_store(conn_mgr, &config, &store).map_err(|e| match e {
+        RedisCtlError::Structured(_) => e,
+        other => RedisCtlError::Configuration(format!(
+            "{other}. The key {} was created but not stored; revoke it in the Redis Cloud \
+             console (Access Management > API Keys).",
+            creds.capi_key_name
+        )),
+    })?;
 
     // Only now: the replacement is stored, so revoking what it replaced cannot leave this
     // profile without a working key.
     if let Some(revoker) = revoker {
         let same_account = Some(revoker.account_id()) == creds.account_id;
+        creds.superseded_key_name = Some(revoker.key_name().to_string());
         let revoked = revoker.revoke().await;
         creds.superseded_revoked = Some(revoked);
         // The count was taken while minting, before this revoke, so a key just removed from the
@@ -763,8 +791,9 @@ fn emit_signed_in(
     }
     if creds.superseded_revoked == Some(false) {
         eprintln!(
-            "  note: could not revoke the key this login replaced — revoke it in the Redis Cloud \
-             console (Access Management > API Keys)."
+            "  note: could not revoke {} — revoke it in the Redis Cloud console \
+             (Access Management > API Keys).",
+            superseded_label(creds)
         );
     }
     warn_on_key_sprawl(creds);
@@ -785,6 +814,7 @@ fn emit_signed_in(
             "redisctl_key_count": key_count,
             "capi_newly_enabled": creds.capi_newly_enabled,
             "superseded_revoked": creds.superseded_revoked,
+            "superseded_key": creds.superseded_key_name,
         }),
         output,
     )
@@ -1304,6 +1334,36 @@ fn open_browser(url: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn minted(superseded_key_name: Option<&str>) -> MintedCredentials {
+        MintedCredentials {
+            account_id: Some(1),
+            email: None,
+            api_key: "k".into(),
+            api_secret: "s".into(),
+            api_url: "https://api.redislabs.com/v1".into(),
+            refresh_token: None,
+            capi_key_name: "redisctl-cli-2".into(),
+            redisctl_key_count: 1,
+            account_name: None,
+            capi_newly_enabled: false,
+            superseded_revoked: Some(false),
+            superseded_key_name: superseded_key_name.map(str::to_string),
+            accounts: vec![],
+        }
+    }
+
+    /// A failed revocation is the one moment the old key's name still exists: the profile now
+    /// records the new one, so a message without it leaves nothing to search the console for.
+    #[test]
+    fn a_failed_revocation_names_the_key_left_behind() {
+        assert_eq!(
+            superseded_label(&minted(Some("redisctl-cli-1"))),
+            "the key redisctl-cli-1 that this replaced"
+        );
+        // Older profiles recorded no name; say what can be said rather than inventing one.
+        assert_eq!(superseded_label(&minted(None)), "the key this replaced");
+    }
 
     /// Each half is reported on its own. A key that could not be deleted must not be able to
     /// hide a sign-in that is still live, and vice versa — one bit could not say both.

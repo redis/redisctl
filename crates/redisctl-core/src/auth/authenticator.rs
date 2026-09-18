@@ -38,6 +38,8 @@ pub struct MintedCredentials {
     pub account_name: Option<String>,
     /// Whether the key this switch replaced was revoked. `None` when there was none to revoke.
     pub superseded_revoked: Option<bool>,
+    /// The name of that key, so a failed revocation can say which one is left behind.
+    pub superseded_key_name: Option<String>,
     /// Whether this login is what switched account-wide programmatic access on. Reported so an
     /// account-level change is not made silently.
     pub capi_newly_enabled: bool,
@@ -136,6 +138,7 @@ impl std::fmt::Debug for MintedCredentials {
             .field("account_name", &self.account_name)
             .field("capi_newly_enabled", &self.capi_newly_enabled)
             .field("superseded_revoked", &self.superseded_revoked)
+            .field("superseded_key_name", &self.superseded_key_name)
             .field("accounts", &self.accounts)
             .finish()
     }
@@ -360,6 +363,7 @@ impl CloudAuthenticator {
                 capi_newly_enabled,
                 // Nothing has been revoked yet; the caller records what the revoker reports.
                 superseded_revoked: None,
+                superseded_key_name: None,
                 accounts: all_accounts,
             },
             superseded.map(|previous| SupersededRevoker {
@@ -645,6 +649,7 @@ mod tests {
             account_name: Some("Acme".to_string()),
             capi_newly_enabled: false,
             superseded_revoked: None,
+            superseded_key_name: None,
             accounts: vec![
                 LoginAccount {
                     id: 316941,
