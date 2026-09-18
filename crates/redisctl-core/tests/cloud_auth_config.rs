@@ -333,6 +333,43 @@ api_url = "https://api.redislabs.com/v1"
     );
 }
 
+/// Profile names are unrestricted strings, so a name with a dot is quoted in the file and its
+/// field path is still three segments. Anything that reconstructs the path from the serialized
+/// text has to implement TOML quoting to see that — which is why the edit is made on the parsed
+/// document instead.
+#[test]
+fn saving_keeps_a_reference_under_a_quoted_profile_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[profiles."prod.eu"]
+deployment_type = "cloud"
+api_key = "${B_DOTTED_KEY}"
+api_secret = "s"
+api_url = "https://api.redislabs.com/v1"
+"#,
+    )
+    .unwrap();
+
+    // SAFETY: single-threaded test; this name is read nowhere else.
+    unsafe { std::env::set_var("B_DOTTED_KEY", "dotted-resolved-secret") };
+    let config = Config::load_from_path(&path).unwrap();
+    config.save_to_path(&path).unwrap();
+    unsafe { std::env::remove_var("B_DOTTED_KEY") };
+
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        written.contains("${B_DOTTED_KEY}"),
+        "the reference should survive a quoted profile name:\n{written}"
+    );
+    assert!(
+        !written.contains("dotted-resolved-secret"),
+        "the resolved value should not be written:\n{written}"
+    );
+}
+
 /// `${VAR:-default}` is supported by the loader, so it has to survive a save too. The reference is
 /// kept whole rather than parsed, which is what makes that work.
 #[test]

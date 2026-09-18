@@ -652,72 +652,55 @@ impl Config {
         }
     }
 
-    /// The path a `[section.header]` line names.
-    fn header_path(header: &str) -> Vec<String> {
-        header
-            .split('.')
-            .map(|segment| {
-                let segment = segment.trim();
-                segment
-                    .strip_prefix('"')
-                    .and_then(|s| s.strip_suffix('"'))
-                    .map(|s| s.replace("\\\"", "\""))
-                    .unwrap_or_else(|| segment.to_string())
-            })
-            .collect()
+    /// The value at `path`, if every segment before the last is a table.
+    fn value_at_mut<'a>(
+        table: &'a mut toml::Table,
+        path: &[String],
+    ) -> Option<&'a mut toml::Value> {
+        let (last, parents) = path.split_last()?;
+        let mut current = table;
+        for key in parents {
+            current = current.get_mut(key)?.as_table_mut()?;
+        }
+        current.get_mut(last)
     }
 
-    /// Put each `${…}` reference back on the field that held it.
+    /// This config as TOML, with every `${…}` reference from the file at `config_path` put back
+    /// on the field that held it.
     ///
     /// References are expanded when the file is read, so by the time there is a `Config` the
-    /// placeholders are gone and a plain save would write the resolved secret to disk — for
-    /// every profile in the file, not just the one a command touched. They are recovered from
-    /// the file being overwritten rather than carried on the struct, which keeps `Config` the
-    /// same shape for anyone embedding this crate.
+    /// placeholders are gone and a plain save would write the resolved secret to disk — for every
+    /// profile in the file, not just the one a command touched. They are recovered from the file
+    /// being overwritten rather than carried on the struct, which keeps `Config` the same shape
+    /// for anyone embedding this crate.
     ///
     /// Restored per field, and only where that field still holds what the reference resolves to.
     /// Two variables can resolve to the same string today and diverge tomorrow, so replacing by
-    /// value alone would point a profile at the wrong variable. A field whose value changed
-    /// since the load no longer matches, so it is written literally, as it should be.
+    /// value alone would point a profile at the wrong variable. A field whose value changed since
+    /// the load no longer matches, so it is written literally, as it should be.
     ///
-    /// Edits the serialized text in place instead of re-serializing a parsed document, which
-    /// would reorder every key alphabetically.
-    fn restore_env_references(config_path: &Path, content: String) -> String {
-        let Ok(previous) = fs::read_to_string(config_path) else {
-            return content;
+    /// The edit is made on the parsed document. Editing the serialized text instead means
+    /// re-implementing TOML — quoted keys, dotted names, escaping — and getting any of it wrong
+    /// silently writes the secret.
+    fn to_toml_preserving_env_references(&self, config_path: &Path) -> Result<String> {
+        let mut doc = match toml::Value::try_from(self)? {
+            toml::Value::Table(table) => table,
+            other => return Ok(toml::to_string_pretty(&other)?),
         };
-        let Ok(old) = toml::from_str::<toml::Table>(&previous) else {
-            return content;
-        };
-        let mut refs: HashMap<Vec<String>, (String, String)> = HashMap::new();
-        Self::collect_env_references(&old, &mut Vec::new(), &mut refs);
-        if refs.is_empty() {
-            return content;
-        }
-
-        let mut section: Vec<String> = Vec::new();
-        let mut out = String::with_capacity(content.len());
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if let Some(header) = trimmed.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
-                section = Self::header_path(header);
-            } else if let Some((key, value)) = trimmed.split_once(" = ") {
-                let mut path = section.clone();
-                path.push(Self::header_path(key).join("."));
-                if let Some((original, resolved)) = refs.get(&path)
-                    // Quoted through `toml` on both sides so escaping matches exactly.
-                    && value == toml::Value::String(resolved.clone()).to_string()
+        if let Ok(previous) = fs::read_to_string(config_path)
+            && let Ok(old) = toml::from_str::<toml::Table>(&previous)
+        {
+            let mut refs: HashMap<Vec<String>, (String, String)> = HashMap::new();
+            Self::collect_env_references(&old, &mut Vec::new(), &mut refs);
+            for (path, (original, resolved)) in refs {
+                if let Some(slot) = Self::value_at_mut(&mut doc, &path)
+                    && slot.as_str() == Some(resolved.as_str())
                 {
-                    let indent = &line[..line.len() - trimmed.len()];
-                    let restored = toml::Value::String(original.clone()).to_string();
-                    out.push_str(&format!("{indent}{key} = {restored}\n"));
-                    continue;
+                    *slot = toml::Value::String(original);
                 }
             }
-            out.push_str(line);
-            out.push('\n');
         }
-        out
+        Ok(toml::to_string_pretty(&doc)?)
     }
 
     /// Save configuration to a specific path
@@ -730,7 +713,7 @@ impl Config {
             })?;
         }
 
-        let content = Self::restore_env_references(config_path, toml::to_string_pretty(self)?);
+        let content = self.to_toml_preserving_env_references(config_path)?;
 
         fs::write(config_path, content).map_err(|e| ConfigError::SaveError {
             path: config_path.display().to_string(),
@@ -748,7 +731,7 @@ impl Config {
                 source: e,
             })?;
         }
-        let content = Self::restore_env_references(config_path, toml::to_string_pretty(self)?);
+        let content = self.to_toml_preserving_env_references(config_path)?;
         write_owner_only(config_path, content.as_bytes()).map_err(|e| ConfigError::SaveError {
             path: config_path.display().to_string(),
             source: e,
