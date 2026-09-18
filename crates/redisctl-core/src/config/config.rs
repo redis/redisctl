@@ -618,6 +618,91 @@ impl Config {
         self.save_to_path(&config_path)
     }
 
+    /// Every `${…}` reference in `previous`, by the field path that held it.
+    ///
+    /// The whole field text is kept rather than a parsed variable name, so the supported syntax
+    /// does not have to be reimplemented here: `${VAR}`, `$VAR` and `${VAR:-default}` are all
+    /// restored by expanding the recorded text with the same function the loader uses and
+    /// comparing. Strings inside arrays are skipped — they are not credentials, and they would
+    /// need index-aware paths.
+    fn collect_env_references(
+        table: &toml::Table,
+        path: &mut Vec<String>,
+        out: &mut HashMap<Vec<String>, (String, String)>,
+    ) {
+        for (key, value) in table {
+            match value {
+                toml::Value::String(text) if text.contains('$') => {
+                    let resolved = Self::expand_env_vars(text);
+                    // Unchanged means nothing expanded — an unset variable stays a reference in
+                    // the file already, so there is nothing to put back.
+                    if resolved != *text {
+                        path.push(key.clone());
+                        out.insert(path.clone(), (text.clone(), resolved));
+                        path.pop();
+                    }
+                }
+                toml::Value::Table(inner) => {
+                    path.push(key.clone());
+                    Self::collect_env_references(inner, path, out);
+                    path.pop();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// The value at `path`, if every segment before the last is a table.
+    fn value_at_mut<'a>(
+        table: &'a mut toml::Table,
+        path: &[String],
+    ) -> Option<&'a mut toml::Value> {
+        let (last, parents) = path.split_last()?;
+        let mut current = table;
+        for key in parents {
+            current = current.get_mut(key)?.as_table_mut()?;
+        }
+        current.get_mut(last)
+    }
+
+    /// This config as TOML, with every `${…}` reference from the file at `config_path` put back
+    /// on the field that held it.
+    ///
+    /// References are expanded when the file is read, so by the time there is a `Config` the
+    /// placeholders are gone and a plain save would write the resolved secret to disk — for every
+    /// profile in the file, not just the one a command touched. They are recovered from the file
+    /// being overwritten rather than carried on the struct, which keeps `Config` the same shape
+    /// for anyone embedding this crate.
+    ///
+    /// Restored per field, and only where that field still holds what the reference resolves to.
+    /// Two variables can resolve to the same string today and diverge tomorrow, so replacing by
+    /// value alone would point a profile at the wrong variable. A field whose value changed since
+    /// the load no longer matches, so it is written literally, as it should be.
+    ///
+    /// The edit is made on the parsed document. Editing the serialized text instead means
+    /// re-implementing TOML — quoted keys, dotted names, escaping — and getting any of it wrong
+    /// silently writes the secret.
+    fn to_toml_preserving_env_references(&self, config_path: &Path) -> Result<String> {
+        let mut doc = match toml::Value::try_from(self)? {
+            toml::Value::Table(table) => table,
+            other => return Ok(toml::to_string_pretty(&other)?),
+        };
+        if let Ok(previous) = fs::read_to_string(config_path)
+            && let Ok(old) = toml::from_str::<toml::Table>(&previous)
+        {
+            let mut refs: HashMap<Vec<String>, (String, String)> = HashMap::new();
+            Self::collect_env_references(&old, &mut Vec::new(), &mut refs);
+            for (path, (original, resolved)) in refs {
+                if let Some(slot) = Self::value_at_mut(&mut doc, &path)
+                    && slot.as_str() == Some(resolved.as_str())
+                {
+                    *slot = toml::Value::String(original);
+                }
+            }
+        }
+        Ok(toml::to_string_pretty(&doc)?)
+    }
+
     /// Save configuration to a specific path
     pub fn save_to_path(&self, config_path: &Path) -> Result<()> {
         // Create parent directories if they don't exist
@@ -628,7 +713,7 @@ impl Config {
             })?;
         }
 
-        let content = toml::to_string_pretty(self)?;
+        let content = self.to_toml_preserving_env_references(config_path)?;
 
         fs::write(config_path, content).map_err(|e| ConfigError::SaveError {
             path: config_path.display().to_string(),
@@ -646,7 +731,7 @@ impl Config {
                 source: e,
             })?;
         }
-        let content = toml::to_string_pretty(self)?;
+        let content = self.to_toml_preserving_env_references(config_path)?;
         write_owner_only(config_path, content.as_bytes()).map_err(|e| ConfigError::SaveError {
             path: config_path.display().to_string(),
             source: e,
