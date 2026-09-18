@@ -354,31 +354,48 @@ happen to be on, and not any other `redisctl-*` key the account holds, which may
 machine or another profile. If the recorded name is not on the account, nothing is deleted and the
 command says so rather than guessing.
 
-**What a failure looks like.** The key name is always named, so there is something to search for:
+**What a failure looks like.** The key is named, because the name cannot be recovered afterwards —
+by then the profile records the new key, not the one left behind:
 
 ```
-  note: could not revoke the key redisctl-cli-1712... — revoke it in the Redis Cloud console
-  (Access Management > API Keys).
+  note: could not revoke the key redisctl-cli-1712... that this replaced — revoke it in the
+  Redis Cloud console (Access Management > API Keys).
 ```
 
-`-o json` carries the same outcome as `superseded_revoked` (`login`, `switch`) or `key_revoked` and
-`session_revoked` (`logout`). For the reason it failed, re-run with `-v`: the account it could not
-reach, the keys the account does hold, or the refusal itself is logged.
+Alongside it, the reason is reported as it happens — the account that could not be reached, the
+keys the account does hold, or the refusal itself. Take it from that run: re-running is not a way
+to investigate, because each attempt mints another key and the failed attempt's context is gone.
+
+`-o json` carries the outcome as `superseded_revoked` plus `superseded_key` (`login`, `switch`), or
+`key_revoked` and `session_revoked` (`logout`).
 
 **Cleaning up.** Delete the named key in the console under **Access Management > API Keys**. To
-find keys nothing refers to any more, the account's own audit trail lists every mint and every
-revocation with the acting user's email:
+find keys nothing refers to any more, the account's own audit trail records every key that is
+created or removed, naming the key and who did it:
 
 ```bash
-redisctl cloud account get-system-logs -o json | jq '.[] | select(.type | test("ApiSecretKey"))'
+redisctl cloud account get-system-logs -o json \
+  | jq '.entries[]? | select(.description | test("API secret key")) | {time, originator, description}'
 ```
 
-That is also the check worth running if you ever want to know whether a `redisctl-*` key appeared
-when nobody was at the keyboard.
+```json
+{
+  "time": "2026-09-18T07:12:04Z",
+  "originator": "Some User",
+  "description": "API secret key 'redisctl-cli-1789043212' assigned to user@example.com"
+}
+```
 
-**A storage failure leaves nothing to clean up.** The new key is minted, stored, and only then is
-the old one revoked. If storing fails, the old key is still the one the profile holds and still
-works — the login or switch reports the failure and changes nothing.
+The response is an object with an `entries` array, so the filter starts there — and it matches on
+`description`, not `type`: `type` is the severity (`info`, `warning`, `error`), not the event. This
+is also the check worth running if you ever want to know whether a `redisctl-*` key appeared when
+nobody was at the keyboard.
+
+**A storage failure leaves the new key behind, not the old one.** The order is mint, store, then
+revoke, so a failure to store leaves the profile holding the key it already had — still recorded,
+still working. What it does leave is the key that was just minted: it exists on the account, its
+secret is only returned at creation, and nothing recorded it. The error names that key so it can be
+revoked; there is no way to recover it afterwards.
 
 ## Who can use `cloud auth login`
 

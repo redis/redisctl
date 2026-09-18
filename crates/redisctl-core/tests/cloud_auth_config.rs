@@ -107,6 +107,7 @@ fn minted() -> MintedCredentials {
         account_name: None,
         capi_newly_enabled: false,
         superseded_revoked: None,
+        superseded_key_name: None,
         accounts: vec![redisctl_core::auth::LoginAccount {
             id: 112117,
             name: None,
