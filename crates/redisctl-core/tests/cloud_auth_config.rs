@@ -278,6 +278,96 @@ fn owner_only_save_is_0600_and_tightens_an_existing_file() {
     );
 }
 
+/// Two variables can resolve to the same string today and diverge tomorrow, so a reference has to
+/// be restored on the field that held it — not wherever that value happens to appear. Restoring by
+/// value alone pointed both profiles at the first variable, which silently selects the wrong
+/// credential once they differ.
+#[test]
+fn saving_keeps_each_reference_on_its_own_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[profiles.prod]
+deployment_type = "cloud"
+api_key = "${B_PROD_KEY}"
+api_secret = "shared-secret-value"
+api_url = "https://api.redislabs.com/v1"
+
+[profiles.stage]
+deployment_type = "cloud"
+api_key = "${B_STAGE_KEY}"
+api_secret = "shared-secret-value"
+api_url = "https://api.redislabs.com/v1"
+"#,
+    )
+    .unwrap();
+
+    // SAFETY: single-threaded test; these names are read nowhere else.
+    unsafe {
+        std::env::set_var("B_PROD_KEY", "identical-for-now");
+        std::env::set_var("B_STAGE_KEY", "identical-for-now");
+    }
+    let config = Config::load_from_path(&path).unwrap();
+    config.save_to_path(&path).unwrap();
+    unsafe {
+        std::env::remove_var("B_PROD_KEY");
+        std::env::remove_var("B_STAGE_KEY");
+    }
+
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        written.contains("${B_PROD_KEY}") && written.contains("${B_STAGE_KEY}"),
+        "each profile keeps its own variable:\n{written}"
+    );
+    assert!(
+        !written.contains("identical-for-now"),
+        "neither resolved value should be written:\n{written}"
+    );
+    // The literal that merely equals a resolved value is left alone.
+    assert_eq!(
+        written.matches("shared-secret-value").count(),
+        2,
+        "a literal field must not be rewritten as a reference:\n{written}"
+    );
+}
+
+/// `${VAR:-default}` is supported by the loader, so it has to survive a save too. The reference is
+/// kept whole rather than parsed, which is what makes that work.
+#[test]
+fn saving_keeps_a_reference_with_a_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[profiles.prod]
+deployment_type = "cloud"
+api_key = "${B_DEFAULTED_KEY:-fallback-key}"
+api_secret = "s"
+api_url = "https://api.redislabs.com/v1"
+"#,
+    )
+    .unwrap();
+
+    // SAFETY: single-threaded test; this name is read nowhere else.
+    unsafe { std::env::set_var("B_DEFAULTED_KEY", "resolved-not-fallback") };
+    let config = Config::load_from_path(&path).unwrap();
+    config.save_to_path(&path).unwrap();
+    unsafe { std::env::remove_var("B_DEFAULTED_KEY") };
+
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        written.contains("${B_DEFAULTED_KEY:-fallback-key}"),
+        "the whole reference should survive, defaults included:\n{written}"
+    );
+    assert!(
+        !written.contains("resolved-not-fallback"),
+        "the resolved value should not be written:\n{written}"
+    );
+}
+
 /// A login saves the whole config, so a profile that keeps its secret in an environment variable
 /// must not come back with that secret written into the file. The reference survives the
 /// round trip; the value never lands on disk.

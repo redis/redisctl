@@ -618,51 +618,106 @@ impl Config {
         self.save_to_path(&config_path)
     }
 
-    /// Names in `${NAME}` references, in the order they appear.
-    fn env_reference_names(content: &str) -> Vec<String> {
-        let mut names = Vec::new();
-        let mut rest = content;
-        while let Some(start) = rest.find("${") {
-            rest = &rest[start + 2..];
-            let Some(end) = rest.find('}') else { break };
-            let name = &rest[..end];
-            if !name.is_empty()
-                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-                && !names.iter().any(|n| n == name)
-            {
-                names.push(name.to_string());
+    /// Every `${…}` reference in `previous`, by the field path that held it.
+    ///
+    /// The whole field text is kept rather than a parsed variable name, so the supported syntax
+    /// does not have to be reimplemented here: `${VAR}`, `$VAR` and `${VAR:-default}` are all
+    /// restored by expanding the recorded text with the same function the loader uses and
+    /// comparing. Strings inside arrays are skipped — they are not credentials, and they would
+    /// need index-aware paths.
+    fn collect_env_references(
+        table: &toml::Table,
+        path: &mut Vec<String>,
+        out: &mut HashMap<Vec<String>, (String, String)>,
+    ) {
+        for (key, value) in table {
+            match value {
+                toml::Value::String(text) if text.contains('$') => {
+                    let resolved = Self::expand_env_vars(text);
+                    // Unchanged means nothing expanded — an unset variable stays a reference in
+                    // the file already, so there is nothing to put back.
+                    if resolved != *text {
+                        path.push(key.clone());
+                        out.insert(path.clone(), (text.clone(), resolved));
+                        path.pop();
+                    }
+                }
+                toml::Value::Table(inner) => {
+                    path.push(key.clone());
+                    Self::collect_env_references(inner, path, out);
+                    path.pop();
+                }
+                _ => {}
             }
-            rest = &rest[end + 1..];
         }
-        names
     }
 
-    /// Put `${NAME}` back wherever the value about to be written is what it resolves to.
+    /// The path a `[section.header]` line names.
+    fn header_path(header: &str) -> Vec<String> {
+        header
+            .split('.')
+            .map(|segment| {
+                let segment = segment.trim();
+                segment
+                    .strip_prefix('"')
+                    .and_then(|s| s.strip_suffix('"'))
+                    .map(|s| s.replace("\\\"", "\""))
+                    .unwrap_or_else(|| segment.to_string())
+            })
+            .collect()
+    }
+
+    /// Put each `${…}` reference back on the field that held it.
     ///
     /// References are expanded when the file is read, so by the time there is a `Config` the
     /// placeholders are gone and a plain save would write the resolved secret to disk — for
-    /// every profile in the file, not just the one a command touched. The references are
-    /// recovered from the file being overwritten rather than carried on the struct, which keeps
-    /// `Config` the same shape for anyone embedding this crate.
+    /// every profile in the file, not just the one a command touched. They are recovered from
+    /// the file being overwritten rather than carried on the struct, which keeps `Config` the
+    /// same shape for anyone embedding this crate.
     ///
-    /// Whole quoted values only. A value deliberately changed since the load no longer matches
-    /// what the variable resolves to, so it is written literally, as it should be.
+    /// Restored per field, and only where that field still holds what the reference resolves to.
+    /// Two variables can resolve to the same string today and diverge tomorrow, so replacing by
+    /// value alone would point a profile at the wrong variable. A field whose value changed
+    /// since the load no longer matches, so it is written literally, as it should be.
+    ///
+    /// Edits the serialized text in place instead of re-serializing a parsed document, which
+    /// would reorder every key alphabetically.
     fn restore_env_references(config_path: &Path, content: String) -> String {
         let Ok(previous) = fs::read_to_string(config_path) else {
             return content;
         };
-        let mut refs: Vec<(String, String)> = Self::env_reference_names(&previous)
-            .into_iter()
-            .filter_map(|name| {
-                let value = std::env::var(&name).ok()?;
-                (!value.is_empty()).then(|| (value, format!("${{{name}}}")))
-            })
-            .collect();
-        // Longest first, so a value that is a substring of another cannot claim part of it.
-        refs.sort_by_key(|(value, _)| std::cmp::Reverse(value.len()));
-        refs.iter().fold(content, |acc, (value, reference)| {
-            acc.replace(&format!("\"{value}\""), &format!("\"{reference}\""))
-        })
+        let Ok(old) = toml::from_str::<toml::Table>(&previous) else {
+            return content;
+        };
+        let mut refs: HashMap<Vec<String>, (String, String)> = HashMap::new();
+        Self::collect_env_references(&old, &mut Vec::new(), &mut refs);
+        if refs.is_empty() {
+            return content;
+        }
+
+        let mut section: Vec<String> = Vec::new();
+        let mut out = String::with_capacity(content.len());
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if let Some(header) = trimmed.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+                section = Self::header_path(header);
+            } else if let Some((key, value)) = trimmed.split_once(" = ") {
+                let mut path = section.clone();
+                path.push(Self::header_path(key).join("."));
+                if let Some((original, resolved)) = refs.get(&path)
+                    // Quoted through `toml` on both sides so escaping matches exactly.
+                    && value == toml::Value::String(resolved.clone()).to_string()
+                {
+                    let indent = &line[..line.len() - trimmed.len()];
+                    let restored = toml::Value::String(original.clone()).to_string();
+                    out.push_str(&format!("{indent}{key} = {restored}\n"));
+                    continue;
+                }
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
+        out
     }
 
     /// Save configuration to a specific path
