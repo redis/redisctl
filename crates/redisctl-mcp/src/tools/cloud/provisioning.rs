@@ -61,9 +61,52 @@ pub fn cloud_auth_status(state: std::sync::Arc<crate::state::AppState>) -> tower
         .build()
 }
 
-/// Any directory is fine; the name has to be an env file, so credentials cannot be aimed at a
-/// shell profile or an ssh config.
-fn credentials_path_is_an_env_file(path: &str) -> Result<std::path::PathBuf, tower_mcp::Error> {
+/// Extra directories credentials may be written into, beyond the working directory. Absolute, and
+/// separated the way `PATH` is on the platform — `:` on Unix, `;` on Windows. For a server whose
+/// working directory is not the caller's project.
+const OUTPUT_ROOTS_ENV: &str = "REDISCTL_MCP_OUTPUT_DIRS";
+
+/// Where credentials may be written: the working directory, plus anything in
+/// [`OUTPUT_ROOTS_ENV`].
+fn permitted_output_roots() -> Vec<std::path::PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        roots.push(cwd);
+    }
+    if let Some(extra) = std::env::var_os(OUTPUT_ROOTS_ENV) {
+        // `split_paths` uses the platform separator, so a Windows root keeps its drive letter —
+        // splitting on ':' would cut `C:\project` into `C` and `\project`.
+        roots.extend(std::env::split_paths(&extra));
+    }
+    roots.iter().filter_map(|r| r.canonicalize().ok()).collect()
+}
+
+/// The deepest ancestor of `path` that exists, with symlinks resolved.
+///
+/// Canonicalising only the full path fails for a file that is not there yet, and canonicalising
+/// nothing at all would let `proj/.env` through while `proj` is a symlink to somewhere else.
+fn resolved_parent(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut current = path.parent()?.to_path_buf();
+    loop {
+        // A relative name like `.env` has an empty parent, which means the working directory.
+        let probe = if current.as_os_str().is_empty() {
+            std::path::Path::new(".")
+        } else {
+            current.as_path()
+        };
+        if let Ok(resolved) = probe.canonicalize() {
+            return Some(resolved);
+        }
+        current = current.parent()?.to_path_buf();
+    }
+}
+
+/// Credentials may only be written to an env file inside a permitted root.
+///
+/// The name alone is not a boundary: it stops a shell profile being the target but leaves every
+/// directory on the machine available. Both halves are checked here, and the destination is
+/// resolved through symlinks first, so a link in any component cannot carry the write outside.
+fn credentials_path_is_permitted(path: &str) -> Result<std::path::PathBuf, tower_mcp::Error> {
     let candidate = std::path::PathBuf::from(path);
     let name = candidate
         .file_name()
@@ -71,12 +114,30 @@ fn credentials_path_is_an_env_file(path: &str) -> Result<std::path::PathBuf, tow
         .unwrap_or_default();
     let looks_like_env =
         name == ".env" || name.starts_with(".env.") || name.ends_with(".env") && name.len() > 4;
-    if looks_like_env {
+    if !looks_like_env {
+        return Err(tower_mcp::Error::invalid_params(format!(
+            "output_credentials must name an env file (`.env`, `.env.local`, `something.env`), \
+             got {path:?}"
+        )));
+    }
+
+    let roots = permitted_output_roots();
+    let Some(parent) = resolved_parent(&candidate) else {
+        return Err(tower_mcp::Error::invalid_params(format!(
+            "no existing directory to write {path:?} into"
+        )));
+    };
+    if roots.iter().any(|root| parent.starts_with(root)) {
         return Ok(candidate);
     }
     Err(tower_mcp::Error::invalid_params(format!(
-        "output_credentials must name an env file (`.env`, `.env.local`, `something.env`), \
-         got {path:?}"
+        "output_credentials must be inside the working directory{}, and {path:?} resolves \
+         outside it. Set {OUTPUT_ROOTS_ENV} to permit another directory",
+        if std::env::var_os(OUTPUT_ROOTS_ENV).is_some() {
+            format!(" or a directory in {OUTPUT_ROOTS_ENV}")
+        } else {
+            String::new()
+        }
     )))
 }
 
@@ -104,7 +165,7 @@ cloud_tool!(write, cloud_quick_database, "cloud_quick_database",
     } => |client, input| {
         let mut params = QuickDatabaseParams::new(input.name);
         if let Some(p) = input.output_credentials {
-            params.output_credentials = credentials_path_is_an_env_file(&p)?;
+            params.output_credentials = credentials_path_is_permitted(&p)?;
         }
         if let Some(v) = input.variable {
             params.variable = v;
@@ -124,24 +185,20 @@ cloud_tool!(write, cloud_quick_database, "cloud_quick_database",
 
 #[cfg(test)]
 mod tests {
-    use super::credentials_path_is_an_env_file;
+    use super::{OUTPUT_ROOTS_ENV, credentials_path_is_permitted};
 
+    /// One test rather than several: it moves a process-wide environment variable, so it must
+    /// not run alongside another that reads the same one.
     #[test]
-    fn credentials_target_must_be_an_env_file() {
-        for ok in [
-            ".env",
-            "./.env",
-            "config/.env",
-            ".env.local",
-            "prod.env",
-            "/Users/someone/projects/app/.env",
-            "/tmp/xyz/.env",
-        ] {
+    fn credentials_target_must_be_an_env_file_inside_a_permitted_root() {
+        // Relative names land in the working directory, which is always permitted.
+        for ok in [".env", "./.env", ".env.local", "prod.env"] {
             assert!(
-                credentials_path_is_an_env_file(ok).is_ok(),
+                credentials_path_is_permitted(ok).is_ok(),
                 "{ok} should be accepted"
             );
         }
+        // The name still has to be an env file, whatever the directory.
         for bad in [
             "/Users/someone/.zshrc",
             "~/.bashrc",
@@ -152,9 +209,57 @@ mod tests {
             "",
         ] {
             assert!(
-                credentials_path_is_an_env_file(bad).is_err(),
+                credentials_path_is_permitted(bad).is_err(),
                 "{bad:?} should be refused"
             );
         }
+
+        // An env file outside the working directory is refused until its directory is permitted.
+        let project = tempfile::tempdir().unwrap();
+        let inside = project.path().join(".env");
+        let inside = inside.to_str().unwrap();
+        assert!(
+            credentials_path_is_permitted(inside).is_err(),
+            "an absolute path outside every root should be refused"
+        );
+
+        // Joined the platform way, which is how a user would set it: on Windows a drive letter
+        // makes ':' the wrong separator, so this must not be hand-rolled.
+        let second = tempfile::tempdir().unwrap();
+        let value = std::env::join_paths([project.path(), second.path()]).unwrap();
+        // SAFETY: single-threaded test, and this is the only reader of the variable.
+        unsafe { std::env::set_var(OUTPUT_ROOTS_ENV, &value) };
+        let permitted = credentials_path_is_permitted(inside).is_ok();
+        let second_ok =
+            credentials_path_is_permitted(second.path().join(".env").to_str().unwrap()).is_ok();
+
+        // A symlink in the path cannot carry the write out of the permitted root, which a
+        // filename check on its own cannot prevent.
+        let escape = project.path().join("out");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("/etc", &escape).unwrap();
+        #[cfg(unix)]
+        let escaped = credentials_path_is_permitted(escape.join(".env").to_str().unwrap()).is_err();
+        #[cfg(not(unix))]
+        let escaped = true;
+
+        // Absolute paths keep working: the server's directory is often not the caller's project.
+        let nested = project.path().join("sub").join(".env");
+        let nested_ok = credentials_path_is_permitted(nested.to_str().unwrap()).is_ok();
+
+        unsafe { std::env::remove_var(OUTPUT_ROOTS_ENV) };
+        assert!(
+            permitted,
+            "a directory named in {OUTPUT_ROOTS_ENV} should be accepted"
+        );
+        assert!(
+            second_ok,
+            "every directory in the list should be accepted, not just the first"
+        );
+        assert!(escaped, "a symlink out of the root should be refused");
+        assert!(
+            nested_ok,
+            "a not-yet-created subdirectory of a root should be accepted"
+        );
     }
 }
