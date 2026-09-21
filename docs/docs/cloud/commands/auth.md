@@ -348,11 +348,13 @@ Every path that replaces a key revokes the one it replaces — `login`, `switch`
 each is best-effort by design: a revocation that cannot reach Redis Cloud must not fail the command
 that needed to succeed. So there is one outcome to know how to clean up after.
 
-**What is revoked, and where.** A profile records the account id and the key name it holds. The
-revocation points the session at *that* account and deletes *that* name — not the account you
-happen to be on, and not any other `redisctl-*` key the account holds, which may belong to another
-machine or another profile. If the recorded name is not on the account, nothing is deleted and the
-command says so rather than guessing.
+**What is revoked, and where.** A profile records the account id and the key name it holds. Every
+revocation — on `login`, `switch` and `logout` alike — points the session at *that* account and
+deletes *that* name. Not the account you happen to be on: a sign-in starts on your server-side
+default, which after a `switch` is not the account the profile's key was minted for. And not any
+other `redisctl-*` key the account holds, which may belong to another machine or another profile.
+If the recorded name is not on the account, nothing is deleted and the command names the account it
+searched rather than implying the key is gone.
 
 **What a failure looks like.** The key is named, because the name cannot be recovered afterwards —
 by then the profile records the new key, not the one left behind:

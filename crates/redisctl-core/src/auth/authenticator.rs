@@ -234,13 +234,18 @@ impl CloudAuthenticator {
         })
     }
 
-    /// Revoke a minted CAPI key by name, using a session established from `tokens`.
+    /// Revoke a minted CAPI key by name from `account_id`, using a session established from
+    /// `tokens`.
     ///
-    /// Returns whether a key of that name was found. Deleting is scoped to the session's account,
-    /// so a key on a different account is simply not visible here.
+    /// Returns whether a key of that name was found. Both the listing and the delete are scoped
+    /// to the session's account, so the caller has to say which account holds the key: a sign-in
+    /// starts on the user's server-side default, which is not necessarily the one a profile's key
+    /// was minted for. Passing `None` searches wherever the session lands, which is all an older
+    /// profile that recorded no account can do.
     pub async fn revoke_capi_key(
         &self,
         tokens: &TokenSet,
+        account_id: Option<u64>,
         key_name: &str,
     ) -> Result<bool, AuthError> {
         let mut sm = SmApiClient::with_http_client(
@@ -249,6 +254,12 @@ impl CloudAuthenticator {
             LoginFlow::Switch,
         );
         sm.login(&tokens.access_token, None).await?;
+        // A fresh sign-in starts on the user's server-side default account, and both the listing
+        // and the delete are scoped to the session's account. Without this, revoking a key that
+        // belongs to any other account looks like a key that is already gone.
+        if let Some(account_id) = account_id {
+            sm.set_current_account(account_id).await?;
+        }
         let Some((id, _)) = sm
             .fetch_capi_key_entries()
             .await?
@@ -1399,6 +1410,44 @@ mod tests {
                 .iter()
                 .any(|r| r.method == wiremock::http::Method::DELETE),
             "no delete should be issued when the recorded key is absent"
+        );
+    }
+
+    /// Logout revokes the key the profile recorded, which may not be on the account the sign-in
+    /// lands on. Without pointing the session there first, a key minted after a `switch` is
+    /// invisible — and an invisible key reads as one that is already gone.
+    #[tokio::test]
+    async fn revoking_by_name_points_the_session_at_the_key_account() {
+        let server = MockServer::start().await;
+        common_login_mocks(&server).await;
+        // The session's own default account holds a different key entirely.
+        Mock::given(method("POST"))
+            .and(path("/accounts/setcurrent/222"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(1)
+            .named("point the session at the account the key belongs to")
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/accounts/cloud-api/cloudApiKeys"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "cloudApiKeys": [{"id": 5, "name": "redisctl-cli-on-222"}]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/accounts/cloud-api/cloudApiKeys/5"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert!(
+            authenticator(&server)
+                .revoke_capi_key(&tokens(), Some(222), "redisctl-cli-on-222")
+                .await
+                .unwrap(),
+            "the key on the recorded account should be found and deleted"
         );
     }
 
