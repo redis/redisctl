@@ -260,15 +260,25 @@ impl CloudAuthenticator {
         if let Some(account_id) = account_id {
             sm.set_current_account(account_id).await?;
         }
-        let Some((id, _)) = sm
-            .fetch_capi_key_entries()
-            .await?
-            .into_iter()
-            .find(|(_, name)| name == key_name)
-        else {
+        let entries = sm.fetch_capi_key_entries().await?;
+        let Some((id, _)) = entries.iter().find(|(_, name)| name == key_name) else {
+            // Same diagnostic the login/switch path logs on a miss: without the names, "not
+            // found" gives the reader nothing to compare against.
+            tracing::warn!(
+                "key {key_name} is not on {}; it holds: {}",
+                match account_id {
+                    Some(account) => format!("account {account}"),
+                    None => "the account this sign-in defaults to".to_string(),
+                },
+                entries
+                    .iter()
+                    .map(|(_, name)| name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
             return Ok(false);
         };
-        sm.delete_capi_key(id).await?;
+        sm.delete_capi_key(*id).await?;
         Ok(true)
     }
 
@@ -1414,25 +1424,36 @@ mod tests {
     }
 
     /// Logout revokes the key the profile recorded, which may not be on the account the sign-in
-    /// lands on. Without pointing the session there first, a key minted after a `switch` is
-    /// invisible — and an invisible key reads as one that is already gone.
+    /// lands on. The listing is what proves it: until `setcurrent` runs, this account shows a
+    /// different key entirely, so skipping the switch finds nothing rather than merely omitting
+    /// a request.
     #[tokio::test]
     async fn revoking_by_name_points_the_session_at_the_key_account() {
         let server = MockServer::start().await;
+        let switched = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         common_login_mocks(&server).await;
-        // The session's own default account holds a different key entirely.
+
+        let flag = switched.clone();
         Mock::given(method("POST"))
             .and(path("/accounts/setcurrent/222"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
-            .expect(1)
-            .named("point the session at the account the key belongs to")
+            .respond_with(move |_: &wiremock::Request| {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({}))
+            })
             .mount(&server)
             .await;
+        // The default account holds someone else's key; 222 holds ours.
+        let flag = switched.clone();
         Mock::given(method("GET"))
             .and(path("/accounts/cloud-api/cloudApiKeys"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "cloudApiKeys": [{"id": 5, "name": "redisctl-cli-on-222"}]
-            })))
+            .respond_with(move |_: &wiremock::Request| {
+                let keys = if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                    serde_json::json!([{"id": 5, "name": "redisctl-cli-on-222"}])
+                } else {
+                    serde_json::json!([{"id": 9, "name": "a-key-on-the-default-account"}])
+                };
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"cloudApiKeys": keys}))
+            })
             .mount(&server)
             .await;
         Mock::given(method("DELETE"))
@@ -1448,6 +1469,43 @@ mod tests {
                 .await
                 .unwrap(),
             "the key on the recorded account should be found and deleted"
+        );
+    }
+
+    /// A profile that recorded no account — written before the id was stored — searches wherever
+    /// the session lands, which is all it can do. It must not issue a switch to nowhere.
+    #[tokio::test]
+    async fn revoking_by_name_without_an_account_does_not_switch() {
+        let server = MockServer::start().await;
+        common_login_mocks(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/accounts/cloud-api/cloudApiKeys"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "cloudApiKeys": [{"id": 3, "name": "redisctl-cli-somewhere"}]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/accounts/cloud-api/cloudApiKeys/3"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert!(
+            authenticator(&server)
+                .revoke_capi_key(&tokens(), None, "redisctl-cli-somewhere")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .any(|r| r.url.path().starts_with("/accounts/setcurrent/")),
+            "no account was recorded, so there is nothing to switch to"
         );
     }
 
