@@ -355,8 +355,9 @@ revocation — on `login`, `switch` and `logout` alike — points the session at
 deletes *that* name. Not the account you happen to be on: a sign-in starts on your server-side
 default, which after a `switch` is not the account the profile's key was minted for. And not any
 other `redisctl-*` key the account holds, which may belong to another machine or another profile.
-If the recorded name is not on the account, nothing is deleted and the command names the account it
-searched rather than implying the key is gone.
+If the recorded name is not on the account, nothing is deleted and the command says so, naming
+the account it searched — it cannot tell whether the key was already revoked or was never on that
+account, so it points at the console either way.
 
 **What a failure looks like.** The key is named, because the name cannot be recovered afterwards —
 by then the profile records the new key, not the one left behind:

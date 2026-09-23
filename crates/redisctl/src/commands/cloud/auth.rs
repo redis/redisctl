@@ -938,7 +938,11 @@ async fn logout(
     // (remove_profile drops them otherwise, which would break re-login on QA/staging).
     let saved_auth = config.cloud_auth.get(&profile_name).cloned();
     config.remove_profile(&profile_name);
-    if let Some(auth) = saved_auth {
+    if let Some(mut auth) = saved_auth {
+        // Endpoints are worth keeping; which key this profile held is not. Leaving it would make
+        // the next login report the key just deleted here as one it could not revoke.
+        auth.account_id = None;
+        auth.capi_key_name = None;
         config.cloud_auth.insert(profile_name.clone(), auth);
     }
     save_config(conn_mgr, &config)?;

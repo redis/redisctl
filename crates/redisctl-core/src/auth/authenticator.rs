@@ -500,8 +500,6 @@ pub struct AccountListing {
     pub session_account: Option<u64>,
 }
 
-/// Revoke `previous` using the current session, which has to be pointed at its account first
-/// because the delete is scoped to the session's account.
 /// Point the session at `want` and confirm it landed there.
 ///
 /// A successful response does not mean the session moved, and everything afterwards resolves the
@@ -1405,6 +1403,122 @@ mod tests {
         assert!(
             format!("{err}").contains("still reports"),
             "the error should say the session did not move, got: {err}"
+        );
+    }
+
+    /// The switch *back* to the superseded key's account is verified too. Here only the switch to
+    /// 222 lands, so the return to 111 answers 200 without moving — and a revoke that cannot
+    /// reach the account must report failure rather than delete from wherever it ended up.
+    #[tokio::test]
+    async fn revoking_across_accounts_refuses_when_the_switch_back_does_not_take() {
+        let server = MockServer::start().await;
+        let cell = mock_session(&server, 111, vec![222]).await;
+        mock_keys(
+            &server,
+            cell,
+            vec![(111, 9, "redisctl-cli-1"), (222, 7, "redisctl-cli-1")],
+        )
+        .await;
+        Mock::given(method("GET"))
+            .and(path("/accounts"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "accounts": [
+                    {"id": 111, "name": "One", "api_access_key": "KEY-111"},
+                    {"id": 222, "name": "Two", "api_access_key": "KEY-222"}
+                ]
+            })))
+            .mount(&server)
+            .await;
+        // 222 holds a key of the same name. Deleting that one would be deleting the key this
+        // login just minted for, on the wrong account.
+        Mock::given(method("DELETE"))
+            .and(wiremock::matchers::path_regex(
+                r"^/accounts/cloud-api/cloudApiKeys/\d+$",
+            ))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .named("nothing may be deleted from an account we did not reach")
+            .mount(&server)
+            .await;
+
+        let (_, revoker) = authenticator(&server)
+            .complete_login_with_mfa(
+                &tokens(),
+                "redisctl-cli-2",
+                LoginFlow::Switch,
+                AccountChoice::Id(222),
+                Some(SupersededKey {
+                    account_id: 111,
+                    key_name: "redisctl-cli-1".to_string(),
+                }),
+                |_, _| Ok(None),
+            )
+            .await
+            .unwrap();
+        assert!(
+            !revoker.unwrap().revoke().await,
+            "a switch that did not land must not be reported as a revocation"
+        );
+    }
+
+    /// Revocation deletes the key the profile recorded and nothing else. An account can hold other
+    /// `redisctl-*` keys — a second machine, a second profile — and the names here are chosen so a
+    /// prefix or substring match would take a neighbour.
+    #[tokio::test]
+    async fn revocation_targets_the_recorded_key_alone() {
+        let server = MockServer::start().await;
+        let cell = mock_session(&server, 111, vec![]).await;
+        mock_keys(
+            &server,
+            cell,
+            vec![
+                (111, 1, "redisctl-cli-0"),
+                (111, 2, "redisctl-cli-11"),
+                (111, 3, "redisctl-cli-1"),
+                (111, 4, "someone-elses-key"),
+            ],
+        )
+        .await;
+        // Only id 3 may be deleted; any other id has no mock and would 404.
+        Mock::given(method("DELETE"))
+            .and(path("/accounts/cloud-api/cloudApiKeys/3"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .named("delete the recorded key, by exact name")
+            .mount(&server)
+            .await;
+
+        assert!(
+            authenticator(&server)
+                .revoke_capi_key(&tokens(), None, "redisctl-cli-1")
+                .await
+                .unwrap()
+        );
+    }
+
+    /// A recorded key that is not on the account deletes nothing and is reported as not revoked.
+    /// Guessing which key was meant is the one thing worse than saying so.
+    #[tokio::test]
+    async fn revocation_deletes_nothing_when_the_recorded_key_is_gone() {
+        let server = MockServer::start().await;
+        let cell = mock_session(&server, 111, vec![]).await;
+        mock_keys(&server, cell, vec![(111, 9, "a-key-someone-else-minted")]).await;
+        Mock::given(method("DELETE"))
+            .and(wiremock::matchers::path_regex(
+                r"^/accounts/cloud-api/cloudApiKeys/\d+$",
+            ))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .named("nothing may be deleted when the recorded key is absent")
+            .mount(&server)
+            .await;
+
+        assert!(
+            !authenticator(&server)
+                .revoke_capi_key(&tokens(), None, "redisctl-cli-1")
+                .await
+                .unwrap(),
+            "a key that is not there cannot be reported as revoked"
         );
     }
 
