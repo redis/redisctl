@@ -156,10 +156,22 @@ fn logout_removes_profile_but_preserves_cloud_auth_endpoints() {
     config.set_profile("qa".to_string(), cloud_profile("https://api-qa.example/v1"));
     config.cloud_auth.insert("qa".to_string(), qa_cloud_auth());
 
-    // The logout sequence: save endpoints, remove the profile, restore endpoints.
+    // Record a key, as a login would.
+    config
+        .cloud_auth
+        .get_mut("qa")
+        .map(|auth| {
+            auth.account_id = Some(492752);
+            auth.capi_key_name = Some("redisctl-cli-1".to_string());
+        })
+        .unwrap();
+
+    // The logout sequence: save endpoints, remove the profile, restore the endpoints only.
     let saved = config.cloud_auth.get("qa").cloned();
     config.remove_profile("qa");
-    if let Some(auth) = saved {
+    if let Some(mut auth) = saved {
+        auth.account_id = None;
+        auth.capi_key_name = None;
         config.cloud_auth.insert("qa".to_string(), auth);
     }
 
@@ -170,6 +182,10 @@ fn logout_removes_profile_but_preserves_cloud_auth_endpoints() {
     let auth = loaded.resolve_cloud_auth("qa");
     assert!(auth.is_complete());
     assert_eq!(auth.okta_client_id, "test-client-id");
+    // The key logout just deleted must not be recorded any more, or the next login reports it as
+    // one it could not revoke.
+    assert_eq!(auth.account_id, None);
+    assert_eq!(auth.capi_key_name, None);
 }
 
 /// A login rewrites the profile, but must not discard settings it does not own.

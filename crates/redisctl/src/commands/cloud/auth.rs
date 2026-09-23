@@ -938,7 +938,11 @@ async fn logout(
     // (remove_profile drops them otherwise, which would break re-login on QA/staging).
     let saved_auth = config.cloud_auth.get(&profile_name).cloned();
     config.remove_profile(&profile_name);
-    if let Some(auth) = saved_auth {
+    if let Some(mut auth) = saved_auth {
+        // Endpoints are worth keeping; which key this profile held is not. Leaving it would make
+        // the next login report the key just deleted here as one it could not revoke.
+        auth.account_id = None;
+        auth.capi_key_name = None;
         config.cloud_auth.insert(profile_name.clone(), auth);
     }
     save_config(conn_mgr, &config)?;
@@ -1062,13 +1066,28 @@ async fn revoke_remotely(
              revoke by name."
                 .to_string(),
         ),
-        Some(key_name) => match authenticator.revoke_capi_key(&tokens, key_name).await {
-            Ok(true) => Ok(key_name.clone()),
-            Ok(false) => Err(format!(
-                "the key {key_name} was not found on this account; it may already be revoked."
-            )),
-            Err(e) => Err(format!("could not revoke the key {key_name}: {e}.")),
-        },
+        Some(key_name) => {
+            // The account the profile's key was minted for. A sign-in starts on the user's
+            // default account, so without this a key minted on any other one is not even visible.
+            let on_account = auth_cfg.account_id;
+            match authenticator
+                .revoke_capi_key(&tokens, on_account, key_name)
+                .await
+            {
+                Ok(true) => Ok(key_name.clone()),
+                Ok(false) => Err(match on_account {
+                    Some(account) => format!(
+                        "the key {key_name} was not found on account {account}; it may already \
+                         be revoked."
+                    ),
+                    None => format!(
+                        "the key {key_name} was not found on the account this sign-in defaults \
+                         to, and this profile does not record which account it belongs to."
+                    ),
+                }),
+                Err(e) => Err(format!("could not revoke the key {key_name}: {e}.")),
+            }
+        }
     };
     // The refresh above rotated the token, so revoke the one we now hold; the previous value is
     // already invalid at the IdP.
