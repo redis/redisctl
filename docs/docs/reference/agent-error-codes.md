@@ -10,7 +10,7 @@ In `-o json` / `-o yaml` mode, a failure on these commands prints an error envel
 **stdout** and exits with a mapped code:
 
 ```json
-{ "status": "error", "error": { "code": "free_db_exists", "message": "…", "retryable": true } }
+{ "status": "error", "error": { "code": "free_db_exists", "message": "…", "retryable": false } }
 ```
 
 - `code` — a stable, append-only identifier. Branch on this.
