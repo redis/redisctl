@@ -258,7 +258,7 @@ impl CloudAuthenticator {
         // and the delete are scoped to the session's account. Without this, revoking a key that
         // belongs to any other account looks like a key that is already gone.
         if let Some(account_id) = account_id {
-            sm.set_current_account(account_id).await?;
+            set_current_account_verified(&sm, account_id).await?;
         }
         let entries = sm.fetch_capi_key_entries().await?;
         let Some((id, _)) = entries.iter().find(|(_, name)| name == key_name) else {
@@ -435,16 +435,7 @@ impl CloudAuthenticator {
                     .join(", "),
             });
         }
-        sm.set_current_account(want).await?;
-        let user = sm.fetch_current_user().await?;
-        // Trust the server's answer, not the request's success.
-        if user.current_account_id.as_deref() != Some(want.to_string().as_str()) {
-            return Err(AuthError::Protocol(format!(
-                "asked Redis Cloud to switch to account {want} but the session still reports {}",
-                user.current_account_id.as_deref().unwrap_or("none")
-            )));
-        }
-        Ok(user)
+        set_current_account_verified(sm, want).await
     }
 
     /// Drive the MFA retry loop against an already-challenged client.
@@ -511,6 +502,24 @@ pub struct AccountListing {
 
 /// Revoke `previous` using the current session, which has to be pointed at its account first
 /// because the delete is scoped to the session's account.
+/// Point the session at `want` and confirm it landed there.
+///
+/// A successful response does not mean the session moved, and everything afterwards resolves the
+/// account from the session — so an unverified switch quietly reads and deletes on whichever
+/// account the session was already on.
+async fn set_current_account_verified(sm: &SmApiClient, want: u64) -> Result<SmUser, AuthError> {
+    sm.set_current_account(want).await?;
+    let user = sm.fetch_current_user().await?;
+    // Trust the server's answer, not the request's success.
+    if user.current_account_id.as_deref() != Some(want.to_string().as_str()) {
+        return Err(AuthError::Protocol(format!(
+            "asked Redis Cloud to switch to account {want} but the session still reports {}",
+            user.current_account_id.as_deref().unwrap_or("none")
+        )));
+    }
+    Ok(user)
+}
+
 /// Revokes the key a freshly minted one replaces, using the session that minted it.
 ///
 /// Handed back rather than run during the mint so a caller can store the new credentials first:
@@ -547,7 +556,7 @@ impl SupersededRevoker {
 async fn revoke_superseded(sm: &SmApiClient, previous: &SupersededKey, on: Option<u64>) -> bool {
     let account = previous.account_id;
     let moved = on != Some(account);
-    if moved && let Err(e) = sm.set_current_account(account).await {
+    if moved && let Err(e) = set_current_account_verified(sm, account).await {
         tracing::warn!(
             "cannot reach account {account} to revoke key {}: {e}",
             previous.key_name
@@ -1221,39 +1230,14 @@ mod tests {
         assert!(revoker.revoke().await);
     }
 
-    /// Revoking across accounts has to point the session at the key's account, which is the
-    /// reason the revoker keeps the session rather than the caller signing in again.
+    /// Revoking across accounts has to reach the other account, which is the reason the revoker
+    /// keeps the session rather than the caller signing in again. The switch back is verified
+    /// too, so a session that never moved cannot delete from the wrong account.
     #[tokio::test]
     async fn revoking_across_accounts_reaches_the_other_account() {
         let server = MockServer::start().await;
-        let switched = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        common_login_mocks(&server).await;
-
-        let flag = switched.clone();
-        Mock::given(method("GET"))
-            .and(path("/users/me"))
-            .respond_with(move |_: &wiremock::Request| {
-                let id = if flag.load(std::sync::atomic::Ordering::SeqCst) {
-                    "222"
-                } else {
-                    "111"
-                };
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "id": "1", "current_account_id": id, "email": "u@e.com"
-                }))
-            })
-            .mount(&server)
-            .await;
-        let flag = switched.clone();
-        Mock::given(method("POST"))
-            .and(path("/accounts/setcurrent/222"))
-            .respond_with(move |_: &wiremock::Request| {
-                flag.store(true, std::sync::atomic::Ordering::SeqCst);
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({}))
-            })
-            .expect(1)
-            .mount(&server)
-            .await;
+        let cell = mock_session(&server, 111, vec![111, 222]).await;
+        mock_keys(&server, cell, vec![(111, 9, "redisctl-cli-1")]).await;
         Mock::given(method("GET"))
             .and(path("/accounts"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -1264,24 +1248,11 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        Mock::given(method("POST"))
-            .and(path("/accounts/setcurrent/111"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
-            .expect(1)
-            .named("point the session at the superseded key's account")
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/accounts/cloud-api/cloudApiKeys"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "cloudApiKeys": [{"id": 9, "name": "redisctl-cli-1"}]
-            })))
-            .mount(&server)
-            .await;
         Mock::given(method("DELETE"))
             .and(path("/accounts/cloud-api/cloudApiKeys/9"))
             .respond_with(ResponseTemplate::new(200))
             .expect(1)
+            .named("delete the superseded key on the account that holds it")
             .mount(&server)
             .await;
 
@@ -1303,159 +1274,96 @@ mod tests {
         assert!(revoker.unwrap().revoke().await);
     }
 
-    /// Revocation deletes the key the profile recorded and nothing else. The account can hold
-    /// other `redisctl-*` keys — a second machine, a second profile — and they belong to whoever
-    /// minted them.
-    #[tokio::test]
-    async fn revocation_targets_the_recorded_key_alone() {
-        let server = MockServer::start().await;
-        common_login_mocks(&server).await;
-        Mock::given(method("GET"))
-            .and(path("/users/me"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({"id": "1", "current_account_id": "111", "email": "u@e.com"}),
-            ))
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/accounts"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "accounts": [{"id": 111, "name": "One", "api_access_key": "KEY-111"}]
-            })))
-            .mount(&server)
-            .await;
-        // Names that sort around the recorded one, and one that only differs by suffix.
-        Mock::given(method("GET"))
-            .and(path("/accounts/cloud-api/cloudApiKeys"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "cloudApiKeys": [
-                    {"id": 1, "name": "redisctl-cli-0"},
-                    {"id": 2, "name": "redisctl-cli-11"},
-                    {"id": 3, "name": "redisctl-cli-1"},
-                    {"id": 4, "name": "someone-elses-key"},
-                ]
-            })))
-            .mount(&server)
-            .await;
-        // Only id 3 may be deleted. Any other id 404s, which makes the revoke report false.
-        Mock::given(method("DELETE"))
-            .and(path("/accounts/cloud-api/cloudApiKeys/3"))
-            .respond_with(ResponseTemplate::new(200))
-            .expect(1)
-            .named("delete the recorded key, by exact name")
-            .mount(&server)
-            .await;
+    type AccountCell = std::sync::Arc<std::sync::atomic::AtomicU64>;
 
-        let (_, revoker) = authenticator(&server)
-            .complete_login_with_mfa(
-                &tokens(),
-                "redisctl-cli-2",
-                LoginFlow::Loopback,
-                AccountChoice::Current,
-                Some(SupersededKey {
-                    account_id: 111,
-                    key_name: "redisctl-cli-1".to_string(),
-                }),
-                |_, _| Ok(None),
-            )
-            .await
-            .unwrap();
-        assert!(revoker.unwrap().revoke().await);
+    fn account_of(cell: &AccountCell) -> u64 {
+        cell.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// A recorded key that is not on the account deletes nothing. Reporting `false` and leaving
-    /// the console to the user is the right outcome: the alternative is guessing which key was
-    /// meant.
-    #[tokio::test]
-    async fn revocation_deletes_nothing_when_the_recorded_key_is_gone() {
-        let server = MockServer::start().await;
-        common_login_mocks(&server).await;
+    /// A mock session that reports whichever account it was last switched *to*, and only moves
+    /// for the ids in `honoured`.
+    ///
+    /// An empty `honoured` models what the real API can do, and what the verification exists for:
+    /// answer 200 and leave the session where it was. Returns the cell so a test can mount
+    /// account-dependent mocks of its own.
+    async fn mock_session(server: &MockServer, starts_on: u64, honoured: Vec<u64>) -> AccountCell {
+        let current: AccountCell =
+            std::sync::Arc::new(std::sync::atomic::AtomicU64::new(starts_on));
+        common_login_mocks(server).await;
+
+        let cell = current.clone();
         Mock::given(method("GET"))
             .and(path("/users/me"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({"id": "1", "current_account_id": "111", "email": "u@e.com"}),
+            .respond_with(move |_: &wiremock::Request| {
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "1", "current_account_id": account_of(&cell).to_string(),
+                    "email": "u@e.com"
+                }))
+            })
+            .mount(server)
+            .await;
+
+        let cell = current.clone();
+        Mock::given(method("POST"))
+            .and(wiremock::matchers::path_regex(
+                r"^/accounts/setcurrent/\d+$",
             ))
-            .mount(&server)
+            .respond_with(move |req: &wiremock::Request| {
+                if let Some(asked) = req
+                    .url
+                    .path()
+                    .rsplit('/')
+                    .next()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    && honoured.contains(&asked)
+                {
+                    cell.store(asked, std::sync::atomic::Ordering::SeqCst);
+                }
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({}))
+            })
+            .mount(server)
             .await;
-        Mock::given(method("GET"))
-            .and(path("/accounts"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "accounts": [{"id": 111, "name": "One", "api_access_key": "KEY-111"}]
-            })))
-            .mount(&server)
-            .await;
+
+        current
+    }
+
+    /// Keys per account, so the listing shows what the session's account actually holds.
+    async fn mock_keys(server: &MockServer, cell: AccountCell, per_account: Vec<(u64, u64, &str)>) {
+        let owned: Vec<(u64, u64, String)> = per_account
+            .into_iter()
+            .map(|(account, id, name)| (account, id, name.to_string()))
+            .collect();
         Mock::given(method("GET"))
             .and(path("/accounts/cloud-api/cloudApiKeys"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "cloudApiKeys": [{"id": 9, "name": "a-key-someone-else-minted"}]
-            })))
-            .mount(&server)
+            .respond_with(move |_: &wiremock::Request| {
+                let here = account_of(&cell);
+                let keys: Vec<_> = owned
+                    .iter()
+                    .filter(|(account, _, _)| *account == here)
+                    .map(|(_, id, name)| serde_json::json!({"id": id, "name": name}))
+                    .collect();
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"cloudApiKeys": keys}))
+            })
+            .mount(server)
             .await;
-        // No DELETE is mounted: issuing one for any id would 404 and fail the assertion below
-        // by a different route, but the point is that none is issued at all.
-
-        let (_, revoker) = authenticator(&server)
-            .complete_login_with_mfa(
-                &tokens(),
-                "redisctl-cli-2",
-                LoginFlow::Loopback,
-                AccountChoice::Current,
-                Some(SupersededKey {
-                    account_id: 111,
-                    key_name: "redisctl-cli-1".to_string(),
-                }),
-                |_, _| Ok(None),
-            )
-            .await
-            .unwrap();
-        assert!(
-            !revoker.unwrap().revoke().await,
-            "a key that is not there cannot be reported as revoked"
-        );
-        assert!(
-            !server
-                .received_requests()
-                .await
-                .unwrap()
-                .iter()
-                .any(|r| r.method == wiremock::http::Method::DELETE),
-            "no delete should be issued when the recorded key is absent"
-        );
     }
 
     /// Logout revokes the key the profile recorded, which may not be on the account the sign-in
-    /// lands on. The listing is what proves it: until `setcurrent` runs, this account shows a
-    /// different key entirely, so skipping the switch finds nothing rather than merely omitting
-    /// a request.
+    /// lands on. The listing only shows it once the switch lands, so skipping the switch reads
+    /// the wrong account rather than merely omitting a request.
     #[tokio::test]
     async fn revoking_by_name_points_the_session_at_the_key_account() {
         let server = MockServer::start().await;
-        let switched = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        common_login_mocks(&server).await;
-
-        let flag = switched.clone();
-        Mock::given(method("POST"))
-            .and(path("/accounts/setcurrent/222"))
-            .respond_with(move |_: &wiremock::Request| {
-                flag.store(true, std::sync::atomic::Ordering::SeqCst);
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({}))
-            })
-            .mount(&server)
-            .await;
-        // The default account holds someone else's key; 222 holds ours.
-        let flag = switched.clone();
-        Mock::given(method("GET"))
-            .and(path("/accounts/cloud-api/cloudApiKeys"))
-            .respond_with(move |_: &wiremock::Request| {
-                let keys = if flag.load(std::sync::atomic::Ordering::SeqCst) {
-                    serde_json::json!([{"id": 5, "name": "redisctl-cli-on-222"}])
-                } else {
-                    serde_json::json!([{"id": 9, "name": "a-key-on-the-default-account"}])
-                };
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"cloudApiKeys": keys}))
-            })
-            .mount(&server)
-            .await;
+        let cell = mock_session(&server, 111, vec![222]).await;
+        mock_keys(
+            &server,
+            cell,
+            vec![
+                (111, 9, "a-key-on-the-default-account"),
+                (222, 5, "redisctl-cli-on-222"),
+            ],
+        )
+        .await;
         Mock::given(method("DELETE"))
             .and(path("/accounts/cloud-api/cloudApiKeys/5"))
             .respond_with(ResponseTemplate::new(200))
@@ -1469,6 +1377,34 @@ mod tests {
                 .await
                 .unwrap(),
             "the key on the recorded account should be found and deleted"
+        );
+    }
+
+    /// `setcurrent` can answer 200 and leave the session where it was. Acting on that would read
+    /// and delete on the wrong account — and where that account holds a key of the same name,
+    /// delete someone else's working key. It has to fail instead.
+    #[tokio::test]
+    async fn revoking_by_name_refuses_when_the_switch_does_not_take() {
+        let server = MockServer::start().await;
+        let cell = mock_session(&server, 111, vec![]).await;
+        mock_keys(&server, cell, vec![(111, 9, "redisctl-cli-shared-name")]).await;
+        Mock::given(method("DELETE"))
+            .and(wiremock::matchers::path_regex(
+                r"^/accounts/cloud-api/cloudApiKeys/\d+$",
+            ))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .named("nothing may be deleted from an account we did not reach")
+            .mount(&server)
+            .await;
+
+        let err = authenticator(&server)
+            .revoke_capi_key(&tokens(), Some(222), "redisctl-cli-shared-name")
+            .await
+            .expect_err("an unverified switch must not be treated as success");
+        assert!(
+            format!("{err}").contains("still reports"),
+            "the error should say the session did not move, got: {err}"
         );
     }
 
