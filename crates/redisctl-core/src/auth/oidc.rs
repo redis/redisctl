@@ -43,7 +43,13 @@ impl std::fmt::Debug for TokenSet {
 ///
 /// Exit-code mapping is applied at the CLI layer in the error-contract work unit;
 /// here we only classify the failure.
+///
+/// `#[non_exhaustive]`: classifying a failure more precisely means a new variant — `Transport`
+/// below is one, and it is not the last — and this enum is part of the supported `redisctl-core`
+/// library surface, where an exhaustive downstream `match` would make each of those a major
+/// release. Match a wildcard arm and treat it as an unclassified failure.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum AuthError {
     /// The device/authorization code expired before the user approved (`expired_token`).
     #[error("the login code expired before it was approved; start login again")]

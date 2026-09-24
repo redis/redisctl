@@ -224,11 +224,20 @@ async fn accounts(
     // Okta hands back a replacement refresh token only when the app rotates them — and when it
     // does, the one just used stops working. Every other command persists what it gets back;
     // this one mints nothing, so without this the next command would reach for a dead token.
-    // Best-effort: failing to store it must not fail a read.
+    // Failing to store it must not fail a read, but it must be said: the old token is already
+    // dead and the replacement is now lost, so the profile's sign-in is gone until it signs in
+    // again. Reporting `status: ok` and nothing else sends the caller to a token that cannot work.
+    let mut sign_in_stored = true;
     if let Some(rotated) = tokens.refresh_token.as_deref()
         && rotated != refresh_token
+        && let Err(e) = store.store_credential(&format!("{profile_name}-okta-refresh"), rotated)
     {
-        let _ = store.store_credential(&format!("{profile_name}-okta-refresh"), rotated);
+        sign_in_stored = false;
+        eprintln!(
+            "\n  warning: the identity provider rotated this profile's sign-in and the \
+             replacement could not be stored ({e}). The one it replaced is no longer valid, so \
+             run `redisctl --profile {profile_name} cloud auth login` before the next command."
+        );
     }
 
     let listing = authenticator
@@ -262,6 +271,9 @@ async fn accounts(
             "profile": profile_name,
             "email": listing.email,
             "account_id": profile_account,
+            // False when the sign-in rotated and the replacement could not be stored: the
+            // listing below is good, but this profile cannot be used again without a login.
+            "sign_in_stored": sign_in_stored,
             "accounts": accounts.iter().map(|a| serde_json::json!({
                 "id": a.id,
                 "name": a.name,
@@ -1048,6 +1060,17 @@ async fn revoke_remotely(
     };
     let tokens = match authenticator.refresh(&refresh_token).await {
         Ok(tokens) => tokens,
+        // A request that never arrived says nothing about the sign-in. Calling it invalid here
+        // reports that there was nothing to revoke, while logout goes on to delete the local
+        // credentials — leaving a live refresh token, which can mint another key, and the
+        // profile's key itself alive server-side with nothing left naming them.
+        Err(AuthError::Network(_) | AuthError::Transport(_)) => {
+            let why = "the identity provider could not be reached";
+            return Revocation::blocked(
+                no_key_because(why),
+                format!("{why}, so the stored sign-in was not revoked."),
+            );
+        }
         Err(_) => {
             let why = "the stored sign-in is no longer valid";
             return Revocation::blocked(

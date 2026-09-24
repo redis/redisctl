@@ -215,6 +215,10 @@ impl From<AuthError> for StructuredError {
             AuthError::MfaRequired { .. } => Self::mfa_required(),
             AuthError::MfaInvalidCode => Self::mfa_invalid_code(),
             AuthError::MfaQuotaExceeded => Self::mfa_quota_exceeded(),
+            // `AuthError` is `#[non_exhaustive]`, so a variant added upstream lands here rather
+            // than failing the build. `unknown` is the documented code for exactly this: the
+            // message carries the detail, and adding the specific code stays a later change.
+            other => Self::unknown(other.to_string()),
         }
     }
 }
