@@ -169,6 +169,13 @@ async fn login(
             },
             account: match account {
                 Some(id) => AccountChoice::Id(id),
+                // On a terminal, ask rather than refuse: core rejects a login whose session does
+                // not say which of several accounts is current, and re-running with `--account`
+                // means a second browser sign-in — and on an MFA account, a second code.
+                // `switch` already asks this exact question with this exact picker.
+                None if std::io::stdin().is_terminal() && std::io::stderr().is_terminal() => {
+                    AccountChoice::Prompt(Box::new(account_for_login))
+                }
                 None => AccountChoice::Current,
             },
             superseded,
@@ -178,6 +185,30 @@ async fn login(
     )
     .await?;
     emit_signed_in(&creds, &profile_name, output)
+}
+
+/// Which account a plain `login` mints for, asking only where the session leaves it open.
+///
+/// Answers exactly what `AccountChoice::Current` answers wherever it can — the account the
+/// session reports, or the only one there is nothing to choose between — so the prompt appears
+/// precisely where a non-interactive run refuses with `account_required`, and nowhere else.
+///
+/// Naming the single account when the session reports none does point the session at it, which
+/// `Current` would not have. That is the repair the state needs: the alternative is minting an
+/// access key from one account with a secret from whatever the session thinks it is on.
+fn account_for_login(accounts: &[LoginAccount], current: Option<u64>) -> Result<u64, AuthError> {
+    if let Some(id) = current
+        && accounts.iter().any(|a| a.id == id)
+    {
+        return Ok(id);
+    }
+    match accounts {
+        [] => Err(AuthError::Protocol(
+            "this login is not associated with any Redis Cloud account".into(),
+        )),
+        [only] => Ok(only.id),
+        several => prompt_account(several, current),
+    }
 }
 
 /// The key a profile already holds, which a fresh mint for that profile replaces.
@@ -1439,6 +1470,34 @@ mod tests {
                 name: None,
             },
         ]
+    }
+
+    /// `login` only asks where the session leaves the account open. Anywhere
+    /// `AccountChoice::Current` could have answered, this answers the same way — otherwise a
+    /// login that used to just work would start stopping for a question.
+    ///
+    /// Not covered here: the several-accounts-and-nothing-to-go-on case, which reads stdin.
+    /// `resolve_account_choice` covers what the answer is then mapped to.
+    #[test]
+    fn login_asks_only_when_the_session_leaves_the_account_open() {
+        // The session names one of them: taken as-is, whatever else is on the list.
+        assert_eq!(
+            account_for_login(&accounts(), Some(481022)).unwrap(),
+            481022
+        );
+
+        // One account: nothing to choose between, whether or not the session claims something.
+        let one = vec![LoginAccount {
+            id: 316941,
+            name: Some("Acme".to_string()),
+        }];
+        for current in [None, Some(999)] {
+            assert_eq!(account_for_login(&one, current).unwrap(), 316941);
+        }
+
+        // No accounts at all is not a question either.
+        let err = account_for_login(&[], None).unwrap_err();
+        assert!(matches!(err, AuthError::Protocol(_)), "got {err:?}");
     }
 
     /// A config file names where credentials are sent, so an endpoint that is not transport-secure

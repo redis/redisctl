@@ -346,18 +346,32 @@ impl CloudAuthenticator {
         if let Some(want) = want {
             user = self.switch_account(&sm, user, want).await?;
         }
+        // Pick the account matching the logged-in user's current_account_id; `/accounts` order
+        // is not guaranteed, so there is nothing safe to fall back to.
+        //
+        // Settled *before* `ensure_capi_enabled`, which switches programmatic access on for the
+        // account: a login that is going to refuse must not leave that behind unreported, and
+        // `capi_newly_enabled` is only delivered on the success path.
+        let chosen = resolve_account(
+            sm.fetch_accounts().await?,
+            user.current_account_id.as_deref(),
+        )?
+        .id;
         let capi_newly_enabled = sm.ensure_capi_enabled().await?;
-        // Pick the account matching the logged-in user's current_account_id. /accounts list
-        // order isn't guaranteed, so taking the first entry could mint a key for the wrong
-        // account in a multi-account org. Fall back to the first only when it's absent/unknown.
+        // Re-read: the account access key only exists once CAPI is on, so the entry the key
+        // comes from has to be the one fetched after enabling it.
         let accounts = sm.fetch_accounts().await?;
         let all_accounts = login_accounts(&accounts);
-        let account = select_account(accounts, user.current_account_id.as_deref())
-            .ok_or_else(|| AuthError::Protocol("no accounts associated with this login".into()))?;
+        let account = accounts
+            .into_iter()
+            .find(|a| a.id == chosen)
+            .ok_or_else(|| {
+                AuthError::Protocol(format!(
+                    "account {chosen} was no longer listed after enabling programmatic access"
+                ))
+            })?;
         let account_name = account.name.clone();
         // Report the account the key belongs to, taken from the same entry the key came from.
-        // `user.current_account_id` can disagree with it (absent or unknown → `select_account`
-        // falls back), and printing that id would name an account the key is not for.
         let account_id = Some(account.id);
         let api_key = account.api_access_key.ok_or_else(|| {
             AuthError::Protocol("account has no CAPI access key after enabling CAPI".into())
@@ -422,17 +436,7 @@ impl CloudAuthenticator {
             }
             return Err(AuthError::UnknownAccount {
                 requested: want,
-                available: accounts
-                    .iter()
-                    .map(|a| {
-                        LoginAccount {
-                            id: a.id,
-                            name: a.name.clone(),
-                        }
-                        .label()
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", "),
+                available: account_labels(&accounts),
             });
         }
         set_current_account_verified(sm, want).await
@@ -594,12 +598,51 @@ async fn delete_named_key(sm: &SmApiClient, account: u64, key: &str) -> bool {
     }
 }
 
-fn select_account(accounts: Vec<SmAccount>, current_account_id: Option<&str>) -> Option<SmAccount> {
+/// The account the minted key will belong to: the one the session reports as current.
+///
+/// The chosen entry supplies the access key, while the secret is minted in the session's own
+/// account context — so guessing here pairs two halves that need not belong together, and
+/// `/accounts` order is not guaranteed. One account and a session that claims nothing is not a
+/// guess; anything else, and the caller has to say which.
+fn resolve_account(
+    mut accounts: Vec<SmAccount>,
+    current_account_id: Option<&str>,
+) -> Result<SmAccount, AuthError> {
     let target = current_account_id.and_then(|s| s.parse::<u64>().ok());
-    let idx = target
-        .and_then(|id| accounts.iter().position(|a| a.id == id))
-        .unwrap_or(0);
-    accounts.into_iter().nth(idx)
+    if let Some(at) = target.and_then(|id| accounts.iter().position(|a| a.id == id)) {
+        return Ok(accounts.swap_remove(at));
+    }
+    if accounts.is_empty() {
+        return Err(AuthError::Protocol(
+            "no accounts associated with this login".into(),
+        ));
+    }
+    // One account and nothing claimed: there is nothing else the key could belong to. A
+    // `current_account_id` we could not match is a different situation — the session is naming an
+    // account this list does not have, so taking the lone entry would pair its access key with a
+    // secret minted somewhere else. That is a disagreement, not silence, so it refuses below.
+    if accounts.len() == 1 && current_account_id.is_none() {
+        return Ok(accounts.swap_remove(0));
+    }
+    Err(AuthError::AccountRequired(format!(
+        "this sign-in does not report which Redis Cloud account is current{}, and a key minted \
+         on a guess could belong to the wrong one. Re-run with `--account <id>`; you belong to: \
+         {}",
+        match current_account_id {
+            Some(id) => format!(" (it names {id}, which is not one of yours)"),
+            None => String::new(),
+        },
+        account_labels(&accounts)
+    )))
+}
+
+/// `Acme (#316941), #451002` — the shared rendering for every message that lists accounts.
+fn account_labels(accounts: &[SmAccount]) -> String {
+    login_accounts(accounts)
+        .iter()
+        .map(LoginAccount::label)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
@@ -638,29 +681,65 @@ mod tests {
     }
 
     #[test]
-    fn select_account_prefers_current_account_id() {
+    fn resolve_account_prefers_current_account_id() {
         let accts = vec![account(111), account(222), account(333)];
         // Matches the user's current account, not the first in the list.
-        let chosen = select_account(accts, Some("222")).unwrap();
+        let chosen = resolve_account(accts, Some("222")).unwrap();
         assert_eq!(chosen.id, 222);
     }
 
+    /// The chosen entry supplies the access key while the secret is minted in the session's own
+    /// account, so a guess can pair halves from different accounts. With more than one candidate
+    /// and nothing to go on, refuse and name them.
     #[test]
-    fn select_account_falls_back_to_first_when_absent_or_unknown() {
+    fn resolve_account_refuses_to_guess_between_several() {
+        for current in [None, Some("999")] {
+            let err = resolve_account(vec![account(111), account(222)], current).unwrap_err();
+            let AuthError::AccountRequired(message) = err else {
+                panic!("{current:?} gave {err:?}");
+            };
+            assert!(message.contains("#111"), "{message}");
+            assert!(message.contains("#222"), "{message}");
+            assert!(message.contains("--account"), "{message}");
+        }
+        // The unknown id is worth naming: it is the thing that did not match.
+        let err = resolve_account(vec![account(111), account(222)], Some("999")).unwrap_err();
+        assert!(err.to_string().contains("999"), "{err}");
+    }
+
+    /// One account and a session that claims nothing is not a guess — there is nothing else the
+    /// key could belong to.
+    #[test]
+    fn resolve_account_takes_the_only_account() {
+        assert_eq!(resolve_account(vec![account(111)], None).unwrap().id, 111);
+        // And when the session does name it, by the matching path.
         assert_eq!(
-            select_account(vec![account(111), account(222)], None)
-                .unwrap()
-                .id,
+            resolve_account(vec![account(111)], Some("111")).unwrap().id,
             111
         );
-        // current_account_id present but not in the list → first (defensive fallback).
-        assert_eq!(
-            select_account(vec![account(111), account(222)], Some("999"))
-                .unwrap()
-                .id,
-            111
-        );
-        assert!(select_account(vec![], Some("1")).is_none());
+    }
+
+    /// A `current_account_id` the list does not have is a disagreement, not silence: the session
+    /// mints the secret in *that* account while the lone entry supplies the access key, so the
+    /// two halves need not belong together. Refused even though there is only one candidate.
+    #[test]
+    fn resolve_account_refuses_a_lone_account_the_session_disowns() {
+        for current in [Some("999"), Some("not-a-number")] {
+            let err = resolve_account(vec![account(111)], current).unwrap_err();
+            let AuthError::AccountRequired(message) = err else {
+                panic!("{current:?} gave {err:?}");
+            };
+            assert!(message.contains("#111"), "{message}");
+            assert!(message.contains("--account"), "{message}");
+        }
+    }
+
+    #[test]
+    fn resolve_account_reports_an_empty_list_as_protocol() {
+        assert!(matches!(
+            resolve_account(vec![], Some("1")),
+            Err(AuthError::Protocol(_))
+        ));
     }
 
     #[test]
@@ -1095,6 +1174,63 @@ mod tests {
                 assert_eq!(available, "One (#111)");
             }
             other => panic!("expected UnknownAccount, got {other:?}"),
+        }
+    }
+
+    /// Both shapes of "the session will not say which account is current" have to stop before
+    /// the mint: a key's secret is returned once, so one minted on a guess cannot be recovered
+    /// or paired with the right account afterwards.
+    ///
+    /// And before `ensure_capi_enabled`, which switches programmatic access on for the account.
+    /// A refusal must not leave that behind: `capi_newly_enabled` only reaches the caller on the
+    /// success path, so enabling it here would change the account with nothing saying so.
+    #[tokio::test]
+    async fn complete_login_mints_nothing_when_the_account_is_ambiguous() {
+        async fn attempt(current: Option<&str>) -> (AuthError, usize) {
+            let server = MockServer::start().await;
+            common_login_mocks(&server).await;
+
+            let mut me = serde_json::json!({"id": "1", "email": "u@e.com"});
+            if let Some(current) = current {
+                me["current_account_id"] = serde_json::json!(current);
+            }
+            Mock::given(method("GET"))
+                .and(path("/users/me"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(me))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/accounts"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "accounts": [
+                        {"id": 111, "name": "One", "api_access_key": "KEY-111"},
+                        {"id": 222, "name": "Two", "api_access_key": "KEY-222"}
+                    ]
+                })))
+                .mount(&server)
+                .await;
+
+            let err = authenticator(&server)
+                .complete_login(&tokens(), "k", LoginFlow::Loopback, AccountChoice::Current)
+                .await
+                .expect_err("an ambiguous account must not complete");
+            let requests = server.received_requests().await.unwrap_or_default();
+            let hits = |path: &str| requests.iter().filter(|r| r.url.path() == path).count();
+            assert_eq!(
+                hits("/accounts/cloud-api/cloudApiAccessKey"),
+                0,
+                "{current:?} enabled programmatic access before refusing"
+            );
+            (err, hits("/accounts/cloud-api/cloudApiKeys"))
+        }
+
+        for current in [None, Some("999")] {
+            let (err, mints) = attempt(current).await;
+            assert!(
+                matches!(err, AuthError::AccountRequired(_)),
+                "{current:?} gave {err:?}"
+            );
+            assert_eq!(mints, 0, "{current:?} minted a key anyway");
         }
     }
 
