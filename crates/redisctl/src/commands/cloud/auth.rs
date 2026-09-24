@@ -674,6 +674,15 @@ async fn complete_and_persist(
                 ),
             )));
         }
+        // Selecting the keyring does not establish that it can hold anything: on the Secret
+        // Service backend the connection is made at get/set time, so a locked or absent keyring
+        // still hands back an entry. Ask it to keep a throwaway value before minting a key.
+        store.probe_writable().map_err(|e| {
+            RedisCtlError::Structured(Box::new(StructuredError::keyring_unavailable(format!(
+                "the OS keyring cannot store credentials ({e}). Re-run with \
+                 `--allow-plaintext` to store them in the config file (0600) instead."
+            ))))
+        })?;
         store
     };
 

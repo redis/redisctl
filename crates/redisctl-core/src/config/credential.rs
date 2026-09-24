@@ -98,6 +98,41 @@ impl CredentialStore {
         }
     }
 
+    /// Confirm the backend can actually hold a credential, by storing a throwaway value and
+    /// reading it back.
+    ///
+    /// [`CredentialStore::new`] only builds an entry, which on the Secret Service backend says
+    /// nothing: the D-Bus conversation happens at get/set time, so an absent or locked keyring
+    /// still yields a handle. Callers that are about to create something they cannot recreate —
+    /// a minted API key, whose secret is returned once — should ask here first.
+    pub fn probe_writable(&self) -> Result<()> {
+        #[cfg(feature = "secure-storage")]
+        {
+            if !matches!(self.storage, CredentialStorage::Keyring) {
+                return Ok(());
+            }
+            const PROBE_KEY: &str = "__probe__";
+            const PROBE_VALUE: &str = "redisctl-probe";
+
+            let entry = keyring::Entry::new(SERVICE_NAME, PROBE_KEY)
+                .map_err(|e| ConfigError::KeyringError(e.to_string()))?;
+            entry.set_password(PROBE_VALUE).map_err(|e| {
+                ConfigError::KeyringError(format!("the keyring rejected a test write: {e}"))
+            })?;
+            let read_back = entry.get_password().map_err(|e| {
+                ConfigError::KeyringError(format!("the keyring did not return a test write: {e}"))
+            });
+            // Leave nothing behind whatever the read said.
+            let _ = entry.delete_credential();
+            if read_back? != PROBE_VALUE {
+                return Err(ConfigError::KeyringError(
+                    "the keyring returned a different value than was written".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Store a credential value
     pub fn store_credential(&self, key: &str, value: &str) -> Result<String> {
         #[cfg(feature = "secure-storage")]
@@ -356,5 +391,24 @@ mod tests {
 
         // Clean up
         let _ = store.delete_credential(key);
+    }
+
+    /// Nothing to probe without a keyring, and nothing may be written looking.
+    #[test]
+    fn probe_writable_is_a_no_op_for_plaintext() {
+        assert!(CredentialStore::plaintext().probe_writable().is_ok());
+    }
+
+    /// The probe has to leave the keyring as it found it — it runs on every login.
+    #[test]
+    fn probe_writable_accepts_a_working_keyring_and_cleans_up() {
+        let store = CredentialStore::new();
+        store.probe_writable().unwrap();
+        assert!(
+            store
+                .get_credential(&format!("{KEYRING_PREFIX}__probe__"), None)
+                .is_err(),
+            "the probe value was left in the keyring"
+        );
     }
 }
