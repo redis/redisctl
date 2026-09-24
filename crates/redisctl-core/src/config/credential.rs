@@ -25,6 +25,15 @@ const KEYRING_PREFIX: &str = "keyring:";
 #[cfg(feature = "secure-storage")]
 const SERVICE_NAME: &str = "redisctl";
 
+/// Entry name the availability read uses, and the stem `probe_writable` builds its per-call key
+/// from. One name for both so there is a single reserved key rather than a magic one per check.
+#[cfg(feature = "secure-storage")]
+const PROBE_ENTRY: &str = "__probe__";
+
+/// Distinguishes concurrent probes within one process, so parallel tests don't collide either.
+#[cfg(feature = "secure-storage")]
+static PROBE_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Storage backend for credentials
 #[derive(Debug, Clone)]
 pub enum CredentialStorage {
@@ -84,16 +93,23 @@ impl CredentialStore {
         }
     }
 
-    /// Check if keyring is available on this system
+    /// Whether the keyring backend answers at all, from a read.
+    ///
+    /// Reads the probe entry and judges the answer rather than discarding it: `Entry::new` only
+    /// builds a handle, so returning `true` whenever it succeeded made this unconditional and
+    /// left `new()` selecting `Keyring` on every machine with the feature compiled in. `NoEntry`
+    /// is the healthy answer — the entry is absent, and the backend said so. Anything else
+    /// (`NoStorageAccess`, `PlatformFailure`, …) is the backend refusing to talk.
+    ///
+    /// A read is all this does, so constructing a store never writes. Confirming the backend can
+    /// *hold* a value needs [`CredentialStore::probe_writable`].
     #[cfg(feature = "secure-storage")]
     fn is_keyring_available() -> bool {
-        // Try to create a test entry to see if keyring works
-        match keyring::Entry::new(SERVICE_NAME, "__test__") {
-            Ok(entry) => {
-                // Try to get a non-existent password (should fail gracefully)
-                let _ = entry.get_password();
-                true
-            }
+        match keyring::Entry::new(SERVICE_NAME, PROBE_ENTRY) {
+            Ok(entry) => !matches!(
+                entry.get_password(),
+                Err(keyring::Error::NoStorageAccess(_) | keyring::Error::PlatformFailure(_))
+            ),
             Err(_) => false,
         }
     }
@@ -101,20 +117,34 @@ impl CredentialStore {
     /// Confirm the backend can actually hold a credential, by storing a throwaway value and
     /// reading it back.
     ///
-    /// [`CredentialStore::new`] only builds an entry, which on the Secret Service backend says
-    /// nothing: the D-Bus conversation happens at get/set time, so an absent or locked keyring
-    /// still yields a handle. Callers that are about to create something they cannot recreate —
-    /// a minted API key, whose secret is returned once — should ask here first.
+    /// [`CredentialStore::is_keyring_available`] only reads, and a backend can answer a read and
+    /// still refuse a write — a locked macOS keychain, a Windows credential store the session
+    /// cannot write, keyutils in a container without `CONFIG_KEYS`. Callers about to create
+    /// something they cannot recreate — a minted API key, whose secret is returned once — should
+    /// ask here first.
+    ///
+    /// What this does *not* establish: on Linux the backend is keyutils (see the `keyring`
+    /// features in the workspace `Cargo.toml`), where the value lives in an in-memory kernel
+    /// keyring. A write and read-back inside one process succeeds there even when the value will
+    /// not be visible to the next `redisctl` run — the same absence [`Self::get_credential`]
+    /// reports after a reboot.
     pub fn probe_writable(&self) -> Result<()> {
         #[cfg(feature = "secure-storage")]
         {
             if !matches!(self.storage, CredentialStorage::Keyring) {
                 return Ok(());
             }
-            const PROBE_KEY: &str = "__probe__";
             const PROBE_VALUE: &str = "redisctl-probe";
 
-            let entry = keyring::Entry::new(SERVICE_NAME, PROBE_KEY)
+            // Per call, not a shared constant: two runs probing the same entry race, and the one
+            // that reads after the other's cleanup sees `NoEntry` and refuses a login its own
+            // keyring would have served.
+            let key = format!(
+                "{PROBE_ENTRY}-{}-{}",
+                std::process::id(),
+                PROBE_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            );
+            let entry = keyring::Entry::new(SERVICE_NAME, &key)
                 .map_err(|e| ConfigError::KeyringError(e.to_string()))?;
             entry.set_password(PROBE_VALUE).map_err(|e| {
                 ConfigError::KeyringError(format!("the keyring rejected a test write: {e}"))
@@ -399,16 +429,23 @@ mod tests {
         assert!(CredentialStore::plaintext().probe_writable().is_ok());
     }
 
-    /// The probe has to leave the keyring as it found it — it runs on every login.
+    /// The probe has to be repeatable — it runs on every login, and each run must leave the
+    /// keyring able to serve the next one.
+    ///
+    /// Repeatability is what is asserted rather than the absence of a specific entry: the key is
+    /// derived per call, so there is no fixed name to look for, and an `is_err()` on a read would
+    /// pass just as well against a keyring that answers nothing at all.
+    #[cfg(feature = "secure-storage")]
     #[test]
-    fn probe_writable_accepts_a_working_keyring_and_cleans_up() {
+    #[ignore = "Requires keyring service to be available"]
+    fn probe_writable_accepts_a_working_keyring_repeatedly() {
         let store = CredentialStore::new();
         store.probe_writable().unwrap();
-        assert!(
-            store
-                .get_credential(&format!("{KEYRING_PREFIX}__probe__"), None)
-                .is_err(),
-            "the probe value was left in the keyring"
-        );
+        store.probe_writable().unwrap();
+
+        // A real credential still round-trips afterwards: the probe took nothing with it.
+        let reference = store.store_credential("probe-neighbour", "kept").unwrap();
+        assert_eq!(store.get_credential(&reference, None).unwrap(), "kept");
+        let _ = store.delete_credential("probe-neighbour");
     }
 }
