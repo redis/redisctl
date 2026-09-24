@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.2](https://github.com/redis/redisctl/compare/redisctl-core-v0.11.1...redisctl-core-v0.11.2) - 2026-09-24
+
+### Added
+
+- *(cloud)* sign in to Redis Cloud and provision a free database without an API key ([#1149](https://github.com/redis/redisctl/pull/1149))
+
+### Other
+
+- *(mcp)* stabilize the library embedding API ([#1097](https://github.com/redis/redisctl/pull/1097))
+- harden project maintenance and release hygiene ([#1069](https://github.com/redis/redisctl/pull/1069))
+- *(core)* centralize API client resolution ([#1071](https://github.com/redis/redisctl/pull/1071))
+- remove dead resilience flags and modules ([#1050](https://github.com/redis/redisctl/pull/1050))
+- migrate to redis-cloud 0.11.0 (handle breaking changes) ([#1028](https://github.com/redis/redisctl/pull/1028))
+
 ## [0.11.0](https://github.com/redis-developer/redisctl/compare/redisctl-core-v0.10.1...redisctl-core-v0.11.0) - 2026-03-20
 
 ### Fixed
