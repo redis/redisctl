@@ -33,6 +33,11 @@ pub struct Config {
     /// Map of profile name -> profile configuration
     #[serde(default)]
     pub profiles: HashMap<String, Profile>,
+    /// Per-profile OIDC login endpoints for `cloud auth login`, keyed by profile name.
+    /// A missing entry falls back to the built-in production defaults. Kept separate from the
+    /// profile's stored credentials since it describes *how to log in*, not the resulting keys.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub cloud_auth: HashMap<String, CloudAuthConfig>,
 }
 
 /// Individual profile configuration
@@ -50,6 +55,60 @@ pub struct Profile {
     /// Tags for organizing profiles
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+}
+
+/// OIDC endpoints used by `cloud auth login` for one environment. Held in `Config.cloud_auth`
+/// keyed by profile name, so it serializes under `[cloud_auth.<name>]`.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct CloudAuthConfig {
+    /// Okta authorization-server issuer, e.g. `https://<your-okta-issuer>/oauth2/default`.
+    pub okta_issuer: String,
+    /// Public Okta client id for the redisctl app.
+    pub okta_client_id: String,
+    /// SM API base used for the token→CAPI-key exchange, e.g. `https://<sm-api-host>/api/v1`.
+    pub sm_api_url: String,
+    /// Public CAPI base recorded in the resulting cloud profile (`api_url`).
+    #[serde(default = "default_prod_capi_url")]
+    pub capi_url: String,
+    /// Which account the profile's key was last minted for.
+    ///
+    /// Recorded because it cannot be derived locally: an API key does not name its account, and
+    /// `setcurrent` is session-scoped server-side, so a fresh sign-in reports the user's default
+    /// account rather than the one this profile is on. Absent for profiles written before this
+    /// existed, or set up by hand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<u64>,
+    /// Name of the `redisctl-*` CAPI key this profile holds, so `logout` can revoke that one
+    /// rather than guessing. Absent for profiles written before this existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capi_key_name: Option<String>,
+}
+
+fn default_prod_capi_url() -> String {
+    "https://api.redislabs.com/v1".to_string()
+}
+
+impl CloudAuthConfig {
+    /// Built-in production defaults, so `cloud auth login` works against production without a
+    /// `[cloud_auth.<profile>]` section. The client id is a public OIDC identifier (the app is a
+    /// public client with no secret), so it ships in the binary.
+    pub fn prod_defaults() -> Self {
+        Self {
+            okta_issuer: "https://auth.redis.com/oauth2/default".to_string(),
+            okta_client_id: "0oaw90hjzrLoATW0q5d7".to_string(),
+            sm_api_url: "https://cloud.redis.io/api/v1".to_string(),
+            capi_url: default_prod_capi_url(),
+            account_id: None,
+            capi_key_name: None,
+        }
+    }
+
+    /// Whether the login endpoints are fully specified (issuer, client id, SM API base).
+    pub fn is_complete(&self) -> bool {
+        !self.okta_issuer.is_empty()
+            && !self.okta_client_id.is_empty()
+            && !self.sm_api_url.is_empty()
+    }
 }
 
 /// Supported deployment types
@@ -559,6 +618,91 @@ impl Config {
         self.save_to_path(&config_path)
     }
 
+    /// Every `${…}` reference in `previous`, by the field path that held it.
+    ///
+    /// The whole field text is kept rather than a parsed variable name, so the supported syntax
+    /// does not have to be reimplemented here: `${VAR}`, `$VAR` and `${VAR:-default}` are all
+    /// restored by expanding the recorded text with the same function the loader uses and
+    /// comparing. Strings inside arrays are skipped — they are not credentials, and they would
+    /// need index-aware paths.
+    fn collect_env_references(
+        table: &toml::Table,
+        path: &mut Vec<String>,
+        out: &mut HashMap<Vec<String>, (String, String)>,
+    ) {
+        for (key, value) in table {
+            match value {
+                toml::Value::String(text) if text.contains('$') => {
+                    let resolved = Self::expand_env_vars(text);
+                    // Unchanged means nothing expanded — an unset variable stays a reference in
+                    // the file already, so there is nothing to put back.
+                    if resolved != *text {
+                        path.push(key.clone());
+                        out.insert(path.clone(), (text.clone(), resolved));
+                        path.pop();
+                    }
+                }
+                toml::Value::Table(inner) => {
+                    path.push(key.clone());
+                    Self::collect_env_references(inner, path, out);
+                    path.pop();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// The value at `path`, if every segment before the last is a table.
+    fn value_at_mut<'a>(
+        table: &'a mut toml::Table,
+        path: &[String],
+    ) -> Option<&'a mut toml::Value> {
+        let (last, parents) = path.split_last()?;
+        let mut current = table;
+        for key in parents {
+            current = current.get_mut(key)?.as_table_mut()?;
+        }
+        current.get_mut(last)
+    }
+
+    /// This config as TOML, with every `${…}` reference from the file at `config_path` put back
+    /// on the field that held it.
+    ///
+    /// References are expanded when the file is read, so by the time there is a `Config` the
+    /// placeholders are gone and a plain save would write the resolved secret to disk — for every
+    /// profile in the file, not just the one a command touched. They are recovered from the file
+    /// being overwritten rather than carried on the struct, which keeps `Config` the same shape
+    /// for anyone embedding this crate.
+    ///
+    /// Restored per field, and only where that field still holds what the reference resolves to.
+    /// Two variables can resolve to the same string today and diverge tomorrow, so replacing by
+    /// value alone would point a profile at the wrong variable. A field whose value changed since
+    /// the load no longer matches, so it is written literally, as it should be.
+    ///
+    /// The edit is made on the parsed document. Editing the serialized text instead means
+    /// re-implementing TOML — quoted keys, dotted names, escaping — and getting any of it wrong
+    /// silently writes the secret.
+    fn to_toml_preserving_env_references(&self, config_path: &Path) -> Result<String> {
+        let mut doc = match toml::Value::try_from(self)? {
+            toml::Value::Table(table) => table,
+            other => return Ok(toml::to_string_pretty(&other)?),
+        };
+        if let Ok(previous) = fs::read_to_string(config_path)
+            && let Ok(old) = toml::from_str::<toml::Table>(&previous)
+        {
+            let mut refs: HashMap<Vec<String>, (String, String)> = HashMap::new();
+            Self::collect_env_references(&old, &mut Vec::new(), &mut refs);
+            for (path, (original, resolved)) in refs {
+                if let Some(slot) = Self::value_at_mut(&mut doc, &path)
+                    && slot.as_str() == Some(resolved.as_str())
+                {
+                    *slot = toml::Value::String(original);
+                }
+            }
+        }
+        Ok(toml::to_string_pretty(&doc)?)
+    }
+
     /// Save configuration to a specific path
     pub fn save_to_path(&self, config_path: &Path) -> Result<()> {
         // Create parent directories if they don't exist
@@ -569,7 +713,7 @@ impl Config {
             })?;
         }
 
-        let content = toml::to_string_pretty(self)?;
+        let content = self.to_toml_preserving_env_references(config_path)?;
 
         fs::write(config_path, content).map_err(|e| ConfigError::SaveError {
             path: config_path.display().to_string(),
@@ -579,9 +723,87 @@ impl Config {
         Ok(())
     }
 
+    /// Save to `config_path` with owner-only permissions, for callers that just put a secret in it.
+    pub fn save_to_path_owner_only(&self, config_path: &Path) -> Result<()> {
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| ConfigError::SaveError {
+                path: parent.display().to_string(),
+                source: e,
+            })?;
+        }
+        let content = self.to_toml_preserving_env_references(config_path)?;
+        write_owner_only(config_path, content.as_bytes()).map_err(|e| ConfigError::SaveError {
+            path: config_path.display().to_string(),
+            source: e,
+        })
+    }
+
     /// Set or update a profile
     pub fn set_profile(&mut self, name: String, profile: Profile) {
         self.profiles.insert(name, profile);
+    }
+
+    /// Effective `cloud auth login` endpoints for a profile: its `cloud_auth` entry, or the
+    /// built-in production defaults when none is set.
+    pub fn resolve_cloud_auth(&self, profile_name: &str) -> CloudAuthConfig {
+        self.cloud_auth
+            .get(profile_name)
+            .cloned()
+            .unwrap_or_else(CloudAuthConfig::prod_defaults)
+    }
+
+    /// Persist a completed `cloud auth login` into `profile_name` and make it the default
+    /// cloud profile.
+    ///
+    /// The CAPI key/secret are stored via `store` (keyring when available, else plaintext) and
+    /// the profile records the resulting references. The Okta refresh token, if present, is
+    /// stored under `<profile>-okta-refresh` (keyring only — with a plaintext store there is
+    /// nowhere to keep it, so silent re-auth won't be available and a fresh login is needed
+    /// when the CAPI key is lost). `cloud_auth` (the login endpoints) is recorded so re-login
+    /// works without re-specifying it.
+    pub fn apply_cloud_login(
+        &mut self,
+        store: &CredentialStore,
+        profile_name: &str,
+        creds: &crate::auth::MintedCredentials,
+        cloud_auth: Option<CloudAuthConfig>,
+        make_default: bool,
+    ) -> Result<()> {
+        let api_key =
+            store.store_credential(&format!("{profile_name}-cloud-api-key"), &creds.api_key)?;
+        let api_secret = store.store_credential(
+            &format!("{profile_name}-cloud-api-secret"),
+            &creds.api_secret,
+        )?;
+        if let Some(refresh) = &creds.refresh_token {
+            // Reference is implicit (looked up by the well-known key on refresh); ignore it.
+            let _ = store.store_credential(&format!("{profile_name}-okta-refresh"), refresh)?;
+        }
+        let existing = self.profiles.get(profile_name);
+        let profile = Profile {
+            deployment_type: DeploymentType::Cloud,
+            credentials: ProfileCredentials::Cloud {
+                api_key,
+                api_secret,
+                api_url: creds.api_url.clone(),
+            },
+            files_api_key: existing.and_then(|p| p.files_api_key.clone()),
+            tags: existing.map(|p| p.tags.clone()).unwrap_or_default(),
+        };
+        self.profiles.insert(profile_name.to_string(), profile);
+        if let Some(mut auth) = cloud_auth {
+            // Remember the account this key is for, so a later switch can say which one the
+            // profile is on without asking the server (which would report the user's default).
+            auth.account_id = creds.account_id;
+            auth.capi_key_name = Some(creds.capi_key_name.clone());
+            self.cloud_auth.insert(profile_name.to_string(), auth);
+        }
+        // Only a login bootstraps a profile; re-pointing the default is not something a caller
+        // asked for when it merely changed which account an existing profile targets.
+        if make_default {
+            self.default_cloud = Some(profile_name.to_string());
+        }
+        Ok(())
     }
 
     /// Remove a profile by name
@@ -596,6 +818,7 @@ impl Config {
         if self.default_database.as_deref() == Some(name) {
             self.default_database = None;
         }
+        self.cloud_auth.remove(name);
         self.profiles.remove(name)
     }
 
@@ -670,6 +893,60 @@ impl Config {
 
 fn default_cloud_url() -> String {
     "https://api.redislabs.com/v1".to_string()
+}
+
+/// Write `bytes` to `path` so that only the owner can read them.
+///
+/// Via a fresh sibling file rather than in place: `mode()` is ignored for a file that already
+/// exists, and tightening one afterwards leaves the secret briefly readable and does nothing
+/// about a descriptor already open on it. The rename is atomic within the directory and carries
+/// the new file's mode, so a reader either sees the old contents at the old permissions or the
+/// new contents at `0600`.
+#[cfg(unix)]
+fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
+    let name = path.file_name().unwrap_or(path.as_os_str());
+    let tmp = match dir {
+        Some(dir) => dir.join(format!(
+            ".{}.{}",
+            name.to_string_lossy(),
+            std::process::id()
+        )),
+        None => PathBuf::from(format!(
+            ".{}.{}",
+            name.to_string_lossy(),
+            std::process::id()
+        )),
+    };
+
+    // `create_new` guarantees we are the creator, which is what makes `mode` apply.
+    let _ = fs::remove_file(&tmp);
+    let write = || -> std::io::Result<()> {
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()
+    };
+    if let Err(e) = write() {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    if let Err(e) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    fs::write(path, bytes)
 }
 
 #[cfg(test)]

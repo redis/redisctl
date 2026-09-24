@@ -20,7 +20,9 @@ use tokio::sync::RwLock;
 use crate::policy::{Policy, SafetyTier};
 
 #[cfg(any(feature = "cloud", feature = "enterprise"))]
-const REDISCTL_MCP_USER_AGENT: &str = concat!("redisctl-mcp/", env!("CARGO_PKG_VERSION"));
+/// The Cloud API recognises the `redisctl/` prefix as a trusted client for some operations, so the
+/// MCP server sends the shared string rather than a name of its own.
+const REDISCTL_MCP_USER_AGENT: &str = redisctl_core::USER_AGENT;
 
 /// How credentials are resolved
 #[derive(Debug, Clone)]

@@ -9,8 +9,9 @@ pub use redisctl_core::{
     ResolvedEnterpriseConnection as EnterpriseConnectionInfo,
 };
 
-/// User agent string for redisctl HTTP requests.
-const REDISCTL_USER_AGENT: &str = concat!("redisctl/", env!("CARGO_PKG_VERSION"));
+/// User agent string for redisctl HTTP requests. Defined once in the core crate so the CLI, the
+/// MCP server and the login flows cannot drift apart.
+const REDISCTL_USER_AGENT: &str = redisctl_core::USER_AGENT;
 
 /// Connection manager for creating authenticated clients.
 #[derive(Clone)]

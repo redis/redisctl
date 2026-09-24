@@ -10,6 +10,22 @@ redisctl supports three credential sources, in order of precedence:
 2. **Environment variables** - Good for CI/CD
 3. **Profiles** - Best for daily use
 
+## Redis Cloud: sign in with `cloud auth login`
+
+For Redis Cloud, the easiest way to authenticate is to let redisctl mint the API key for you:
+
+```bash
+redisctl cloud auth login
+```
+
+This runs a browser OIDC sign-in, creates a Cloud API key for your account, and stores it in a
+profile — no manual key creation or copying. On a headless machine or from an agent, use
+`redisctl cloud auth login --device`. See **[Authentication commands](../cloud/commands/auth.md)**
+for the full flow (browser and device), `status` / `logout`, and the error-code contract.
+
+The manual methods below (environment variables, hand-created API keys) still work if you prefer to
+manage keys yourself.
+
 ## Credential Method Comparison
 
 | Method | Security | Persistence | Best for |

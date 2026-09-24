@@ -68,6 +68,32 @@
 //! ).await?;
 //! ```
 
+/// `User-Agent` sent by every redisctl HTTP client.
+///
+/// The Redis Cloud API recognises the `redisctl/` prefix as a trusted client for some operations
+/// (free-tier provisioning among them), so all consumers — CLI and MCP alike — must send it.
+pub const USER_AGENT: &str = concat!("redisctl/", env!("CARGO_PKG_VERSION"));
+
+/// Bound and flatten text from an upstream service before it reaches an error message.
+///
+/// Those messages are read by agents as well as people, so third-party text must not arrive with
+/// newlines or control characters, or at arbitrary length.
+pub(crate) fn bound_upstream_text(text: &str) -> String {
+    const MAX: usize = 200;
+    let flattened: String = text
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(MAX)
+        .collect();
+    let trimmed = flattened.trim().to_string();
+    if text.chars().count() > MAX {
+        format!("{trimmed}…")
+    } else {
+        trimmed
+    }
+}
+
+pub mod auth;
 pub mod clients;
 pub mod config;
 pub mod error;
@@ -77,6 +103,10 @@ pub mod cloud;
 pub mod enterprise;
 
 // Re-export commonly used items
+pub use auth::{
+    AuthError, CapiKey, CloudAuthenticator, DeviceAuthorization, DeviceFlowClient,
+    LoopbackFlowClient, MintedCredentials, SmAccount, SmApiClient, SmUser, TokenSet,
+};
 pub use error::{CoreError, Result};
 pub use progress::{ProgressCallback, ProgressEvent, poll_task};
 
@@ -85,8 +115,8 @@ pub use clients::{
     ClientResolutionError, ClientResolver, ResolvedCloudConnection, ResolvedEnterpriseConnection,
 };
 pub use config::{
-    Config, ConfigError, CredentialStorage, CredentialStore, DeploymentType, EnvironmentOverrides,
-    Profile, ProfileCredentials,
+    CloudAuthConfig, Config, ConfigError, CredentialStorage, CredentialStore, DeploymentType,
+    EnvironmentOverrides, Profile, ProfileCredentials,
 };
 
 // Re-export Layer 1 for convenience (but consumers can also import directly)

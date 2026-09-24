@@ -160,6 +160,12 @@ pub enum RedisCtlError {
 
     #[error("Output formatting error: {message}")]
     OutputError { message: String },
+
+    /// Agent-native surface error carrying a stable code + exit code (see
+    /// [`crate::structured_error`]). Handled specially in `main` (JSON envelope to stdout,
+    /// mapped exit code) rather than the generic 0/1 path.
+    #[error("{0}")]
+    Structured(Box<crate::structured_error::StructuredError>),
 }
 
 /// Result type for redisctl operations
@@ -170,9 +176,9 @@ impl RedisCtlError {
     pub fn suggestions(&self) -> Vec<String> {
         match self {
             RedisCtlError::ProfileNotFound { name } => vec![
-                format!("List available profiles: redisctl profile list"),
+                "List available profiles: redisctl profile list".to_string(),
                 format!("Create profile '{}': redisctl profile set {}", name, name),
-                format!("Check profile name spelling"),
+                "Check profile name spelling".to_string(),
             ],
             RedisCtlError::NoProfileConfigured {
                 deployment_type, ..
@@ -310,6 +316,8 @@ impl RedisCtlError {
             RedisCtlError::ConnectionError { .. } => "connection_error",
             RedisCtlError::Timeout { .. } => "timeout",
             RedisCtlError::OutputError { .. } => "output_error",
+            // Agent-native surface errors carry their own stable code.
+            RedisCtlError::Structured(se) => se.code,
         }
     }
 
@@ -361,6 +369,13 @@ impl RedisCtlError {
             // `Other` is the anyhow catch-all and `OutputError` covers
             // serialization and IO; neither is classified yet.
             RedisCtlError::Other(_) | RedisCtlError::OutputError { .. } => exit_code::GENERIC,
+
+            // The agent-native surface publishes its own 1-4 contract (see
+            // docs/reference/agent-error-codes.md), where `retryable` is defined as exactly the
+            // exit-3 class. Those numbers are carried through unchanged so a caller branching on
+            // them keeps working. NOTE: 3 and 4 therefore mean something different here than in
+            // the taxonomy above (CONFIG and AUTH) — reconciling the two is a separate decision.
+            RedisCtlError::Structured(se) => se.exit_code as i32,
         }
     }
 
@@ -492,6 +507,20 @@ impl From<anyhow::Error> for RedisCtlError {
         // mislabeling every anyhow-wrapped API, IO, or JSON error as a
         // "Configuration error".
         RedisCtlError::Other(format!("{:#}", err))
+    }
+}
+
+impl From<redisctl_core::AuthError> for RedisCtlError {
+    fn from(err: redisctl_core::AuthError) -> Self {
+        match err {
+            redisctl_core::AuthError::Network(e) => RedisCtlError::ConnectionError {
+                message: e.to_string(),
+            },
+            other => RedisCtlError::AuthenticationFailed {
+                message: other.to_string(),
+                profile_name: "<login>".to_string(),
+            },
+        }
     }
 }
 

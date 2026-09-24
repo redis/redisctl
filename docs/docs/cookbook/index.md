@@ -7,6 +7,7 @@ Step-by-step guides for common tasks.
 | Recipe | Description |
 |--------|-------------|
 | [Create Your First Database](cloud/first-database.md) | From zero to connected in 5 minutes |
+| [From Sign-In to REDIS_URL](cloud/quick-database.md) | Sign in, provision a free database, connect — the agent path |
 | [Set Up VPC Peering](cloud/vpc-peering.md) | Connect your VPC to Redis Cloud |
 | [Configure ACLs](cloud/acls.md) | Secure database access with ACL rules |
 | [Backup and Restore](cloud/backup-restore.md) | Manage database backups |

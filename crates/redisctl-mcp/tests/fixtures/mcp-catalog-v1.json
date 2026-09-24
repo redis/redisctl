@@ -421,6 +421,96 @@
       }
     },
     {
+      "name": "cloud_auth_status",
+      "toolset": "cloud",
+      "submodule": "provisioning",
+      "requiredTier": "read-only",
+      "inputSchema": {
+        "properties": {
+          "profile": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "outputSchema": null,
+      "annotations": {
+        "title": null,
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "cloud_quick_database",
+      "toolset": "cloud",
+      "submodule": "provisioning",
+      "requiredTier": "read-write",
+      "inputSchema": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "output_credentials": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "variable": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "wait_interval": {
+            "default": null,
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "wait_timeout": {
+            "default": null,
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "outputSchema": null,
+      "annotations": {
+        "title": null,
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
       "name": "cloud_raw_api",
       "toolset": "cloud",
       "submodule": "raw",

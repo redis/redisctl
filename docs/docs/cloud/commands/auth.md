@@ -1,0 +1,479 @@
+# Authentication Commands
+
+Sign in to Redis Cloud and manage the stored session.
+
+`cloud auth login` is a credential **bootstrapper**: it runs a standard OIDC sign-in, mints a
+Redis Cloud API key for your account, and writes it into a normal profile — so you never have to
+create and paste an API key by hand. Afterward every other `cloud` command works with that profile.
+
+!!! note "Prerequisite"
+    The profile needs its login endpoints — a `[cloud_auth.<profile>]` section, or the built-in
+    production defaults. See [Configuration](#configuration) below.
+
+## Log In
+
+```bash
+redisctl cloud auth login
+```
+
+Opens your browser to sign in (the interactive default), then stores the minted API key in the
+profile's secure storage.
+
+### Examples
+
+```bash
+# Interactive browser sign-in for the default cloud profile
+redisctl cloud auth login
+
+# A specific profile
+redisctl cloud auth login --profile qa
+
+# Headless machine with no local browser — use the device flow
+redisctl cloud auth login --device
+
+# Store credentials in the config file when no OS keyring is available
+redisctl cloud auth login --allow-plaintext
+```
+
+| Flag | Description |
+|------|-------------|
+| `--device` | Use the device-authorization flow (print a URL + code) instead of opening a browser. |
+| `--wait` | With `--device`: block until approved (one-shot). Without it, `login --device` returns immediately and `auth status --wait` completes the login. |
+| `--allow-plaintext` | Store credentials in the config file (`0600` on Unix; Windows inherits the directory's permissions) when no OS keyring is available. Required when there is no keyring: without it, login refuses rather than writing them there silently. |
+| `--account <ID>` | Mint the key for this Redis Cloud account id. Defaults to your current account. Carried through the device flow, so `login --device --account <id>` still applies when `auth status --wait` completes it. |
+
+### Browser (loopback) flow
+
+The default on an interactive terminal — a single command opens the browser and completes:
+
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant CLI as redisctl
+    participant OK as Okta (OIDC)
+    participant SM as Redis Cloud API
+    participant CFG as profile and keyring
+    U->>CLI: cloud auth login
+    Note over CLI: bind loopback port, build PKCE and state
+    CLI->>OK: open browser to authorize (PKCE challenge, state)
+    U->>OK: sign in
+    OK-->>CLI: redirect to loopback callback (code, state)
+    Note over CLI: validate state BEFORE responding, then success page
+    CLI->>OK: exchange code and PKCE verifier for tokens
+    OK-->>CLI: access and refresh tokens
+    CLI->>SM: sign in, enable programmatic access, mint an API key
+    Note over CLI,SM: if the account has MFA: prompt for a 6-digit code, retry on the same session
+    SM-->>CLI: account API key and user secret
+    CLI->>CFG: write cloud profile (secrets to keyring)
+    CLI-->>U: signed in - profile ready
+```
+
+### Device flow (headless / agents)
+
+With `--device`, `login` is **non-blocking**: it prints the verification URL + code and returns, so
+an agent can relay them; `auth status --wait` then completes the login. `login --device --wait`
+collapses both into one blocking call for a human.
+
+```mermaid
+sequenceDiagram
+    actor A as Agent
+    actor H as Human
+    participant CLI as redisctl
+    participant OK as Okta (OIDC)
+    participant SM as Redis Cloud API
+    participant CFG as profile and keyring
+    A->>CLI: cloud auth login --device
+    CLI->>OK: request device authorization
+    OK-->>CLI: user_code, verification_uri, device_code
+    CLI-->>A: authorization_pending and code (writes pending record)
+    A->>H: relay verification URL and code
+    H->>OK: open URL, sign in, confirm code
+    A->>CLI: cloud auth status --wait
+    CLI->>OK: poll for tokens until approved
+    OK-->>CLI: access and refresh tokens
+    CLI->>SM: sign in, enable access, mint an API key
+    Note over CLI,SM: if the account has MFA: needs a terminal, else exits mfa_required
+    SM-->>CLI: account API key and user secret
+    CLI->>CFG: write cloud profile (secrets to keyring)
+    CLI-->>A: authenticated and account_id
+```
+
+### Multi-factor authentication
+
+If your Redis Cloud account has MFA enabled, `login` prompts for the 6-digit code from your
+authenticator app after you sign in, then completes normally:
+
+```
+✓ Authenticated as user@example.com
+This account requires multi-factor authentication.
+Enter the 6-digit code from your authenticator app:
+```
+
+You get three attempts per login.
+
+!!! note "MFA needs an interactive terminal"
+    A time-based code can't be supplied ahead of time, so MFA can't be completed
+    non-interactively. Piped or agent-driven runs exit `2` with `mfa_required`; re-run
+    `redisctl cloud auth login` in a terminal. For unattended automation, use a
+    pre-created API key instead of `auth login`.
+
+### Which account the key belongs to
+
+A Redis Cloud API key is scoped to **one account**. If you belong to several, `cloud auth login`
+mints the key for your **current** account — the one selected in the
+[Redis Cloud console](https://app.redislabs.com) — then names it and lists the alternatives, so you
+never have to look an account id up:
+
+```
+✓ Signed in as user@example.com. Credentials saved to profile 'cloud'.
+  note: the key is for Acme (#316941) — 1 of 3 accounts you belong to:
+    Acme (#316941) · Contoso (#481022) · Initech (#502113)
+  To use another: redisctl --profile cloud cloud auth switch <id>
+```
+
+Use `--account` to pick one explicitly, without touching the console:
+
+```bash
+redisctl cloud auth login --account 316941
+```
+
+Naming an account you don't belong to exits `2` with `unknown_account`, and the message lists the
+ones you do have. You also need a role that can create API keys on whichever account you
+pick — your role on one account says nothing about your role on another, so `--account` can exit
+`2` with `insufficient_permission` even when a plain `login` succeeds. Keeping one profile per account works well:
+
+```bash
+redisctl --profile acme    cloud auth login --account 316941
+redisctl --profile contoso cloud auth login --account 481022
+```
+
+Re-using one profile is fine too, but each login replaces that profile's key, so only the most
+recent account stays usable. The key it replaces is revoked, on whichever account held it, so
+signing in repeatedly does not leave a trail of live keys behind — the same behaviour as
+[`switch`](#switch-accounts) and [`logout`](#log-out). The new key is minted first, so a failed
+revocation never costs you a working key; it is reported instead, pointing at the console:
+
+```
+  note: could not revoke the key this login replaced — revoke it in the Redis Cloud console
+  (Access Management > API Keys).
+```
+
+`-o json` reports `superseded_revoked`: `true` when the replaced key was revoked, `false` when that
+failed, and `null` when the profile had no earlier key.
+
+!!! note "A new profile name defaults to production"
+    A profile with no `[cloud_auth.<name>]` section falls back to the built-in **production**
+    endpoints. That is what you want for production, but when logging in to a non-production
+    environment, add the section first — otherwise the new profile silently signs you in to
+    production instead.
+
+If programmatic (API) access was off for the account, `login` switches it on and says so — it is
+an account-wide setting, not something scoped to the key being minted:
+
+```
+  note: programmatic (API) access was switched on for this account — it was off until now, and
+  this applies account-wide, not just to this key.
+```
+
+`-o json` reports `capi_newly_enabled` alongside `account_id`, `account_name` and `account_count`,
+plus an `accounts` array of
+every `{id, name}` — so a script can confirm it got the account it expected, or pick one without a
+trip to the console. `account_id` and `accounts[].id` are both numbers, so they compare directly:
+
+```bash
+redisctl cloud auth login -o json | jq -e '.account_id == 316941'
+```
+
+### Password accounts need linking once
+
+Redis Cloud accounts that sign in with an email and password cannot be used by the CLI directly —
+the sign-in happens at the identity provider, which never held that password. Sign in to the
+[Redis Cloud console](https://app.redislabs.com) once with **Google or GitHub using the same email
+address** and accept the prompt to link the account; afterwards `cloud auth login` works normally.
+
+Until that's done, login exits `2` with `migration_required`.
+
+## List Accounts
+
+```bash
+redisctl cloud auth accounts
+```
+
+Lists the accounts this sign-in can reach, with their ids, naming the signed-in user and marking
+the account this profile's key belongs to:
+
+```
+Accounts user@example.com belongs to:
+  Acme (#316941)  (this profile)
+  Contoso (#481022)
+
+To use another: redisctl --profile cloud cloud auth switch <id>
+```
+
+The email matters when a profile could hold either of two sign-ins: account membership is per
+**user**, so the same account can look different depending on who signed in. `-o json` reports it
+as `email`.
+
+It mints nothing and switches nothing — it exists so an id can be looked up without a login. (It
+does store a refreshed sign-in token when the identity provider rotates them, so the next command
+is not left holding the one this call spent.) The
+sign-in stored at login is reused, so no browser opens, but it does sign in to Redis Cloud: on an
+account with MFA it prompts for a code, and exits `2` with `mfa_required` when there is no terminal
+to prompt on.
+
+`cloud auth status` deliberately does **not** list accounts. It is an offline check — no network,
+no sign-in, and so no MFA prompt — which is what makes it safe for an agent to call freely.
+
+## Switch Accounts
+
+```bash
+redisctl cloud auth switch
+```
+
+Changes which account the profile's key is for, **without opening a browser** — the sign-in stored
+at login is reused. With no argument it lists your accounts and asks:
+
+```
+Accounts you belong to:
+  1) Acme (#316941)  (current)
+  2) Contoso (#481022)
+Switch to which? [1-2]: 2
+
+✓ Profile 'cloud' now uses Contoso (#481022).
+```
+
+Either a list position or an account id is accepted. Pass the id to skip the prompt:
+
+```bash
+redisctl cloud auth switch 481022
+```
+
+Switching revokes the key it replaces, so the previous account is not left holding a live
+credential nothing refers to any more. The order is deliberate: the new key is minted, stored, and
+only then is the old one revoked — so a failure at any point leaves the profile with a working key
+rather than none. If the revocation itself fails the switch still completes and says so, pointing
+at the console — the same shape as `logout`. `-o json` reports `superseded_revoked`.
+
+The account marked `(current)` is the one **this profile** is on, recorded when the key was minted.
+It is not read back from the server: switching is scoped to the sign-in session, so Redis Cloud
+still reports your usual default account and the console is unaffected by a CLI switch.
+
+!!! note "Switching replaces the profile's key"
+    An API key is scoped to one account, so switching mints a key for the account you pick and
+    replaces the profile's current one — the previous account is no longer usable through this
+    profile until you switch back. To use several accounts at once, keep one profile per account
+    and log in to each ([above](#which-account-the-key-belongs-to)).
+
+Two cases where a full `login` is needed instead:
+
+- **Credentials stored with `--allow-plaintext`.** Reusing a sign-in needs the refresh token, which
+  is only kept in the OS keyring, so there is nothing to reuse. Exits `2` with `not_authenticated`.
+- **The stored sign-in has expired.** Refresh tokens are rotated and eventually expire. Same code,
+  and the message says so.
+
+Without a terminal to prompt on, the account id is required — otherwise `switch` exits `2` with
+`account_required` rather than blocking. Accounts with MFA still prompt for a code, since that
+challenge happens on sign-in.
+
+## Status
+
+```bash
+redisctl cloud auth status
+```
+
+Reports whether the profile is authenticated. With `--wait`, it completes a pending device login.
+
+### Examples
+
+```bash
+redisctl cloud auth status
+
+# Complete a pending `login --device`, waiting up to 5 minutes
+redisctl cloud auth status --wait --timeout 300
+```
+
+| Flag | Description |
+|------|-------------|
+| `--wait` | Block until a pending device login is approved (or is denied / the code expires), then run the exchange and persist. |
+| `--timeout <secs>` | Max seconds to wait with `--wait` (default 600). If it elapses while still pending, exits `0` reporting `authorization_pending` — run again to keep waiting. |
+
+!!! note "Credentials can disappear from the OS keyring on Linux"
+    The Linux keyring is an in-memory kernel store: it does not survive a reboot, and its
+    longer-lived fallback expires after a few days. So a machine that logged in last week may have
+    no stored credentials today, and the refresh token is kept in the same place — so silent
+    re-auth is gone with it.
+
+    Commands report this rather than blaming the config, and the fix is to sign in again with
+    `redisctl --profile <name> cloud auth login`. Name the profile: the message comes from the
+    credential layer, which knows the keyring entry but not which profile referenced it, and a
+    bare `login` would repair the default profile rather than the one that failed. `cloud auth
+    status` reports `authenticated: false`.
+
+## Log Out
+
+```bash
+redisctl cloud auth logout
+```
+
+Revokes the API key this profile holds and the stored sign-in, then removes the local credentials
+(keyring entries and the profile). The `[cloud_auth.<profile>]` login endpoints are preserved so
+you can log in again.
+
+```
+✓ Logged out of profile 'cloud'. Revoked the API key redisctl-cli-1 and the stored sign-in.
+```
+
+Revocation needs the stored sign-in to authenticate with, so it cannot always happen. Logout still
+completes locally — leaving secrets on disk because the network was down would be worse — and says
+what was left behind:
+
+```
+✓ Logged out of profile 'cloud' locally.
+  note: the stored sign-in is no longer valid, so the key redisctl-cli-1 could not be revoked.
+  Revoke the key in the Redis Cloud console (Access Management > API Keys).
+```
+
+That happens when the sign-in has expired, when credentials were stored with `--allow-plaintext`
+(no refresh token is kept), or for a profile created before redisctl recorded which key it holds.
+
+The key and the sign-in are revoked independently, and either can fail on its own — so one can be
+reported gone while the other is reported left behind. They are not interchangeable: a key is one
+credential, while a sign-in that survives can mint more. `-o json` reports `key_revoked` and
+`session_revoked` separately, plus `revoked` for "both", which is the one to branch on when a
+script just needs to know whether anything is outstanding.
+
+## When a key is left behind
+
+Every path that replaces a key revokes the one it replaces — `login`, `switch` and `logout` — and
+each is best-effort by design: a revocation that cannot reach Redis Cloud must not fail the command
+that needed to succeed. So there is one outcome to know how to clean up after.
+
+**What is revoked, and where.** A profile records the account id and the key name it holds — one
+created before the id was recorded has only the name, and the messages below say so when that is
+the case. Every
+revocation — on `login`, `switch` and `logout` alike — points the session at *that* account and
+deletes *that* name. Not the account you happen to be on: a sign-in starts on your server-side
+default, which after a `switch` is not the account the profile's key was minted for. And not any
+other `redisctl-*` key the account holds, which may belong to another machine or another profile.
+If the recorded name is not on the account, nothing is deleted and the command says so, naming
+the account it searched — it cannot tell whether the key was already revoked or was never on that
+account, so it points at the console either way.
+
+**What a failure looks like.** The key is named, because the name cannot be recovered afterwards —
+by then the profile records the new key, not the one left behind:
+
+```
+  note: could not revoke the key redisctl-cli-1712... that this replaced — revoke it in the
+  Redis Cloud console (Access Management > API Keys).
+```
+
+Alongside it, the reason is reported as it happens — the account that could not be reached, the
+keys the account does hold, or the refusal itself. Take it from that run: re-running is not a way
+to investigate, because each attempt mints another key and the failed attempt's context is gone.
+
+`-o json` carries the outcome as `superseded_revoked` plus `superseded_key` (`login`, `switch`), or
+`key_revoked` and `session_revoked` (`logout`).
+
+**Cleaning up.** Delete the named key in the console under **Access Management > API Keys**. To
+find keys nothing refers to any more, the account's own audit trail records every key that is
+created or removed, naming the key and who did it:
+
+```bash
+redisctl cloud account get-system-logs -o json \
+  | jq '.entries[]? | select(.description | test("API secret key")) | {time, originator, description}'
+```
+
+```json
+{
+  "time": "2026-09-18T07:12:04Z",
+  "originator": "Some User",
+  "description": "API secret key 'redisctl-cli-1789043212' assigned to user@example.com"
+}
+```
+
+The response is an object with an `entries` array, so the filter starts there — and it matches on
+`description`, not `type`: `type` is the severity (`info`, `warning`, `error`), not the event. This
+is also the check worth running if you ever want to know whether a `redisctl-*` key appeared when
+nobody was at the keyboard.
+
+**A storage failure leaves the new key behind, not the old one.** The order is mint, store, then
+revoke, so a failure to store leaves the profile holding the key it already had — still recorded,
+still working. What it does leave is the key that was just minted: it exists on the account, its
+secret is only returned at creation, and nothing recorded it. The error names that key so it can be
+revoked; there is no way to recover it afterwards.
+
+## Who can use `cloud auth login`
+
+`cloud auth login` signs in through Redis Cloud's identity provider, so it works for accounts whose
+sign-in the identity provider can perform:
+
+| Account type | Supported | Notes |
+|---|---|---|
+| Google | ✅ | both flows |
+| GitHub | ✅ | both flows |
+| SSO / SAML | ❌ | the CLI cannot select an organization's own identity provider — use an API key |
+| Email + password | after linking | link the account to Google or GitHub once, in the console |
+| Marketplace (Heroku, GCP, Azure) | ❌ | sign-in is initiated by the marketplace; there is no Redis-side credential |
+
+!!! note "You need a role that can create API keys"
+    Whatever the sign-in method, `cloud auth login` also needs a role on the account that permits
+    programmatic access — in practice the **Owner** role today. Other roles (Member, Manager,
+    Viewer, Billing Admin, Logs Viewer) exit `2` with `insufficient_permission`, and the message
+    names the role that is required, so it stays accurate if Redis widens that set. Ask someone
+    with it to create a key and use it directly, as below.
+
+For anything unsupported — and for **unattended automation** of any kind — create an API key in the
+[Redis Cloud console](https://app.redislabs.com) and configure it directly:
+
+```bash
+redisctl profile set prod --deployment cloud --api-key "$KEY" --api-secret "$SECRET"
+```
+
+or set `REDIS_CLOUD_API_KEY` / `REDIS_CLOUD_API_SECRET` in the environment.
+
+## Configuration
+
+`cloud auth login` reads its OIDC endpoints from a `[cloud_auth.<profile>]` section, falling back
+to built-in production defaults (so for production you usually need no section at all):
+
+```toml
+[cloud_auth.myenv]
+okta_issuer    = "https://<your-okta-issuer>/oauth2/default"
+okta_client_id = "<public-client-id>"
+sm_api_url     = "https://<sm-api-host>/api/v1"
+capi_url       = "https://api.redislabs.com/v1"
+```
+
+All three endpoints must use `https` and must not embed credentials in the URL. `http` is accepted
+only for `localhost`, `127.0.0.1` and `::1`, where there is no network to intercept.
+
+They must also be **Redis endpoints** — a host at or under `redis.com`, `redislabs.com` or
+`redis.io`. Transport security only makes the connection private; it says nothing about who is at
+the other end, and these fields decide where an access token is sent. Without the check, a config
+naming the real identity provider while pointing `sm_api_url` at an attacker's HTTPS host would
+receive a live token after an ordinary-looking login. Matching is on a label boundary, so
+`redis.com.example.net` and `notredis.com` do not qualify.
+
+To point at something else — a local mock, or an environment that is not on those domains — set
+`REDISCTL_ALLOW_UNTRUSTED_ENDPOINTS=1`. It is an environment variable rather than a config field on
+purpose: the risk being guarded against is a config file you did not write, and a setting inside
+that file could switch off the check that exists to catch it. Login warns on stderr whenever it is
+in effect, and it relaxes only the host check — `https` is still required off loopback.
+
+## Error handling (agents)
+
+In `-o json` / `-o yaml` mode, failures on this surface print a machine-branchable envelope to
+**stdout** and exit with a mapped code, so scripts and agents can branch on `.error.code` instead
+of parsing prose:
+
+```json
+{ "status": "error", "error": { "code": "device_code_expired", "message": "...", "retryable": true } }
+```
+
+| Exit code | Meaning | Example codes |
+|-----------|---------|---------------|
+| `1` | unknown / backend failure | `sm_exchange_failed` |
+| `2` | usage / precondition to fix | `not_authenticated`, `auth_denied`, `keyring_unavailable`, `migration_required`, `insufficient_permission`, `mfa_required` |
+| `3` | transient / retryable | `device_code_expired`, `transient_api_error`, `rate_limited` |
+
+Human (non-JSON) mode prints the usual diagnostic to stderr and keeps today's `0`/`1` exit behavior.
