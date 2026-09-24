@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use redis_cloud::fixed::databases::{FixedDatabase, FixedDatabaseCreateRequest};
-use redis_cloud::fixed::subscriptions::FixedSubscriptionCreateRequest;
+use redis_cloud::fixed::subscriptions::{FixedSubscription, FixedSubscriptionCreateRequest};
 use redis_cloud::{CloudClient, CloudError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -114,11 +114,14 @@ pub async fn provision(
 
     // Find our subscription (idempotent re-run / crash resume).
     let (subscription_id, database_id, status) = match find_subscription(client, &sub_name).await? {
-        Some(sub_id) => match first_database_id(client, sub_id).await? {
-            Some(db_id) => (sub_id, db_id, "reused"),
-            // Half-provisioned: subscription created but DB create never finished.
-            None => (sub_id, create_database(client, sub_id, params).await?, "ok"),
-        },
+        Some((sub_id, sub)) => {
+            ensure_free_plan(client, &sub, &sub_name).await?;
+            match database_to_reuse(client, sub_id, &params.name).await? {
+                Some(db_id) => (sub_id, db_id, "reused"),
+                // Half-provisioned: subscription created but DB create never finished.
+                None => (sub_id, create_database(client, sub_id, params).await?, "ok"),
+            }
+        }
         None => {
             let sub_id = create_subscription(client, &sub_name, params).await?;
             (sub_id, create_database(client, sub_id, params).await?, "ok")
@@ -236,7 +239,10 @@ fn validate_name(name: &str) -> QResult<()> {
     Ok(())
 }
 
-async fn find_subscription(client: &CloudClient, sub_name: &str) -> QResult<Option<i32>> {
+async fn find_subscription(
+    client: &CloudClient,
+    sub_name: &str,
+) -> QResult<Option<(i32, FixedSubscription)>> {
     let subs = client
         .fixed_subscriptions()
         .list()
@@ -251,21 +257,105 @@ async fn find_subscription(client: &CloudClient, sub_name: &str) -> QResult<Opti
                 .as_deref()
                 .is_some_and(|n| n.eq_ignore_ascii_case(sub_name))
         })
-        .and_then(|s| s.id))
+        .and_then(|s| s.id.map(|id| (id, s))))
 }
 
-async fn first_database_id(client: &CloudClient, subscription_id: i32) -> QResult<Option<i32>> {
+/// Refuse a subscription that carries our prefix but is not on the free plan.
+///
+/// The caller asked for a free database, and the report says `plan: "free"` unconditionally, so
+/// adopting a billable subscription would bill them while telling them otherwise. Refused only on
+/// positive evidence that the plan costs money: reuse by name is the documented behaviour, so an
+/// unreadable or silent plan has to leave it standing.
+async fn ensure_free_plan(
+    client: &CloudClient,
+    sub: &FixedSubscription,
+    sub_name: &str,
+) -> QResult<()> {
+    // The subscription reports its own price, which settles it without another call.
+    if let Some(price) = sub.price {
+        return if price == 0 {
+            Ok(())
+        } else {
+            Err(not_free(sub, sub_name))
+        };
+    }
+    // No price reported: fall back to the plan id, and refuse only a plan the list positively
+    // prices above zero. Absence is not evidence here — `/fixed/plans` is the account's
+    // *creatable* options, so the free plan drops off it once the account holds its one free
+    // subscription (hence `pick_free_plan`'s "no free Essentials plan is available on this
+    // account"). Treating a missing id as billable would refuse to reuse our own subscription,
+    // naming the free plan it sits on as "not free". A listing we cannot read says nothing
+    // either, so a failure there leaves reuse alone rather than aborting it.
+    let Some(plan_id) = sub.plan_id else {
+        return Ok(());
+    };
+    match paid_plan_ids(client).await {
+        Ok(paid) if paid.contains(&plan_id) => Err(not_free(sub, sub_name)),
+        _ => Ok(()),
+    }
+}
+
+fn not_free(sub: &FixedSubscription, sub_name: &str) -> QuickDatabaseError {
+    QuickDatabaseError::NameConflict(format!(
+        "subscription '{sub_name}' already exists on the {} plan, which is not free. Choose a \
+         different --name, or read that database's credentials with \
+         `redisctl cloud workflow database-credentials`.",
+        sub.plan_name.as_deref().unwrap_or("current")
+    ))
+}
+
+/// The database a re-run should reuse: the one carrying `name`, or the only one present.
+///
+/// List order decides nothing once a subscription can hold more than one database. The
+/// single-database fallback keeps a database renamed outside `redisctl` reusable, which is what
+/// our own subscription looks like after a console edit.
+async fn database_to_reuse(
+    client: &CloudClient,
+    subscription_id: i32,
+    name: &str,
+) -> QResult<Option<i32>> {
     let list = client
         .fixed_databases()
         .list(subscription_id, None, None)
         .await
         .map_err(|e| classify_cloud_error("list databases", e))?;
-    Ok(list
+    let databases = list
         .subscription
         .map(|info| info.databases)
-        .unwrap_or_default()
-        .into_iter()
-        .find_map(|d| d.database_id))
+        .unwrap_or_default();
+
+    // Matched the way `find_subscription` matches the subscription. Comparing case-sensitively
+    // here while the subscription lookup ignores case makes the two halves disagree about what
+    // is ours: `redisctl-MyApp` is adopted, then its `MyApp` database is treated as a stranger.
+    if let Some(named) = databases.iter().find(|d| {
+        d.name
+            .as_deref()
+            .is_some_and(|n| n.eq_ignore_ascii_case(name))
+    }) {
+        // The database we asked for, listed without an id. Its own case, not the "none is named
+        // '{name}'" one below — that message would name it in the very list it says lacks it,
+        // and falling through with a single entry would create a second database of that name.
+        let id = named.database_id.ok_or_else(|| {
+            QuickDatabaseError::Transient(format!(
+                "the database named '{name}' is listed without an id, so it cannot be read yet; \
+                 it may still be provisioning — retry in a moment"
+            ))
+        })?;
+        return Ok(Some(id));
+    }
+    match databases.as_slice() {
+        [] => Ok(None),
+        [only] => Ok(only.database_id),
+        many => Err(QuickDatabaseError::NameConflict(format!(
+            "the subscription for '{name}' holds {} databases and none is named '{name}': {}. \
+             Read the one you want with `redisctl cloud workflow database-credentials`.",
+            many.len(),
+            many.iter()
+                .map(|d| d.name.as_deref().unwrap_or("<unnamed>"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+    }
 }
 
 async fn create_subscription(
@@ -336,22 +426,43 @@ async fn run_task(
 /// Choose a free Essentials plan (`price == 0`). The region is server-chosen for the free
 /// tier, so the first free plan is fine.
 async fn pick_free_plan(client: &CloudClient) -> QResult<i32> {
-    let plans = client
-        .fixed_subscriptions()
-        .list_plans(None, None)
-        .await
-        .map_err(|e| classify_cloud_error("list plans", e))?;
-    plans
-        .plans
-        .unwrap_or_default()
+    free_plan_ids(client)
+        .await?
         .into_iter()
-        .find(|p| p.price == Some(0))
-        .and_then(|p| p.id)
+        .next()
         .ok_or_else(|| {
             QuickDatabaseError::Other(
                 "no free Essentials plan is available on this account".to_string(),
             )
         })
+}
+
+/// Every zero-price plan id. Essentials plans are per provider and region, so a free
+/// subscription can sit on any one of them.
+async fn free_plan_ids(client: &CloudClient) -> QResult<Vec<i32>> {
+    plan_ids_priced(client, |price| price == 0).await
+}
+
+/// Every plan id the list prices above zero — what [`ensure_free_plan`] refuses on.
+async fn paid_plan_ids(client: &CloudClient) -> QResult<Vec<i32>> {
+    plan_ids_priced(client, |price| price != 0).await
+}
+
+/// Plan ids whose *reported* price satisfies `wanted`. A plan with no price is in neither set:
+/// it is not known to be free and not known to cost anything.
+async fn plan_ids_priced(client: &CloudClient, wanted: fn(i32) -> bool) -> QResult<Vec<i32>> {
+    let plans = client
+        .fixed_subscriptions()
+        .list_plans(None, None)
+        .await
+        .map_err(|e| classify_cloud_error("list plans", e))?;
+    Ok(plans
+        .plans
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| p.price.is_some_and(wanted))
+        .filter_map(|p| p.id)
+        .collect())
 }
 
 /// Read the database, polling until its `public_endpoint` is populated. A persistent absence
