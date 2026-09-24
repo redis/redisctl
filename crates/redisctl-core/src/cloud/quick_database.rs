@@ -270,18 +270,33 @@ async fn ensure_free_plan(
     sub: &FixedSubscription,
     sub_name: &str,
 ) -> QResult<()> {
+    // The subscription reports its own price, which settles it without another call.
+    if let Some(price) = sub.price {
+        return if price == 0 {
+            Ok(())
+        } else {
+            Err(not_free(sub, sub_name))
+        };
+    }
+    // No price reported: fall back to the plan id, checked against *every* free plan. There is
+    // one per provider and region, so comparing against a single id would refuse a free
+    // subscription created in another region.
     let Some(plan_id) = sub.plan_id else {
         return Ok(());
     };
-    if plan_id == pick_free_plan(client).await? {
+    if free_plan_ids(client).await?.contains(&plan_id) {
         return Ok(());
     }
-    Err(QuickDatabaseError::NameConflict(format!(
-        "subscription '{sub_name}' already exists on the {} plan, which is not the free plan. \
-         Choose a different --name, or read that database's credentials with \
+    Err(not_free(sub, sub_name))
+}
+
+fn not_free(sub: &FixedSubscription, sub_name: &str) -> QuickDatabaseError {
+    QuickDatabaseError::NameConflict(format!(
+        "subscription '{sub_name}' already exists on the {} plan, which is not free. Choose a \
+         different --name, or read that database's credentials with \
          `redisctl cloud workflow database-credentials`.",
         sub.plan_name.as_deref().unwrap_or("current")
-    )))
+    ))
 }
 
 /// The database a re-run should reuse: the one carrying `name`, or the only one present.
@@ -394,22 +409,32 @@ async fn run_task(
 /// Choose a free Essentials plan (`price == 0`). The region is server-chosen for the free
 /// tier, so the first free plan is fine.
 async fn pick_free_plan(client: &CloudClient) -> QResult<i32> {
-    let plans = client
-        .fixed_subscriptions()
-        .list_plans(None, None)
-        .await
-        .map_err(|e| classify_cloud_error("list plans", e))?;
-    plans
-        .plans
-        .unwrap_or_default()
+    free_plan_ids(client)
+        .await?
         .into_iter()
-        .find(|p| p.price == Some(0))
-        .and_then(|p| p.id)
+        .next()
         .ok_or_else(|| {
             QuickDatabaseError::Other(
                 "no free Essentials plan is available on this account".to_string(),
             )
         })
+}
+
+/// Every zero-price plan id. Essentials plans are per provider and region, so a free
+/// subscription can sit on any one of them.
+async fn free_plan_ids(client: &CloudClient) -> QResult<Vec<i32>> {
+    let plans = client
+        .fixed_subscriptions()
+        .list_plans(None, None)
+        .await
+        .map_err(|e| classify_cloud_error("list plans", e))?;
+    Ok(plans
+        .plans
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| p.price == Some(0))
+        .filter_map(|p| p.id)
+        .collect())
 }
 
 /// Read the database, polling until its `public_endpoint` is populated. A persistent absence
