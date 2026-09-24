@@ -66,6 +66,16 @@ pub fn is_env_var_name(name: &str) -> bool {
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// Whether `value` can be written as a dotenv value.
+///
+/// The other half of `format!("{k}={v}")`: a value carrying a line break ends the assignment and
+/// writes whatever follows as a line of its own. Values here are upstream-supplied — a database
+/// password can be set in the Redis Cloud console, and the broken-out password field is delivered
+/// raw so apps can use it directly — so the caller is not the only one who decides what arrives.
+pub fn is_env_var_value(value: &str) -> bool {
+    !value.contains('\n') && !value.contains('\r')
+}
+
 /// Append (or replace) a single `variable=value` in the dotenv file at `path`.
 /// Convenience wrapper over [`deliver_vars`].
 pub fn deliver(path: &Path, variable: &str, value: &str) -> Result<DeliveryOutcome, DeliveryError> {
@@ -91,6 +101,15 @@ pub fn deliver_vars(path: &Path, vars: &[(&str, &str)]) -> Result<DeliveryOutcom
         return Err(DeliveryError::refused(
             path,
             &format!("'{key}' is not an environment variable name"),
+        ));
+    }
+    // The value is not quoted or escaped on the way in, so a line break in one would write the
+    // rest as its own assignment — and `upsert_vars` would not match that line on a re-run, so
+    // it would outlive every later delivery.
+    if let Some((key, _)) = vars.iter().find(|(_, v)| !is_env_var_value(v)) {
+        return Err(DeliveryError::refused(
+            path,
+            &format!("the value for '{key}' contains a line break"),
         ));
     }
 
@@ -511,5 +530,38 @@ mod tests {
         let err = deliver_vars(&path, &[("REDIS_URL", "redis://x"), ("A\nB", "y")]).unwrap_err();
         assert!(matches!(err, DeliveryError::Refused { .. }), "got {err:?}");
         assert!(!path.exists(), "a rejected set wrote a file anyway");
+    }
+
+    /// The value is interpolated unquoted, so a line break in one writes an assignment of its
+    /// own. Values are upstream-supplied (a console-set database password reaches the raw
+    /// `_PASSWORD` field), so the key check alone does not close the hole.
+    #[test]
+    fn deliver_refuses_a_value_carrying_a_line_break() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".env");
+
+        for bad in ["p\nINJECTED=owned", "p\r\nINJECTED=owned", "p\r", "\n"] {
+            let err = deliver_vars(&path, &[("REDIS_PASSWORD", bad)]).unwrap_err();
+            assert!(
+                matches!(err, DeliveryError::Refused { .. }),
+                "{bad:?} gave {err:?}"
+            );
+            assert!(!path.exists(), "{bad:?} created a file");
+        }
+
+        // A later pair is checked too, and a rejected set writes nothing at all.
+        let err = deliver_vars(
+            &path,
+            &[("REDIS_URL", "redis://x"), ("REDIS_PASSWORD", "p\nX=1")],
+        )
+        .unwrap_err();
+        assert!(matches!(err, DeliveryError::Refused { .. }), "got {err:?}");
+        assert!(!path.exists(), "a rejected set wrote a file anyway");
+
+        // An existing file is left untouched rather than half-updated.
+        deliver_vars(&path, &[("REDIS_URL", "redis://ok")]).unwrap();
+        let before = fs::read_to_string(&path).unwrap();
+        assert!(deliver_vars(&path, &[("REDIS_URL", "redis://x\nX=1")]).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
     }
 }
