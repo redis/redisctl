@@ -220,7 +220,7 @@ where
             "expired_token" => AuthError::Expired,
             _ => AuthError::Protocol(format!("identity-provider error: {resp}")),
         },
-        RequestTokenError::Request(e) => AuthError::Transport(e.to_string()),
+        RequestTokenError::Request(e) => AuthError::Transport(error_chain(&e)),
         other => AuthError::Protocol(other.to_string()),
     }
 }
@@ -240,9 +240,26 @@ where
             DeviceCodeErrorResponseType::AccessDenied => AuthError::Denied,
             _ => AuthError::Protocol(format!("identity-provider error: {resp}")),
         },
-        RequestTokenError::Request(e) => AuthError::Transport(e.to_string()),
+        RequestTokenError::Request(e) => AuthError::Transport(error_chain(&e)),
         other => AuthError::Protocol(other.to_string()),
     }
+}
+
+/// `client error: tcp connect error: Connection refused (os error 61)` — the whole chain.
+///
+/// `oauth2` wraps its transport failures in a type whose own `Display` is just "client error",
+/// which tells the reader nothing about whether to retry, check a proxy, or reconnect.
+fn error_chain(err: &dyn std::error::Error) -> String {
+    let mut parts = vec![err.to_string()];
+    let mut source = err.source();
+    while let Some(e) = source {
+        let text = e.to_string();
+        if !parts.iter().any(|p| p == &text) {
+            parts.push(text);
+        }
+        source = e.source();
+    }
+    parts.join(": ")
 }
 
 /// Truncate a string for inclusion in an error message (char-boundary safe).
