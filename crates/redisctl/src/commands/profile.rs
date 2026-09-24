@@ -469,6 +469,23 @@ async fn handle_show(
     }
 }
 
+/// The store behind `--use-keyring`, or an error saying there is no keyring to use.
+///
+/// `CredentialStore::new()` falls back to plaintext when the OS keyring cannot be reached, and on
+/// that backend `store_credential` hands the raw secret straight back — which `handle_set` would
+/// then write into the config file, under a line claiming it went to the keyring. `--use-keyring`
+/// is an explicit request, so it refuses rather than quietly doing the other thing.
+#[cfg(feature = "secure-storage")]
+fn keyring_store() -> anyhow::Result<redisctl_core::CredentialStore> {
+    let store = redisctl_core::CredentialStore::new();
+    anyhow::ensure!(
+        store.storage_backend() == "keyring",
+        "no OS keyring is available on this machine, so --use-keyring cannot store the \
+         credentials. Re-run without it to keep them in the config file instead."
+    );
+    Ok(store)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn handle_set(
     conn_mgr: &ConnectionManager,
@@ -537,8 +554,7 @@ async fn handle_set(
             // Handle keyring storage if requested
             #[cfg(feature = "secure-storage")]
             let (stored_key, stored_secret) = if *use_keyring {
-                use redisctl_core::CredentialStore;
-                let store = CredentialStore::new();
+                let store = keyring_store()?;
 
                 // Store credentials in keyring and get references
                 let key_ref = store
@@ -589,8 +605,7 @@ async fn handle_set(
             // Handle keyring storage if requested
             #[cfg(feature = "secure-storage")]
             let (stored_username, stored_password) = if *use_keyring {
-                use redisctl_core::CredentialStore;
-                let store = CredentialStore::new();
+                let store = keyring_store()?;
 
                 // Store credentials in keyring and get references
                 let user_ref = store
@@ -655,8 +670,7 @@ async fn handle_set(
             #[cfg(feature = "secure-storage")]
             let stored_password = if *use_keyring {
                 if let Some(ref p) = password {
-                    use redisctl_core::CredentialStore;
-                    let store = CredentialStore::new();
+                    let store = keyring_store()?;
                     let pass_ref = store
                         .store_credential(&format!("{}-password", name), p)
                         .context("Failed to store password in keyring")?;
