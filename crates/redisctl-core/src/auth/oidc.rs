@@ -53,10 +53,16 @@ pub enum AuthError {
     #[error("the login request was denied")]
     Denied,
 
-    /// Network/transport failure talking to the SM API (the `oauth2` flows classify their own
-    /// transport failures as [`AuthError::Protocol`] because they run on a separate HTTP stack).
+    /// Network/transport failure talking to the SM API.
     #[error("network error contacting the identity provider: {0}")]
     Network(#[from] reqwest::Error),
+
+    /// The same failure from an `oauth2` flow, which runs on that crate's own HTTP stack and so
+    /// produces an error type [`AuthError::Network`] cannot hold. Carried separately rather than
+    /// folded into [`AuthError::Protocol`]: a request that never arrived says nothing about the
+    /// credentials, and is worth retrying.
+    #[error("network error contacting the identity provider: {0}")]
+    Transport(String),
 
     /// The identity provider returned something unexpected or unparseable.
     #[error("unexpected identity-provider response: {0}")]
@@ -201,9 +207,9 @@ pub(crate) fn to_token_set(resp: &BasicTokenResponse) -> TokenSet {
 
 /// Map an `oauth2` token/authorize error (with the *basic* error body) to an [`AuthError`].
 ///
-/// Used by the auth-code, refresh, and device-authorize requests. Transport failures land in
-/// [`AuthError::Protocol`] because the `oauth2` flows run on `oauth2`'s bundled reqwest, whose
-/// error type differs from the one wrapped by [`AuthError::Network`].
+/// Used by the auth-code, refresh, and device-authorize requests. Transport failures become
+/// [`AuthError::Transport`]: `oauth2` runs on its own reqwest, whose error type
+/// [`AuthError::Network`] cannot hold.
 pub(crate) fn map_basic_token_error<RE>(err: BasicRequestTokenError<RE>) -> AuthError
 where
     RE: std::error::Error,
@@ -214,6 +220,7 @@ where
             "expired_token" => AuthError::Expired,
             _ => AuthError::Protocol(format!("identity-provider error: {resp}")),
         },
+        RequestTokenError::Request(e) => AuthError::Transport(e.to_string()),
         other => AuthError::Protocol(other.to_string()),
     }
 }
@@ -233,6 +240,7 @@ where
             DeviceCodeErrorResponseType::AccessDenied => AuthError::Denied,
             _ => AuthError::Protocol(format!("identity-provider error: {resp}")),
         },
+        RequestTokenError::Request(e) => AuthError::Transport(e.to_string()),
         other => AuthError::Protocol(other.to_string()),
     }
 }
@@ -319,6 +327,20 @@ mod tests {
             refresh(&issuer, "test-client", "RT1").await,
             Err(AuthError::Protocol(_))
         ));
+    }
+
+    /// A request that never reached the IdP says nothing about the stored credentials, so it
+    /// must not be reported as a sign-in that has to be redone. Points at a port nothing is
+    /// listening on.
+    #[tokio::test]
+    async fn refresh_transport_failure_is_transport_not_protocol() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let issuer = Url::parse(&format!("http://127.0.0.1:{port}")).unwrap();
+        let err = refresh(&issuer, "test-client", "RT1").await.unwrap_err();
+        assert!(matches!(err, AuthError::Transport(_)), "got {err:?}");
     }
 
     #[test]

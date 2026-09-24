@@ -214,7 +214,7 @@ async fn accounts(
         .refresh(&refresh_token)
         .await
         .map_err(|e| match e {
-            AuthError::Network(_) => auth_err(e),
+            AuthError::Network(_) | AuthError::Transport(_) => auth_err(e),
             _ => RedisCtlError::Structured(Box::new(StructuredError::not_authenticated(format!(
                 "the stored sign-in for profile '{profile_name}' is no longer usable. Run \
                  `redisctl --profile {profile_name} cloud auth login`."
@@ -342,7 +342,7 @@ async fn switch(
         .refresh(&refresh_token)
         .await
         .map_err(|e| match e {
-            AuthError::Network(_) => auth_err(e),
+            AuthError::Network(_) | AuthError::Transport(_) => auth_err(e),
             _ => RedisCtlError::Structured(Box::new(StructuredError::not_authenticated(format!(
                 "the stored sign-in for profile '{profile_name}' is no longer usable — refresh \
                  tokens expire and are rotated. Run `redisctl --profile {profile_name} cloud auth \

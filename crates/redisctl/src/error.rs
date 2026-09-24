@@ -516,6 +516,7 @@ impl From<redisctl_core::AuthError> for RedisCtlError {
             redisctl_core::AuthError::Network(e) => RedisCtlError::ConnectionError {
                 message: e.to_string(),
             },
+            redisctl_core::AuthError::Transport(m) => RedisCtlError::ConnectionError { message: m },
             other => RedisCtlError::AuthenticationFailed {
                 message: other.to_string(),
                 profile_name: "<login>".to_string(),
