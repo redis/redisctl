@@ -52,6 +52,20 @@ pub struct DeliveryOutcome {
     pub replaced: bool,
 }
 
+/// Whether `name` can be written as a dotenv key.
+///
+/// The keys reach the file through `format!("{k}={v}")`, so a name carrying a newline or an `=`
+/// would write assignments of its own. Callers validate their own input for a better error; this
+/// is what makes it impossible to skip.
+pub fn is_env_var_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 /// Append (or replace) a single `variable=value` in the dotenv file at `path`.
 /// Convenience wrapper over [`deliver_vars`].
 pub fn deliver(path: &Path, variable: &str, value: &str) -> Result<DeliveryOutcome, DeliveryError> {
@@ -72,6 +86,13 @@ pub fn deliver(path: &Path, variable: &str, value: &str) -> Result<DeliveryOutco
 /// `vars` must be non-empty; the first pair is treated as the primary variable for reporting.
 pub fn deliver_vars(path: &Path, vars: &[(&str, &str)]) -> Result<DeliveryOutcome, DeliveryError> {
     let primary = vars.first().map(|(k, _)| k.to_string()).unwrap_or_default();
+
+    if let Some((key, _)) = vars.iter().find(|(k, _)| !is_env_var_name(k)) {
+        return Err(DeliveryError::refused(
+            path,
+            &format!("'{key}' is not an environment variable name"),
+        ));
+    }
 
     if fs::symlink_metadata(path)
         .map(|m| m.file_type().is_symlink())
@@ -460,5 +481,35 @@ mod tests {
             "SECRET=already-here\n",
             "the symlink target must be untouched"
         );
+    }
+
+    /// The keys are interpolated as `KEY=value`, so a name carrying a newline or an `=` would
+    /// write assignments of its own. Refused here, whatever the caller validated.
+    #[test]
+    fn deliver_refuses_a_key_that_is_not_an_env_var_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".env");
+
+        for bad in [
+            "A\nINJECTED=1",
+            "A\r\nINJECTED=1",
+            "REDIS_URL=x",
+            "HAS-DASH",
+            "HAS SPACE",
+            "1LEADING",
+            "",
+        ] {
+            let err = deliver_vars(&path, &[(bad, "redis://x")]).unwrap_err();
+            assert!(
+                matches!(err, DeliveryError::Refused { .. }),
+                "{bad:?} gave {err:?}"
+            );
+            assert!(!path.exists(), "{bad:?} created a file");
+        }
+
+        // A later pair is checked too, not just the primary one.
+        let err = deliver_vars(&path, &[("REDIS_URL", "redis://x"), ("A\nB", "y")]).unwrap_err();
+        assert!(matches!(err, DeliveryError::Refused { .. }), "got {err:?}");
+        assert!(!path.exists(), "a rejected set wrote a file anyway");
     }
 }
