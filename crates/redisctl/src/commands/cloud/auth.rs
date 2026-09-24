@@ -12,8 +12,6 @@
 //!   the user approves, runs the SM exchange, and persists. `login --device --wait` collapses
 //!   both into one blocking call for a human.
 
-#![allow(dead_code)] // Used by binary target
-
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -214,7 +212,7 @@ async fn accounts(
         .refresh(&refresh_token)
         .await
         .map_err(|e| match e {
-            AuthError::Network(_) => auth_err(e),
+            AuthError::Network(_) | AuthError::Transport(_) => auth_err(e),
             _ => RedisCtlError::Structured(Box::new(StructuredError::not_authenticated(format!(
                 "the stored sign-in for profile '{profile_name}' is no longer usable. Run \
                  `redisctl --profile {profile_name} cloud auth login`."
@@ -224,11 +222,20 @@ async fn accounts(
     // Okta hands back a replacement refresh token only when the app rotates them — and when it
     // does, the one just used stops working. Every other command persists what it gets back;
     // this one mints nothing, so without this the next command would reach for a dead token.
-    // Best-effort: failing to store it must not fail a read.
+    // Failing to store it must not fail a read, but it must be said: the old token is already
+    // dead and the replacement is now lost, so the profile's sign-in is gone until it signs in
+    // again. Reporting `status: ok` and nothing else sends the caller to a token that cannot work.
+    let mut sign_in_stored = true;
     if let Some(rotated) = tokens.refresh_token.as_deref()
         && rotated != refresh_token
+        && let Err(e) = store.store_credential(&format!("{profile_name}-okta-refresh"), rotated)
     {
-        let _ = store.store_credential(&format!("{profile_name}-okta-refresh"), rotated);
+        sign_in_stored = false;
+        eprintln!(
+            "\n  warning: the identity provider rotated this profile's sign-in and the \
+             replacement could not be stored ({e}). The one it replaced is no longer valid, so \
+             run `redisctl --profile {profile_name} cloud auth login` before the next command."
+        );
     }
 
     let listing = authenticator
@@ -262,6 +269,9 @@ async fn accounts(
             "profile": profile_name,
             "email": listing.email,
             "account_id": profile_account,
+            // False when the sign-in rotated and the replacement could not be stored: the
+            // listing below is good, but this profile cannot be used again without a login.
+            "sign_in_stored": sign_in_stored,
             "accounts": accounts.iter().map(|a| serde_json::json!({
                 "id": a.id,
                 "name": a.name,
@@ -342,7 +352,7 @@ async fn switch(
         .refresh(&refresh_token)
         .await
         .map_err(|e| match e {
-            AuthError::Network(_) => auth_err(e),
+            AuthError::Network(_) | AuthError::Transport(_) => auth_err(e),
             _ => RedisCtlError::Structured(Box::new(StructuredError::not_authenticated(format!(
                 "the stored sign-in for profile '{profile_name}' is no longer usable — refresh \
                  tokens expire and are rotated. Run `redisctl --profile {profile_name} cloud auth \
@@ -1014,6 +1024,26 @@ impl Revocation {
     }
 }
 
+/// Why logout could not revoke anything, when the refresh that would have authorised it failed.
+///
+/// A request that never arrived says nothing about the sign-in. Calling it invalid reports that
+/// there was nothing to revoke, while logout goes on to delete the local credentials — leaving a
+/// live refresh token, which can mint another key, and the profile's key itself alive server-side
+/// with nothing left naming them.
+fn refresh_failure(e: &AuthError, no_key_because: impl Fn(&str) -> String) -> Revocation {
+    let (why, session) = match e {
+        AuthError::Network(_) | AuthError::Transport(_) => (
+            "the identity provider could not be reached",
+            "so the stored sign-in was not revoked.",
+        ),
+        _ => (
+            "the stored sign-in is no longer valid",
+            "so there was nothing to revoke.",
+        ),
+    };
+    Revocation::blocked(no_key_because(why), format!("{why}, {session}"))
+}
+
 /// Revoke the minted key and the stored sign-in, or explain why it could not be done.
 ///
 /// Every failure is reported rather than raised: logout has to finish locally regardless.
@@ -1048,13 +1078,7 @@ async fn revoke_remotely(
     };
     let tokens = match authenticator.refresh(&refresh_token).await {
         Ok(tokens) => tokens,
-        Err(_) => {
-            let why = "the stored sign-in is no longer valid";
-            return Revocation::blocked(
-                no_key_because(why),
-                format!("{why}, so there was nothing to revoke."),
-            );
-        }
+        Err(e) => return refresh_failure(&e, no_key_because),
     };
 
     // Independent from here. The key goes first because deleting it needs the sign-in, but its
@@ -1352,6 +1376,39 @@ fn open_browser(url: &str) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    /// Logout deletes the local credentials whatever happens, so the notes are the only thing
+    /// left saying what is still live server-side. A request that never arrived must not be
+    /// reported as a sign-in that was already dead: that reads as "nothing to revoke" while a
+    /// usable refresh token — and the key it can mint — outlive the command.
+    ///
+    /// Only `Transport` is exercised; `Network` shares its arm and cannot be constructed here
+    /// without taking a `reqwest` dependency for a test.
+    #[test]
+    fn a_refresh_that_never_arrived_is_not_a_dead_sign_in() {
+        let named = |why: &str| format!("the key k-1 was not revoked because {why}");
+        let notes = refresh_failure(&AuthError::Transport("connection refused".into()), named)
+            .notes()
+            .join(" ");
+
+        assert!(notes.contains("could not be reached"), "{notes}");
+        assert!(
+            !notes.contains("no longer valid") && !notes.contains("nothing to revoke"),
+            "a transport failure was reported as a dead sign-in: {notes}"
+        );
+        assert!(notes.contains("k-1"), "{notes}");
+    }
+
+    /// An expired or revoked grant is the other case, and still reads as one.
+    #[test]
+    fn a_rejected_grant_still_reports_nothing_to_revoke() {
+        let named = |why: &str| format!("the key k-1 was not revoked because {why}");
+        let notes = refresh_failure(&AuthError::Protocol("invalid_grant".into()), named)
+            .notes()
+            .join(" ");
+        assert!(notes.contains("no longer valid"), "{notes}");
+        assert!(notes.contains("nothing to revoke"), "{notes}");
+    }
+
     use super::*;
 
     fn minted(superseded_key_name: Option<&str>) -> MintedCredentials {

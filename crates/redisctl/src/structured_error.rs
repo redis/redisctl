@@ -192,6 +192,9 @@ impl From<AuthError> for StructuredError {
             AuthError::Network(e) => Self::transient_api_error(format!(
                 "network error contacting the identity provider: {e}"
             )),
+            AuthError::Transport(m) => Self::transient_api_error(format!(
+                "network error contacting the identity provider: {m}"
+            )),
             // Unexpected IdP / SM response during the login exchange.
             AuthError::Protocol(msg) => {
                 Self::sm_exchange_failed(format!("login exchange failed: {msg}"))
@@ -212,6 +215,10 @@ impl From<AuthError> for StructuredError {
             AuthError::MfaRequired { .. } => Self::mfa_required(),
             AuthError::MfaInvalidCode => Self::mfa_invalid_code(),
             AuthError::MfaQuotaExceeded => Self::mfa_quota_exceeded(),
+            // `AuthError` is `#[non_exhaustive]`, so a variant added upstream lands here rather
+            // than failing the build. `unknown` is the documented code for exactly this: the
+            // message carries the detail, and adding the specific code stays a later change.
+            other => Self::unknown(other.to_string()),
         }
     }
 }
@@ -309,6 +316,15 @@ mod tests {
             StructuredError::from(AuthError::MfaInvalidCode).code,
             "mfa_invalid_code"
         );
+        // A request that never arrived is retryable; an expired grant is not. The refresh path
+        // can only produce the first as `Transport`, since `oauth2` has its own HTTP stack.
+        let transport = StructuredError::from(AuthError::Transport("connection refused".into()));
+        assert_eq!(transport.code, "transient_api_error");
+        assert_eq!(transport.exit_code, 3);
+        assert!(transport.retryable);
+        let protocol = StructuredError::from(AuthError::Protocol("invalid_grant".into()));
+        assert_eq!(protocol.code, "sm_exchange_failed");
+        assert!(!protocol.retryable);
         let quota = StructuredError::from(AuthError::MfaQuotaExceeded);
         assert_eq!(quota.code, "mfa_quota_exceeded");
         assert_eq!(quota.exit_code, 4);
