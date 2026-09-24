@@ -12,8 +12,6 @@
 //!   the user approves, runs the SM exchange, and persists. `login --device --wait` collapses
 //!   both into one blocking call for a human.
 
-#![allow(dead_code)] // Used by binary target
-
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -1080,24 +1078,7 @@ async fn revoke_remotely(
     };
     let tokens = match authenticator.refresh(&refresh_token).await {
         Ok(tokens) => tokens,
-        // A request that never arrived says nothing about the sign-in. Calling it invalid here
-        // reports that there was nothing to revoke, while logout goes on to delete the local
-        // credentials — leaving a live refresh token, which can mint another key, and the
-        // profile's key itself alive server-side with nothing left naming them.
-        Err(AuthError::Network(_) | AuthError::Transport(_)) => {
-            let why = "the identity provider could not be reached";
-            return Revocation::blocked(
-                no_key_because(why),
-                format!("{why}, so the stored sign-in was not revoked."),
-            );
-        }
-        Err(_) => {
-            let why = "the stored sign-in is no longer valid";
-            return Revocation::blocked(
-                no_key_because(why),
-                format!("{why}, so there was nothing to revoke."),
-            );
-        }
+        Err(e) => return refresh_failure(&e, no_key_because),
     };
 
     // Independent from here. The key goes first because deleting it needs the sign-in, but its
