@@ -139,8 +139,8 @@ redisctl cloud auth login --account 316941
 
 Naming an account you don't belong to exits `2` with `unknown_account`, and the message lists the
 ones you do have. In the other direction, if the sign-in does not report which of several accounts
-is current, `login` exits `2` with `account_required` and mints nothing rather than choosing one —
-pass `--account <id>`. You also need a role that can create API keys on whichever account you
+is current, `login` asks which one on a terminal; with nowhere to ask it exits `2` with
+`account_required` and mints nothing rather than choosing one — pass `--account <id>`. You also need a role that can create API keys on whichever account you
 pick — your role on one account says nothing about your role on another, so `--account` can exit
 `2` with `insufficient_permission` even when a plain `login` succeeds. Keeping one profile per account works well:
 
