@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use redis_cloud::fixed::databases::{FixedDatabase, FixedDatabaseCreateRequest};
-use redis_cloud::fixed::subscriptions::FixedSubscriptionCreateRequest;
+use redis_cloud::fixed::subscriptions::{FixedSubscription, FixedSubscriptionCreateRequest};
 use redis_cloud::{CloudClient, CloudError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -114,11 +114,14 @@ pub async fn provision(
 
     // Find our subscription (idempotent re-run / crash resume).
     let (subscription_id, database_id, status) = match find_subscription(client, &sub_name).await? {
-        Some(sub_id) => match first_database_id(client, sub_id).await? {
-            Some(db_id) => (sub_id, db_id, "reused"),
-            // Half-provisioned: subscription created but DB create never finished.
-            None => (sub_id, create_database(client, sub_id, params).await?, "ok"),
-        },
+        Some((sub_id, sub)) => {
+            ensure_free_plan(client, &sub, &sub_name).await?;
+            match database_to_reuse(client, sub_id, &params.name).await? {
+                Some(db_id) => (sub_id, db_id, "reused"),
+                // Half-provisioned: subscription created but DB create never finished.
+                None => (sub_id, create_database(client, sub_id, params).await?, "ok"),
+            }
+        }
         None => {
             let sub_id = create_subscription(client, &sub_name, params).await?;
             (sub_id, create_database(client, sub_id, params).await?, "ok")
@@ -236,7 +239,10 @@ fn validate_name(name: &str) -> QResult<()> {
     Ok(())
 }
 
-async fn find_subscription(client: &CloudClient, sub_name: &str) -> QResult<Option<i32>> {
+async fn find_subscription(
+    client: &CloudClient,
+    sub_name: &str,
+) -> QResult<Option<(i32, FixedSubscription)>> {
     let subs = client
         .fixed_subscriptions()
         .list()
@@ -251,21 +257,73 @@ async fn find_subscription(client: &CloudClient, sub_name: &str) -> QResult<Opti
                 .as_deref()
                 .is_some_and(|n| n.eq_ignore_ascii_case(sub_name))
         })
-        .and_then(|s| s.id))
+        .and_then(|s| s.id.map(|id| (id, s))))
 }
 
-async fn first_database_id(client: &CloudClient, subscription_id: i32) -> QResult<Option<i32>> {
+/// Refuse a subscription that carries our prefix but is not on the free plan.
+///
+/// The caller asked for a free database, and the report says `plan: "free"` unconditionally, so
+/// adopting a billable subscription would bill them while telling them otherwise. Only checked
+/// when the API reports a plan: with nothing to compare against, reuse stands as before.
+async fn ensure_free_plan(
+    client: &CloudClient,
+    sub: &FixedSubscription,
+    sub_name: &str,
+) -> QResult<()> {
+    let Some(plan_id) = sub.plan_id else {
+        return Ok(());
+    };
+    if plan_id == pick_free_plan(client).await? {
+        return Ok(());
+    }
+    Err(QuickDatabaseError::NameConflict(format!(
+        "subscription '{sub_name}' already exists on the {} plan, which is not the free plan. \
+         Choose a different --name, or read that database's credentials with \
+         `redisctl cloud workflow database-credentials`.",
+        sub.plan_name.as_deref().unwrap_or("current")
+    )))
+}
+
+/// The database a re-run should reuse: the one carrying `name`, or the only one present.
+///
+/// List order decides nothing once a subscription can hold more than one database. The
+/// single-database fallback keeps a database renamed outside `redisctl` reusable, which is what
+/// our own subscription looks like after a console edit.
+async fn database_to_reuse(
+    client: &CloudClient,
+    subscription_id: i32,
+    name: &str,
+) -> QResult<Option<i32>> {
     let list = client
         .fixed_databases()
         .list(subscription_id, None, None)
         .await
         .map_err(|e| classify_cloud_error("list databases", e))?;
-    Ok(list
+    let databases = list
         .subscription
         .map(|info| info.databases)
-        .unwrap_or_default()
-        .into_iter()
-        .find_map(|d| d.database_id))
+        .unwrap_or_default();
+
+    if let Some(id) = databases
+        .iter()
+        .find(|d| d.name.as_deref() == Some(name))
+        .and_then(|d| d.database_id)
+    {
+        return Ok(Some(id));
+    }
+    match databases.as_slice() {
+        [] => Ok(None),
+        [only] => Ok(only.database_id),
+        many => Err(QuickDatabaseError::NameConflict(format!(
+            "the subscription for '{name}' holds {} databases and none is named '{name}': {}. \
+             Read the one you want with `redisctl cloud workflow database-credentials`.",
+            many.len(),
+            many.iter()
+                .map(|d| d.name.as_deref().unwrap_or("<unnamed>"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+    }
 }
 
 async fn create_subscription(

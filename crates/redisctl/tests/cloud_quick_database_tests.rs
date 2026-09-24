@@ -59,13 +59,52 @@ fn run_quick_database(
 }
 
 fn fixed_database_body() -> Value {
+    database_body(DB_ID, DB_NAME)
+}
+
+fn database_body(id: i64, name: &str) -> Value {
     json!({
-        "databaseId": DB_ID,
-        "name": DB_NAME,
+        "databaseId": id,
+        "name": name,
         "region": "us-east-1",
         "publicEndpoint": MOCK_ENDPOINT,
         "security": { "enableTls": true, "password": MOCK_PASSWORD }
     })
+}
+
+/// Our subscription as the list reports it. `plan_id` is what reuse checks; `None` models an
+/// API that does not report one.
+fn subscription_body(plan_id: Option<i64>) -> Value {
+    let mut sub = json!({
+        "id": SUB_ID,
+        "name": format!("redisctl-{DB_NAME}"),
+        "status": "active"
+    });
+    if let Some(plan_id) = plan_id {
+        sub["planId"] = json!(plan_id);
+        sub["planName"] = json!("Standard 1GB");
+    }
+    sub
+}
+
+async fn mock_subscription_list(server: &MockServer, plan_id: Option<i64>) {
+    Mock::given(method("GET"))
+        .and(path("/fixed/subscriptions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "subscriptions": [ subscription_body(plan_id) ]
+        })))
+        .mount(server)
+        .await;
+}
+
+async fn mock_database_list(server: &MockServer, databases: Vec<Value>) {
+    Mock::given(method("GET"))
+        .and(path(format!("/fixed/subscriptions/{SUB_ID}/databases")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "subscription": { "subscriptionId": SUB_ID, "databases": databases }
+        })))
+        .mount(server)
+        .await;
 }
 
 async fn mock_free_plan(server: &MockServer) {
@@ -736,4 +775,162 @@ async fn database_credentials_writes_existing_db_without_provisioning() {
         "REDIS_URL=rediss://default:{MOCK_PASSWORD}@{MOCK_ENDPOINT}"
     )));
     assert!(env_body.contains("REDIS_HOST=mock-host.example.com"));
+}
+
+/// A subscription carrying our prefix on a paid plan is refused, not adopted: the report says
+/// `plan: "free"` unconditionally, so reusing it would bill the caller while telling them it is
+/// free. No POST mocks are mounted, so any provisioning attempt would fail the run.
+#[tokio::test]
+async fn reuse_refuses_a_subscription_on_a_paid_plan() {
+    let temp = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_cloud_profile(&temp, &server.uri());
+    let env_path = temp.path().join(".env");
+
+    mock_subscription_list(&server, Some(34)).await;
+    mock_free_plan(&server).await;
+
+    let output = run_quick_database(&temp, &env_path)
+        .code(2)
+        .get_output()
+        .clone();
+    assert_no_secret_leak(&output.stdout, &output.stderr);
+    let env: Value = serde_json::from_slice(&output.stdout).expect("stdout is JSON");
+    assert_eq!(env["error"]["code"], "name_conflict");
+    assert_eq!(env["error"]["retryable"], false);
+    let message = env["error"]["message"].as_str().unwrap();
+    assert!(message.contains("Standard 1GB"), "{message}");
+    assert!(message.contains("database-credentials"), "{message}");
+    assert!(!env_path.exists(), "no credentials file on refusal");
+}
+
+/// The free plan is reused as before. Proves the new check reads the plan rather than refusing
+/// anything it does not recognise.
+#[tokio::test]
+async fn reuse_accepts_the_free_plan() {
+    let temp = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_cloud_profile(&temp, &server.uri());
+    let env_path = temp.path().join(".env");
+
+    mock_subscription_list(&server, Some(12)).await;
+    mock_free_plan(&server).await;
+    mock_database_list(&server, vec![fixed_database_body()]).await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/fixed/subscriptions/{SUB_ID}/databases/{DB_ID}"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(fixed_database_body()))
+        .mount(&server)
+        .await;
+
+    let output = run_quick_database(&temp, &env_path)
+        .success()
+        .get_output()
+        .clone();
+    assert_no_secret_leak(&output.stdout, &output.stderr);
+    let report: Value = serde_json::from_slice(&output.stdout).expect("stdout is JSON");
+    assert_eq!(report["status"], "reused");
+    assert_eq!(report["database"]["plan"], "free");
+}
+
+/// Reuse resolves the database by name. The requested one is listed second, so taking the first
+/// entry would deliver another database's credentials.
+#[tokio::test]
+async fn reuse_picks_the_database_matching_the_name() {
+    let temp = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_cloud_profile(&temp, &server.uri());
+    let env_path = temp.path().join(".env");
+
+    mock_subscription_list(&server, None).await;
+    mock_database_list(
+        &server,
+        vec![
+            database_body(8000, "someone-elses-db"),
+            fixed_database_body(),
+        ],
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/fixed/subscriptions/{SUB_ID}/databases/{DB_ID}"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(fixed_database_body()))
+        .mount(&server)
+        .await;
+
+    let output = run_quick_database(&temp, &env_path)
+        .success()
+        .get_output()
+        .clone();
+    assert_no_secret_leak(&output.stdout, &output.stderr);
+    let report: Value = serde_json::from_slice(&output.stdout).expect("stdout is JSON");
+    assert_eq!(report["status"], "reused");
+    assert_eq!(report["database"]["id"], DB_ID.to_string());
+    assert_eq!(report["database"]["name"], DB_NAME);
+}
+
+/// Several databases and none named as asked: which one gets delivered would come down to list
+/// order, so refuse and name what is there.
+#[tokio::test]
+async fn reuse_refuses_when_no_database_matches_and_several_exist() {
+    let temp = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_cloud_profile(&temp, &server.uri());
+    let env_path = temp.path().join(".env");
+
+    mock_subscription_list(&server, None).await;
+    mock_database_list(
+        &server,
+        vec![
+            database_body(8000, "first-db"),
+            database_body(8001, "second-db"),
+        ],
+    )
+    .await;
+
+    let output = run_quick_database(&temp, &env_path)
+        .code(2)
+        .get_output()
+        .clone();
+    assert_no_secret_leak(&output.stdout, &output.stderr);
+    let env: Value = serde_json::from_slice(&output.stdout).expect("stdout is JSON");
+    assert_eq!(env["error"]["code"], "name_conflict");
+    let message = env["error"]["message"].as_str().unwrap();
+    assert!(message.contains("first-db"), "{message}");
+    assert!(message.contains("second-db"), "{message}");
+    assert!(!env_path.exists(), "no credentials file on refusal");
+}
+
+/// A sole database renamed outside redisctl is still reused: with one candidate there is nothing
+/// to be ambiguous about, and refusing would break a re-run after a console edit.
+#[tokio::test]
+async fn reuse_accepts_a_single_renamed_database() {
+    let temp = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_cloud_profile(&temp, &server.uri());
+    let env_path = temp.path().join(".env");
+
+    mock_subscription_list(&server, None).await;
+    mock_database_list(&server, vec![database_body(8000, "renamed-by-hand")]).await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/fixed/subscriptions/{SUB_ID}/databases/8000"
+        )))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(database_body(8000, "renamed-by-hand")),
+        )
+        .mount(&server)
+        .await;
+
+    let output = run_quick_database(&temp, &env_path)
+        .success()
+        .get_output()
+        .clone();
+    assert_no_secret_leak(&output.stdout, &output.stderr);
+    let report: Value = serde_json::from_slice(&output.stdout).expect("stdout is JSON");
+    assert_eq!(report["status"], "reused");
+    assert_eq!(report["database"]["id"], "8000");
+    assert_eq!(report["database"]["name"], "renamed-by-hand");
 }
