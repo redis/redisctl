@@ -46,11 +46,13 @@ It is **idempotent by name**: re-running with the same `--name` returns the exis
 instead of creating another, and it resumes a half-finished previous run. Requires an
 authenticated profile — see [`cloud auth login`](commands/auth.md).
 
-What it reuses is checked before it is adopted. A subscription named `redisctl-<name>` that is
-**not** on the free plan is refused as `name_conflict` rather than reported as free — choose a
-different `--name`, or read that database's credentials with `database-credentials` below. Within
-the subscription, the database is resolved by name; a single database is reused whatever it is
-called, but several databases with none matching are refused rather than picked by list order.
+What it reuses is checked before it is adopted. A subscription named `redisctl-<name>` that the
+API reports as costing money is refused as `name_conflict` rather than reported as free — choose a
+different `--name`, or read that database's credentials with `database-credentials` below. Only
+positive evidence of a bill refuses a reuse: a subscription whose plan the API does not price is
+still reused, so re-running keeps working. Within the subscription, the database is resolved by
+name (ignoring case); a single database is reused whatever it is called, but several databases
+with none matching are refused rather than picked by list order.
 
 ### Options
 

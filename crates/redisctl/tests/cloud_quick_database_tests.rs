@@ -1006,3 +1006,126 @@ async fn reuse_trusts_a_zero_price_without_listing_plans() {
     let report: Value = serde_json::from_slice(&output.stdout).expect("stdout is JSON");
     assert_eq!(report["status"], "reused");
 }
+
+/// A plan id the account's plan list does not offer is reused, not refused. `/fixed/plans` is
+/// the list of plans this account can *create*, and the free plan drops off it once the account
+/// holds its one free subscription — so absence from it is no evidence of a bill, and treating it
+/// as evidence broke re-running against our own subscription.
+#[tokio::test]
+async fn reuse_accepts_a_plan_the_list_does_not_offer() {
+    let temp = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_cloud_profile(&temp, &server.uri());
+    let env_path = temp.path().join(".env");
+
+    // Plan 777 appears nowhere in /fixed/plans, and the subscription reports no price.
+    mount_subscription_list(&server, subscription_with(Some(777), None)).await;
+    mock_free_plan(&server).await;
+    mock_database_list(&server, vec![fixed_database_body()]).await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/fixed/subscriptions/{SUB_ID}/databases/{DB_ID}"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(fixed_database_body()))
+        .mount(&server)
+        .await;
+
+    let output = run_quick_database(&temp, &env_path)
+        .success()
+        .get_output()
+        .clone();
+    let report: Value = serde_json::from_slice(&output.stdout).expect("stdout is JSON");
+    assert_eq!(report["status"], "reused");
+}
+
+/// The plan-id fallback still refuses a plan the list positively prices above zero, so dropping
+/// the "absence means billable" rule did not give up the check itself.
+#[tokio::test]
+async fn reuse_refuses_a_paid_plan_id_when_no_price_is_reported() {
+    let temp = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_cloud_profile(&temp, &server.uri());
+    let env_path = temp.path().join(".env");
+
+    // Plan 34 is listed at price 5; the subscription itself reports no price.
+    mount_subscription_list(&server, subscription_with(Some(34), None)).await;
+    mock_free_plan(&server).await;
+
+    let output = run_quick_database(&temp, &env_path)
+        .code(2)
+        .get_output()
+        .clone();
+    assert_no_secret_leak(&output.stdout, &output.stderr);
+    let env: Value = serde_json::from_slice(&output.stdout).expect("stdout is JSON");
+    assert_eq!(env["error"]["code"], "name_conflict");
+    assert!(!env_path.exists(), "no credentials file on refusal");
+}
+
+/// The database name is matched the way the subscription name is — ignoring case. A console-made
+/// `redisctl-<Name>` subscription is adopted by the case-insensitive subscription lookup, so its
+/// differently-cased database has to count as ours too rather than being refused as a stranger.
+#[tokio::test]
+async fn reuse_matches_the_database_name_ignoring_case() {
+    let temp = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_cloud_profile(&temp, &server.uri());
+    let env_path = temp.path().join(".env");
+
+    let upper = DB_NAME.to_uppercase();
+    mock_subscription_list(&server, None).await;
+    mock_database_list(
+        &server,
+        vec![
+            database_body(8000, "someone-elses-db"),
+            database_body(DB_ID, &upper),
+        ],
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/fixed/subscriptions/{SUB_ID}/databases/{DB_ID}"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(database_body(DB_ID, &upper)))
+        .mount(&server)
+        .await;
+
+    let output = run_quick_database(&temp, &env_path)
+        .success()
+        .get_output()
+        .clone();
+    let report: Value = serde_json::from_slice(&output.stdout).expect("stdout is JSON");
+    assert_eq!(report["status"], "reused");
+    assert_eq!(report["database"]["id"], DB_ID.to_string());
+}
+
+/// The database we asked for, listed without an id: its own failure, not "none is named that".
+/// The old wording named it in the list it claimed did not contain it, and with a single entry
+/// the run fell through to creating a second database of the same name.
+#[tokio::test]
+async fn reuse_reports_a_named_database_that_has_no_id() {
+    let temp = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_cloud_profile(&temp, &server.uri());
+    let env_path = temp.path().join(".env");
+
+    // No POST mock: a fall-through to create would fail the run instead of reporting this.
+    mock_subscription_list(&server, None).await;
+    mock_database_list(
+        &server,
+        vec![
+            json!({ "name": DB_NAME, "region": "us-east-1" }),
+            database_body(8001, "second-db"),
+        ],
+    )
+    .await;
+
+    let output = run_quick_database(&temp, &env_path)
+        .code(3)
+        .get_output()
+        .clone();
+    let env: Value = serde_json::from_slice(&output.stdout).expect("stdout is JSON");
+    assert_eq!(env["error"]["retryable"], true);
+    let message = env["error"]["message"].as_str().unwrap();
+    assert!(message.contains("without an id"), "{message}");
+    assert!(!env_path.exists(), "no credentials file on refusal");
+}

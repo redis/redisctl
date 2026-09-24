@@ -263,8 +263,9 @@ async fn find_subscription(
 /// Refuse a subscription that carries our prefix but is not on the free plan.
 ///
 /// The caller asked for a free database, and the report says `plan: "free"` unconditionally, so
-/// adopting a billable subscription would bill them while telling them otherwise. Only checked
-/// when the API reports a plan: with nothing to compare against, reuse stands as before.
+/// adopting a billable subscription would bill them while telling them otherwise. Refused only on
+/// positive evidence that the plan costs money: reuse by name is the documented behaviour, so an
+/// unreadable or silent plan has to leave it standing.
 async fn ensure_free_plan(
     client: &CloudClient,
     sub: &FixedSubscription,
@@ -278,16 +279,20 @@ async fn ensure_free_plan(
             Err(not_free(sub, sub_name))
         };
     }
-    // No price reported: fall back to the plan id, checked against *every* free plan. There is
-    // one per provider and region, so comparing against a single id would refuse a free
-    // subscription created in another region.
+    // No price reported: fall back to the plan id, and refuse only a plan the list positively
+    // prices above zero. Absence is not evidence here — `/fixed/plans` is the account's
+    // *creatable* options, so the free plan drops off it once the account holds its one free
+    // subscription (hence `pick_free_plan`'s "no free Essentials plan is available on this
+    // account"). Treating a missing id as billable would refuse to reuse our own subscription,
+    // naming the free plan it sits on as "not free". A listing we cannot read says nothing
+    // either, so a failure there leaves reuse alone rather than aborting it.
     let Some(plan_id) = sub.plan_id else {
         return Ok(());
     };
-    if free_plan_ids(client).await?.contains(&plan_id) {
-        return Ok(());
+    match paid_plan_ids(client).await {
+        Ok(paid) if paid.contains(&plan_id) => Err(not_free(sub, sub_name)),
+        _ => Ok(()),
     }
-    Err(not_free(sub, sub_name))
 }
 
 fn not_free(sub: &FixedSubscription, sub_name: &str) -> QuickDatabaseError {
@@ -319,11 +324,23 @@ async fn database_to_reuse(
         .map(|info| info.databases)
         .unwrap_or_default();
 
-    if let Some(id) = databases
-        .iter()
-        .find(|d| d.name.as_deref() == Some(name))
-        .and_then(|d| d.database_id)
-    {
+    // Matched the way `find_subscription` matches the subscription. Comparing case-sensitively
+    // here while the subscription lookup ignores case makes the two halves disagree about what
+    // is ours: `redisctl-MyApp` is adopted, then its `MyApp` database is treated as a stranger.
+    if let Some(named) = databases.iter().find(|d| {
+        d.name
+            .as_deref()
+            .is_some_and(|n| n.eq_ignore_ascii_case(name))
+    }) {
+        // The database we asked for, listed without an id. Its own case, not the "none is named
+        // '{name}'" one below — that message would name it in the very list it says lacks it,
+        // and falling through with a single entry would create a second database of that name.
+        let id = named.database_id.ok_or_else(|| {
+            QuickDatabaseError::Transient(format!(
+                "the database named '{name}' is listed without an id, so it cannot be read yet; \
+                 it may still be provisioning — retry in a moment"
+            ))
+        })?;
         return Ok(Some(id));
     }
     match databases.as_slice() {
@@ -423,6 +440,17 @@ async fn pick_free_plan(client: &CloudClient) -> QResult<i32> {
 /// Every zero-price plan id. Essentials plans are per provider and region, so a free
 /// subscription can sit on any one of them.
 async fn free_plan_ids(client: &CloudClient) -> QResult<Vec<i32>> {
+    plan_ids_priced(client, |price| price == 0).await
+}
+
+/// Every plan id the list prices above zero — what [`ensure_free_plan`] refuses on.
+async fn paid_plan_ids(client: &CloudClient) -> QResult<Vec<i32>> {
+    plan_ids_priced(client, |price| price != 0).await
+}
+
+/// Plan ids whose *reported* price satisfies `wanted`. A plan with no price is in neither set:
+/// it is not known to be free and not known to cost anything.
+async fn plan_ids_priced(client: &CloudClient, wanted: fn(i32) -> bool) -> QResult<Vec<i32>> {
     let plans = client
         .fixed_subscriptions()
         .list_plans(None, None)
@@ -432,7 +460,7 @@ async fn free_plan_ids(client: &CloudClient) -> QResult<Vec<i32>> {
         .plans
         .unwrap_or_default()
         .into_iter()
-        .filter(|p| p.price == Some(0))
+        .filter(|p| p.price.is_some_and(wanted))
         .filter_map(|p| p.id)
         .collect())
 }
