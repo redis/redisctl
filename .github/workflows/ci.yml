@@ -173,7 +173,7 @@ jobs:
           shared-key: "coverage"
 
       - name: Install tarpaulin
-        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+        uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
         with:
           tool: cargo-tarpaulin@0.31.2
 
@@ -181,7 +181,7 @@ jobs:
         run: cargo tarpaulin --workspace --all-features --out xml --timeout 300
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: ./cobertura.xml
           fail_ci_if_error: false
