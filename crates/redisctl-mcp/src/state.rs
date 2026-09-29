@@ -17,7 +17,7 @@ use redisctl_core::Config;
 #[cfg(any(feature = "cloud", feature = "enterprise", feature = "database"))]
 use tokio::sync::RwLock;
 
-use crate::policy::{Policy, SafetyTier};
+use crate::policy::{Policy, SafetyTier, ToolSafety};
 
 #[cfg(any(feature = "cloud", feature = "enterprise"))]
 /// The Cloud API recognises the `redisctl/` prefix as a trusted client for some operations, so the
@@ -396,6 +396,22 @@ impl AppState {
         matches!(self.policy.global_tier(), SafetyTier::Full)
     }
 
+    /// Check a specific tool invocation against the fully resolved policy.
+    ///
+    /// Unlike the legacy global-tier helpers, this honors toolset overrides,
+    /// explicit allow/deny entries, category denies, and the registered tool
+    /// map used by the router.
+    pub(crate) fn is_tool_allowed(&self, name: &str, safety: ToolSafety) -> bool {
+        self.policy.is_named_tool_allowed(name, safety)
+    }
+
+    /// Check dynamically classified behavior that is more dangerous than a
+    /// tool's advertised/base safety. Explicit allows do not raise this ceiling.
+    #[cfg(feature = "database")]
+    pub(crate) fn is_dynamic_safety_allowed(&self, name: &str, safety: ToolSafety) -> bool {
+        self.policy.is_dynamic_safety_allowed(name, safety)
+    }
+
     /// Store a named command alias (session-scoped, in-memory only).
     #[cfg(feature = "database")]
     pub async fn set_alias(&self, name: String, commands: Vec<Vec<String>>) {
@@ -457,6 +473,28 @@ impl Clone for AppState {
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 impl AppState {
+    fn test_tool_mapping() -> std::collections::HashMap<String, crate::policy::ToolsetKind> {
+        let mut mapping = std::collections::HashMap::new();
+
+        #[cfg(feature = "cloud")]
+        for name in crate::tools::cloud::tool_names() {
+            mapping.insert(name, crate::policy::ToolsetKind::Cloud);
+        }
+        #[cfg(feature = "enterprise")]
+        for name in crate::tools::enterprise::tool_names() {
+            mapping.insert(name, crate::policy::ToolsetKind::Enterprise);
+        }
+        #[cfg(feature = "database")]
+        for name in crate::tools::redis::tool_names() {
+            mapping.insert(name, crate::policy::ToolsetKind::Database);
+        }
+        for name in crate::tools::profile::tool_names() {
+            mapping.insert(name, crate::policy::ToolsetKind::App);
+        }
+
+        mapping
+    }
+
     /// Replace the active policy in integration tests.
     pub fn set_test_policy(&mut self, policy: Arc<Policy>) {
         self.policy = policy;
@@ -466,7 +504,7 @@ impl AppState {
     pub fn test_policy() -> Arc<Policy> {
         Arc::new(Policy::new(
             crate::policy::PolicyConfig::default(),
-            std::collections::HashMap::new(),
+            Self::test_tool_mapping(),
             "test".to_string(),
         ))
     }
@@ -478,7 +516,7 @@ impl AppState {
                 tier: SafetyTier::ReadWrite,
                 ..Default::default()
             },
-            std::collections::HashMap::new(),
+            Self::test_tool_mapping(),
             "test".to_string(),
         ))
     }
@@ -490,7 +528,7 @@ impl AppState {
                 tier: SafetyTier::Full,
                 ..Default::default()
             },
-            std::collections::HashMap::new(),
+            Self::test_tool_mapping(),
             "test".to_string(),
         ))
     }

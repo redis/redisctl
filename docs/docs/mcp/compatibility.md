@@ -81,6 +81,33 @@ from entering the stable catalog merely because it compiles. The failure explain
 classification so the pull request can apply the appropriate SemVer, documentation, and migration
 treatment.
 
+### Security exception: arbitrary Redis command surfaces
+
+`redis_alias_run` was previously advertised as read-only and idempotent, and `redis_bulk_load` as
+non-destructive, even though either tool can execute commands that delete data. Both execution
+surfaces are now conservatively annotated destructive, making Full the minimum tier at which they
+are discovered by default. `redis_alias_set` remains a write tool because it stores rather than
+executes commands. At invocation time, all three tools classify every contained command and require
+Full policy for destructive or unknown behavior. This is an intentional compatibility restriction:
+leaving the old annotations in place would let the same Redis operation bypass policy simply by
+entering through an alias or bulk batch.
+
+Clients migrating from the earlier catalog should account for these changes:
+
+- Read-only and Read-write clients no longer discover `redis_alias_run` or `redis_bulk_load` by
+  default. An explicit allow may expose one of these surfaces to a narrower policy, but it does not
+  raise the runtime ceiling: dynamically destructive or unrecognized commands still require Full.
+- `redis_alias_set` remains available at Read-write for non-destructive commands; destructive or
+  unrecognized commands still require Full before they can be stored.
+- Prefer dedicated MCP tools when possible, and avoid a blanket allow for an arbitrary-command
+  surface unless the client should receive that full capability.
+- Connection-state changes, blocking commands (including `XREAD`/`XREADGROUP` with `BLOCK`),
+  unsafe administrative variants, and `SCRIPT DEBUG` are blocked at every tier. Existing aliases
+  containing them must be replaced rather than granted a broader policy.
+
+This exception makes the catalog more restrictive to close an authorization bypass. It does not
+rename or remove a tool or change its input schema.
+
 ## Reviewing an intentional catalog change
 
 1. Run the contract test without updating the fixture and inspect its classification:

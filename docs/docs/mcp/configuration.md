@@ -250,7 +250,7 @@ exclude = []             # remove specific tools from the resolved set
 # Audit logging
 [audit]
 enabled = false          # enable/disable audit logging
-level = "all"            # "all", "denied", or "mutations"
+level = "all"            # "all", "writes", "destructive", or "denied"
 include_args = false     # include tool arguments in log entries
 redact_fields = ["password", "secret_key"]  # redact sensitive fields
 ```
@@ -307,7 +307,7 @@ enabled = false
 !!! note
     `enabled = false` prevents tools from being registered with the MCP router. This is different from deny lists, which register the tool but block invocation. Disabled toolsets save memory and reduce tool discovery noise.
 
-### Raw API Tools
+### Raw API and arbitrary-command tools
 
 Three "raw" passthrough tools provide direct API/command access:
 
@@ -316,6 +316,42 @@ Three "raw" passthrough tools provide direct API/command access:
 - `redis_command` -- arbitrary Redis commands
 
 These are powerful but potentially dangerous. By default (when no policy file is loaded), all three are denied. When you load a custom policy file, raw tools follow normal tier/allow/deny rules -- they are not auto-denied.
+
+Three additional database tools accept or replay caller-supplied Redis commands:
+
+- `redis_bulk_load` -- executes an arbitrary batch after preflighting the entire batch
+- `redis_alias_set` -- validates and stores an arbitrary command sequence
+- `redis_alias_run` -- revalidates and executes a stored command sequence
+
+All four Redis command surfaces (`redis_command`, bulk loading, alias creation, and alias execution)
+use the same command normalizer and safety classifier. `redis_command`, `redis_bulk_load`, and
+`redis_alias_run` are conservatively advertised as destructive and therefore require Full policy
+for discovery by default. `redis_alias_set` is advertised as a write because it only stores the
+sequence. Commands the classifier does not recognize are treated as destructive.
+
+An explicit allow can expose an arbitrary-command tool below its advertised tier, but it does not
+raise the runtime safety ceiling. For example, an allowed raw-command tool under Read-only may run
+a classified read, while a write still requires Read-write and a destructive or unknown command
+still requires Full. An allow for bulk or alias execution grants its base write behavior, but
+dynamically destructive or unknown commands still require the effective Full tier. Deny rules and
+the `destructive` category deny retain their documented precedence.
+
+Some commands are blocked at every policy tier because they can change shared connection state,
+pin a pooled connection, alter server process or replication state, or bypass the normal safety
+model. These include:
+
+- connection and session changes such as `AUTH`, `HELLO`, `SELECT`, transactions, watches,
+  subscriptions, and read-mode changes;
+- blocking operations such as the blocking list and sorted-set families, `WAIT`, `WAITAOF`, and
+  `XREAD` or `XREADGROUP` when used with `BLOCK`;
+- process, persistence, replication, failover, and flush commands such as `SHUTDOWN`, `DEBUG`,
+  `SAVE`, `BGSAVE`, `BGREWRITEAOF`, `REPLICAOF`, `FAILOVER`, `FLUSHDB`, and `FLUSHALL`; and
+- unsafe administrative variants in the `CONFIG`, `ACL`, `CLIENT`, `CLUSTER`, and `MODULE`
+  families, plus `SCRIPT DEBUG`.
+
+Read-only administrative variants such as `CONFIG GET`, `ACL WHOAMI`, `CLIENT INFO`, and
+`MODULE LIST` remain available. Prefer dedicated MCP tools when one exists: their fixed behavior
+and static safety annotations allow narrower policies than an arbitrary-command surface.
 
 To explicitly enable raw tools in a policy file:
 
@@ -328,7 +364,7 @@ To enable raw tools selectively:
 
 ```toml
 tier = "read-only"
-allow = ["redis_command"]  # allow redis_command despite read-only tier
+allow = ["redis_command"]  # expose it, while runtime classification still limits it to reads
 ```
 
 To keep raw tools denied in a custom policy:
@@ -339,7 +375,9 @@ deny = ["cloud_raw_api", "enterprise_raw_api", "redis_command"]
 ```
 
 !!! tip
-    The `redis_command` tool has its own built-in blocklist that prevents dangerous commands like `SHUTDOWN`, `DEBUG`, `CLUSTER FAILOVER`, and others regardless of policy tier. This provides defense-in-depth even at full tier.
+    The shared classifier is applied before any raw command, bulk batch, or alias sequence runs.
+    Alias commands are checked both when stored and when replayed, so a blocked command cannot be
+    smuggled through a previously created alias.
 
 ## Presets
 
@@ -403,7 +441,7 @@ tier = "full"
 
 [audit]
 enabled = true
-level = "mutations"
+level = "writes"
 include_args = true
 redact_fields = ["password", "secret_key", "api_key"]
 ```

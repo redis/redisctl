@@ -8,6 +8,7 @@ use serde_json::Value;
 use tower_mcp::extract::{Json, State};
 use tower_mcp::{CallToolResult, Error as McpError, McpRouter, ResultExt, Tool, ToolBuilder};
 
+use crate::policy::ToolSafety;
 use crate::state::AppState;
 
 /// HTTP method for the raw API call.
@@ -50,22 +51,8 @@ pub fn cloud_raw_api(state: Arc<AppState>) -> Tool {
         .extractor_handler(
             state,
             |State(state): State<Arc<AppState>>, Json(input): Json<CloudRawApiInput>| async move {
-                // Method-based tier gating
-                match input.method {
-                    HttpMethod::Get => {
-                        if !state.is_write_allowed() {
-                            return Err(McpError::tool(
-                                "cloud_raw_api GET requires at least read-write tier",
-                            ));
-                        }
-                    }
-                    HttpMethod::Post | HttpMethod::Put | HttpMethod::Patch | HttpMethod::Delete => {
-                        if !state.is_destructive_allowed() {
-                            return Err(McpError::tool(
-                                "cloud_raw_api mutating methods require full tier",
-                            ));
-                        }
-                    }
+                if !state.is_tool_allowed("cloud_raw_api", ToolSafety::Destructive) {
+                    return Err(crate::policy::policy_denied("cloud_raw_api"));
                 }
 
                 // Validate path starts with /

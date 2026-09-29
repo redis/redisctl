@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use tower_mcp::{CallToolResult, ResultExt};
 
+use crate::policy::ToolSafety;
 use crate::serde_helpers;
 use crate::tools::macros::{database_tool, mcp_module};
 
@@ -55,7 +56,7 @@ mcp_module! {
     seed => "redis_seed",
 }
 
-database_tool!(write, bulk_load, "redis_bulk_load",
+database_tool!(destructive_stateful, bulk_load, "redis_bulk_load",
     "Pipelined command execution. Accept a batch of Redis commands and execute them \
      using Redis pipelining for high throughput. Returns count of commands executed, \
      elapsed time, and throughput.\n\n\
@@ -72,6 +73,8 @@ database_tool!(write, bulk_load, "redis_bulk_load",
      Set collect_results=true to get per-command output (useful for small batches \
      where you need to verify NX/XX conditions were met).\n\
      - Pipelines are NOT atomic — other clients may interleave commands between batches.\n\
+     - Every command is classified before the first batch runs. Destructive or unknown commands \
+     require Full policy; connection-state and privileged administrative commands are blocked.\n\
      - Tune batch_size for your use case: smaller batches (100-500) reduce memory per round-trip, \
      larger batches (1000-5000) maximize throughput.",
     {
@@ -85,10 +88,20 @@ database_tool!(write, bulk_load, "redis_bulk_load",
         /// Useful for small batches where you need to inspect individual results (e.g. NX/XX outcomes).
         #[serde(default)]
         pub collect_results: bool,
-    } => |conn, input| {
+    } => |state, conn, input| {
         if input.commands.is_empty() {
             return Ok(CallToolResult::text("No commands to execute"));
         }
+
+        // Preflight the entire batch before running its first command so a
+        // denied command cannot leave earlier batches partially applied.
+        let canonical_commands = super::command_safety::preflight_packed_commands(
+            state,
+            "redis_bulk_load",
+            ToolSafety::Destructive,
+            ToolSafety::Write,
+            input.commands.iter().map(|command| command.args.as_slice()),
+        )?;
 
         let batch_size = input.batch_size.max(1);
         let start = Instant::now();
@@ -97,13 +110,15 @@ database_tool!(write, bulk_load, "redis_bulk_load",
         if input.collect_results {
             let mut all_results: Vec<redis::Value> = Vec::with_capacity(total);
 
-            for (batch_idx, chunk) in input.commands.chunks(batch_size).enumerate() {
+            for (batch_idx, (chunk, command_names)) in input
+                .commands
+                .chunks(batch_size)
+                .zip(canonical_commands.chunks(batch_size))
+                .enumerate()
+            {
                 let mut pipe = redis::pipe();
-                for cmd_input in chunk {
-                    if cmd_input.args.is_empty() {
-                        continue;
-                    }
-                    let mut cmd = redis::cmd(&cmd_input.args[0]);
+                for (cmd_input, command_name) in chunk.iter().zip(command_names) {
+                    let mut cmd = redis::cmd(command_name);
                     for arg in &cmd_input.args[1..] {
                         cmd.arg(arg);
                     }
@@ -139,13 +154,15 @@ database_tool!(write, bulk_load, "redis_bulk_load",
             Ok(CallToolResult::text(lines.join("\n")))
         } else {
             let mut total_ok = 0usize;
-            for (batch_idx, chunk) in input.commands.chunks(batch_size).enumerate() {
+            for (batch_idx, (chunk, command_names)) in input
+                .commands
+                .chunks(batch_size)
+                .zip(canonical_commands.chunks(batch_size))
+                .enumerate()
+            {
                 let mut pipe = redis::pipe();
-                for cmd_input in chunk {
-                    if cmd_input.args.is_empty() {
-                        continue;
-                    }
-                    let mut cmd = redis::cmd(&cmd_input.args[0]);
+                for (cmd_input, command_name) in chunk.iter().zip(command_names) {
+                    let mut cmd = redis::cmd(command_name);
                     for arg in &cmd_input.args[1..] {
                         cmd.arg(arg);
                     }

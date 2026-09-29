@@ -8,6 +8,7 @@
 use redisctl_core::cloud::quick_database::{QuickDatabaseParams, provision};
 use tower_mcp::CallToolResult;
 
+use crate::policy::ToolSafety;
 use crate::tools::macros::{cloud_tool, mcp_module};
 
 mcp_module! {
@@ -42,6 +43,10 @@ pub fn cloud_auth_status(state: std::sync::Arc<crate::state::AppState>) -> tower
                 std::sync::Arc<crate::state::AppState>,
             >,
              tower_mcp::extract::Json(input): tower_mcp::extract::Json<CloudAuthStatusInput>| async move {
+                if !state.is_tool_allowed("cloud_auth_status", ToolSafety::ReadOnly) {
+                    return Err(crate::policy::policy_denied("cloud_auth_status"));
+                }
+
                 // Building the client resolves credentials (offline); success ⇒ authenticated.
                 let authenticated = state
                     .cloud_client_for_profile(input.profile.as_deref())

@@ -2,6 +2,7 @@
 
 mod aliases;
 mod bulk;
+pub(crate) mod command_safety;
 mod connection;
 mod diagnostics;
 mod json;
