@@ -180,6 +180,45 @@ async fn login(
     emit_signed_in(&creds, &profile_name, output)
 }
 
+/// `login`'s browser flow for a command that finds no credentials part-way through
+/// (`init --cloud`). Returns a manager over the saved config and the profile it wrote.
+pub(crate) async fn sign_in(
+    conn_mgr: &ConnectionManager,
+    profile: Option<&str>,
+) -> CliResult<(ConnectionManager, String)> {
+    let (profile_name, authenticator, auth_cfg) = prepare(conn_mgr, profile)?;
+    let superseded = superseded_key(&auth_cfg);
+    let tokens = run_loopback_flow(&authenticator).await?;
+    let creds = complete_and_persist(
+        conn_mgr,
+        &profile_name,
+        &authenticator,
+        &tokens,
+        auth_cfg,
+        LoginRun {
+            flow: LoginFlow::Loopback,
+            account: AccountChoice::Current,
+            superseded,
+            allow_plaintext: false,
+            make_default: true,
+        },
+    )
+    .await?;
+    eprintln!(
+        "\u{2713} Signed in as {}. Credentials saved to profile '{}'.\n",
+        creds.email.as_deref().unwrap_or("your account"),
+        profile_name
+    );
+    let config = match &conn_mgr.config_path {
+        Some(path) => Config::load_from_path(path)?,
+        None => Config::load()?,
+    };
+    Ok((
+        ConnectionManager::with_config_path(config, conn_mgr.config_path.clone()),
+        profile_name,
+    ))
+}
+
 /// The key a profile already holds, which a fresh mint for that profile replaces.
 fn superseded_key(auth_cfg: &CloudAuthConfig) -> Option<SupersededKey> {
     match (auth_cfg.account_id, auth_cfg.capi_key_name.clone()) {
