@@ -145,9 +145,20 @@ pub async fn run(
                         "{e}\n  Sign in first: redisctl cloud auth login   (or pass -p <profile> with API keys)"
                     )));
                 }
-                let (signed_in, name) =
-                    crate::commands::cloud::auth::sign_in(conn_mgr, profile).await?;
-                signed_in.create_cloud_client(Some(&name)).await?
+                let signed_in = crate::commands::cloud::auth::sign_in(conn_mgr, profile, |url| {
+                    output::step("sign in to Redis Cloud in your browser");
+                    println!("   {}", dim(url));
+                })
+                .await?;
+                output::step(&format!(
+                    "signed in as {}  (profile '{}')",
+                    signed_in.email.as_deref().unwrap_or("your account"),
+                    signed_in.profile
+                ));
+                signed_in
+                    .conn_mgr
+                    .create_cloud_client(Some(&signed_in.profile))
+                    .await?
             }
             other => other?,
         };

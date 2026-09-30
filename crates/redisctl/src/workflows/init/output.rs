@@ -78,6 +78,11 @@ fn progress_open_line(label: &str) -> String {
     format!("{}  {}", brand_red("◇"), dim(&format!("{label}...")))
 }
 
+/// A rail entry complete on one line, for steps that are not a "doing X..." wait.
+pub fn step(label: &str) {
+    println!("{}  {}", brand_red("◇"), dim(label));
+}
+
 pub fn progress(label: &str) -> Progress {
     use std::io::Write;
     print!("{}", progress_open_line(label));
