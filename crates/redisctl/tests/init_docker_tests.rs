@@ -1,7 +1,7 @@
 //! Live Docker suite for `redisctl init` local provisioning.
 //!
-//! Requires a running Docker daemon; each test provisions (and removes) a container
-//! named after its project directory. Run with:
+//! Requires a running Docker daemon; each test provisions (and removes) the container
+//! init names for its project directory. Run with:
 //!
 //! ```bash
 //! cargo test --test init_docker_tests -- --ignored --nocapture
@@ -41,14 +41,25 @@ impl Drop for RemoveContainer {
     }
 }
 
-/// A project directory whose basename is alphanumeric, so the container name the
-/// command derives from it is exactly `redis-init-<basename>`.
-fn project_dir(tmp: &Path, suffix: &str) -> (PathBuf, String, RemoveContainer) {
-    let basename = format!("live{}{}", std::process::id(), suffix);
-    let dir = tmp.join(&basename);
-    std::fs::create_dir(&dir).unwrap();
-    let container = format!("redis-init-{basename}");
-    (dir.clone(), container.clone(), RemoveContainer(container))
+/// A fresh project directory and the container init plans for it, read from the
+/// dry run the way a user would see it.
+fn project_dir(tmp: &Path, rel: &str) -> (PathBuf, String, RemoveContainer) {
+    let dir = tmp.join(rel);
+    std::fs::create_dir_all(&dir).unwrap();
+    let output = redisctl()
+        .current_dir(&dir)
+        .args(["init", "--dry-run", "--no-telemetry", "--agent", "claude"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let start = stdout.find("--name ").expect("a planned container") + "--name ".len();
+    let container = stdout[start..]
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string();
+    assert!(container.starts_with("redisctl-"), "{container}");
+    (dir, container.clone(), RemoveContainer(container))
 }
 
 fn container_running(name: &str) -> Option<bool> {
@@ -207,4 +218,89 @@ fn dry_run_plans_the_container_and_writes_nothing() {
     assert!(!dir.join(".env").exists());
     assert!(!dir.join(".gitignore").exists());
     assert_eq!(container_running(&container), None);
+}
+
+#[test]
+#[ignore = "requires Docker"]
+#[serial]
+fn a_same_named_project_elsewhere_gets_its_own_container() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (first, first_container, _first_cleanup) = project_dir(tmp.path(), "a/api");
+    let (second, second_container, _second_cleanup) = project_dir(tmp.path(), "b/api");
+    assert_ne!(first_container, second_container);
+
+    let repo = skills_fixture();
+    for dir in [&first, &second] {
+        redisctl()
+            .current_dir(dir)
+            .env("REDISCTL_INIT_SKILLS_REPO", repo.path())
+            .args([
+                "init",
+                "--no-install-cli",
+                "--no-telemetry",
+                "--agent",
+                "claude",
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("already running").not());
+    }
+    assert_eq!(container_running(&first_container), Some(true));
+    assert_eq!(container_running(&second_container), Some(true));
+    let url = |dir: &Path| std::fs::read_to_string(dir.join(".env")).unwrap();
+    assert_ne!(url(&first), url(&second), "each project has its own port");
+}
+
+#[test]
+#[ignore = "requires Docker"]
+#[serial]
+fn a_stopped_container_on_another_port_is_not_restarted() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (dir, container, _cleanup) = project_dir(tmp.path(), "moved");
+
+    let repo = skills_fixture();
+    let init = || {
+        let mut cmd = redisctl();
+        cmd.current_dir(&dir)
+            .env("REDISCTL_INIT_SKILLS_REPO", repo.path())
+            .args([
+                "init",
+                "--no-install-cli",
+                "--no-telemetry",
+                "--agent",
+                "claude",
+            ]);
+        cmd
+    };
+    init().assert().success();
+    let out = std::process::Command::new("docker")
+        .args(["stop", &container])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    // .env names a different local server, so the old container is not the database.
+    let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    std::fs::write(
+        dir.join(".env"),
+        format!("REDIS_URL=\"redis://localhost:{port}\"\n"),
+    )
+    .unwrap();
+
+    init()
+        .arg("--dry-run")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!("docker:{container}")).not());
+    init()
+        .assert()
+        .code(10)
+        .stdout(predicate::str::contains("restarted stopped container").not());
+    assert_eq!(container_running(&container), Some(false));
+    let skill =
+        std::fs::read_to_string(dir.join(".agents/skills/redis-project-setup/SKILL.md")).unwrap();
+    assert!(!skill.contains(&container), "{skill}");
 }

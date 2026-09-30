@@ -4,8 +4,8 @@
 
 use std::path::Path;
 
-use crate::InitError;
-use crate::env::read_env_key;
+use crate::workflows::init::engine::InitError;
+use crate::workflows::init::engine::env::read_env_key;
 
 /// What a human replaces by hand in `.env`; anything angle-bracketed reads as unset.
 pub const SECRET_PLACEHOLDER: &str = "<paste-from-redis-cloud>";
@@ -302,6 +302,17 @@ pub(crate) fn is_configured(value: &str) -> bool {
     !value.is_empty() && !(value.starts_with('<') && value.ends_with('>') && value.len() > 2)
 }
 
+/// A real stored value wins; a stored placeholder yields only to the explicit flag,
+/// which then fills it in `.env`.
+fn prefer_stored(stored: Option<String>, flag: Option<&str>) -> Option<String> {
+    match (stored, flag) {
+        (Some(stored), Some(flag)) if !is_configured(&stored) && is_configured(flag) => {
+            Some(flag.to_string())
+        }
+        (stored, flag) => stored.or_else(|| flag.map(str::to_string)),
+    }
+}
+
 /// Validate the stored value, including placeholders that still need filling.
 fn resolve_key(
     spec: &ProductSpec,
@@ -310,7 +321,7 @@ fn resolve_key(
     getenv: &dyn Fn(&str) -> Option<String>,
 ) -> String {
     if let Some(stored) = read_env_key(cwd, ".env", spec.env_key) {
-        return stored;
+        return prefer_stored(Some(stored), api_key).unwrap_or_default();
     }
     [getenv(spec.env_key), api_key.map(str::to_string)]
         .into_iter()
@@ -338,10 +349,10 @@ pub(crate) fn wire(
         }
         let url =
             read_env_key(cwd, ".env", spec.env_url).or_else(|| request.map(|r| r.url.clone()));
-        let id = spec
-            .env_id
-            .and_then(|key| read_env_key(cwd, ".env", key))
-            .or_else(|| request.and_then(|r| r.id.clone()));
+        let id = prefer_stored(
+            spec.env_id.and_then(|key| read_env_key(cwd, ".env", key)),
+            request.and_then(|r| r.id.as_deref()),
+        );
         let (url, id) = match (url, id) {
             (None, None) => continue,
             (Some(url), id) if spec.env_id.is_none() || id.is_some() => (url, id),
@@ -414,6 +425,47 @@ mod tests {
             resolve_key(spec, None, empty.path(), &none),
             SECRET_PLACEHOLDER
         );
+    }
+
+    #[test]
+    fn a_stored_placeholder_yields_to_the_flag_only() {
+        let exported = |key: &str| (key == "LANGCACHE_API_KEY").then(|| "from-env-var".to_string());
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".env"),
+            format!("LANGCACHE_API_KEY=\"{SECRET_PLACEHOLDER}\"\n"),
+        )
+        .unwrap();
+        let spec = &SPECS[1];
+        assert_eq!(
+            resolve_key(spec, Some("from-flag"), dir.path(), &exported),
+            "from-flag"
+        );
+        assert_eq!(
+            resolve_key(spec, None, dir.path(), &exported),
+            SECRET_PLACEHOLDER
+        );
+        assert_eq!(
+            resolve_key(spec, Some(""), dir.path(), &exported),
+            SECRET_PLACEHOLDER
+        );
+    }
+
+    #[test]
+    fn a_placeholder_id_copied_from_the_example_yields_to_the_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".env"),
+            "LANGCACHE_URL=\"https://l\"\nLANGCACHE_CACHE_ID=\"<cache id>\"\n",
+        )
+        .unwrap();
+        let requests = vec![ProductRequest {
+            key: ProductKey::LangCache,
+            url: "https://l".into(),
+            id: Some("c1".into()),
+        }];
+        let wired = wire(dir.path(), &requests, None, false, &|_| None).unwrap();
+        assert_eq!(wired[0].id.as_deref(), Some("c1"));
     }
 
     #[test]

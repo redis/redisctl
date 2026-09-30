@@ -4,11 +4,12 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 /// Mask the password in URL-shaped text - deliberately broader than valid redis://
-/// URLs, because rejected input gets echoed in error messages.
+/// URLs, because rejected input gets echoed in error messages. The mask runs to the
+/// last `@`, the one URL parsers split userinfo on.
 pub fn mask_url(url: &str) -> String {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
     let re = RE.get_or_init(|| {
-        regex::Regex::new(r#"([A-Za-z][A-Za-z0-9+.-]*://[^:@/\s"']*|[^:@\s/"']+):[^@\s"']+@"#)
+        regex::Regex::new(r#"([A-Za-z][A-Za-z0-9+.-]*://[^:@/\s"']*|[^:@\s/"']+):[^\s"']+@"#)
             .expect("static regex")
     });
     re.replace_all(url, "$1:****@").into_owned()
@@ -136,6 +137,25 @@ mod tests {
             mask_url("default:secret@host:6379"),
             "default:****@host:6379"
         );
+    }
+
+    #[test]
+    fn mask_url_masks_through_the_last_at_sign_like_url_parsers() {
+        for (input, masked) in [
+            (
+                "redis://default:ab@cdS3cretPw@localhost:1",
+                "redis://default:****@localhost:1",
+            ),
+            ("rediss://:p@ss@w0rd@h:1/0", "rediss://:****@h:1/0"),
+            ("redisx://u:a@b@c@host:6379", "redisx://u:****@host:6379"),
+            ("default:ab@cdS3cretPw@host:6379", "default:****@host:6379"),
+            (
+                "run redis://u:a@b@h:1 and redis://v:c@d@k:2 now",
+                "run redis://u:****@h:1 and redis://v:****@k:2 now",
+            ),
+        ] {
+            assert_eq!(mask_url(input), masked, "{input}");
+        }
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::util::{exists, has_bin, read_if};
+use crate::workflows::init::engine::util::{exists, has_bin, read_if};
 
 /// The coding agents `redisctl init` can configure, in canonical order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

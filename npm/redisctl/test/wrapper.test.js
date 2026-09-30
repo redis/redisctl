@@ -15,7 +15,7 @@ const path = require('node:path');
 const WRAPPER = path.join(__dirname, '..', 'bin', 'redisctl.js');
 
 function fakeRedisctl(exitCode) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'redis-init-test-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'redisctl-wrapper-test-'));
   const argsFile = path.join(dir, 'args.json');
   const envFile = path.join(dir, 'env.json');
   const recorder = path.join(dir, 'record.js');
@@ -76,6 +76,33 @@ test('outside init, -y passes through untouched', () => {
   assert.deepStrictEqual(childArgs(argsFile), ['profile', 'list', '-y']);
 });
 
+test('global flags before init still get -y mapped after init', () => {
+  const { dir, argsFile } = fakeRedisctl(0);
+  const argv = ['--config-file', 'x.toml', '-vp', 'dev', '-o=json', '--query=a', 'init', '-y'];
+  assert.strictEqual(run(argv, dir).status, 0);
+  assert.deepStrictEqual(childArgs(argsFile), [...argv.slice(0, -1), '--defaults']);
+});
+
+test('a global flag value named init is not the subcommand', () => {
+  const { dir, argsFile } = fakeRedisctl(0);
+  for (const argv of [
+    ['-p', 'init', 'profile', 'list', '-y'],
+    ['--profile', 'init', 'profile', 'list', '--yes'],
+    ['-q', 'init', 'profile', 'list', '-y'],
+  ]) {
+    assert.strictEqual(run(argv, dir).status, 0);
+    assert.deepStrictEqual(childArgs(argsFile), argv);
+  }
+});
+
+test('flag-only tokens before init and attached short values are skipped', () => {
+  const { dir, argsFile } = fakeRedisctl(0);
+  assert.strictEqual(run(['-v', 'init', '--yes'], dir).status, 0);
+  assert.deepStrictEqual(childArgs(argsFile), ['-v', 'init', '--defaults']);
+  assert.strictEqual(run(['-pinit', 'profile', '-y'], dir).status, 0);
+  assert.deepStrictEqual(childArgs(argsFile), ['-pinit', 'profile', '-y']);
+});
+
 test('shell metacharacters in a pasted URL stay single argv tokens', () => {
   const { dir, argsFile } = fakeRedisctl(0);
   const url = 'redis://user:p^a|s%s@host:6379?timeout=5&clientName=my app';
@@ -96,7 +123,7 @@ test('forwards the exit code verbatim', () => {
 });
 
 test('npm exec package pinning never reaches redisctl child processes', () => {
-  // Under `npm exec --package=@redis/init`, npm exports npm_config_package to
+  // Under `npm exec --package=@redis/redisctl`, npm exports npm_config_package to
   // every descendant; redisctl's own npm/npx calls (client install, skills add)
   // would then resolve THIS package instead of their real target. User npm
   // config (registry, proxy) must survive.
@@ -106,8 +133,8 @@ test('npm exec package pinning never reaches redisctl child processes', () => {
     env: {
       ...process.env,
       PATH: dir,
-      npm_config_package: '/tmp/redis-init.tgz',
-      npm_config_call: 'redis-init',
+      npm_config_package: '/tmp/redis-redisctl-0.0.0.tgz',
+      npm_config_call: 'redisctl',
       npm_config_registry: 'https://registry.example',
     },
   });
@@ -118,11 +145,13 @@ test('npm exec package pinning never reaches redisctl child processes', () => {
   assert.strictEqual(env.npm_config_registry, 'https://registry.example');
 });
 
-test('a missing redisctl gets the branch-install hint, not a stack trace', () => {
+test('a missing redisctl gets the install hint, not a stack trace', () => {
   const result = run(['init', '--dry-run']);
   assert.strictEqual(result.status, 1);
   assert.match(result.stderr, /redisctl is not installed/);
-  assert.match(result.stderr, /cargo install --git .* --branch feat\/init-command/);
+  assert.match(result.stderr, /brew install redis\/homebrew-tap\/redisctl\n/);
+  assert.match(result.stderr, /cargo install redisctl\n/);
+  assert.match(result.stderr, /https:\/\/github\.com\/redis\/redisctl\/releases\n/);
   assert.doesNotMatch(result.stderr, /at (Object|Module)\./);
 });
 

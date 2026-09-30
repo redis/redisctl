@@ -5,10 +5,10 @@
 use std::path::Path;
 use std::time::Duration;
 
-use crate::change::{Change, Status};
-use crate::env::read_env_key;
-use crate::util::{sh, slug};
-use crate::{Event, InitError};
+use crate::workflows::init::engine::change::{Change, Status};
+use crate::workflows::init::engine::env::read_env_key;
+use crate::workflows::init::engine::util::{sh, slug};
+use crate::workflows::init::engine::{Event, InitError};
 
 /// The decided database resolution, fixed at plan time.
 #[derive(Debug)]
@@ -33,6 +33,13 @@ pub(crate) enum DatabaseAction {
     /// The user chose to connect later: a placeholder REDIS_URL gets written and
     /// the run ends with instructions instead of validation.
     Placeholder,
+    /// No container yet and Docker is not running: the dry run shows what would
+    /// run, the real run stops with the remedy.
+    DockerDown {
+        name: String,
+        port: u16,
+        url: String,
+    },
     /// No container yet: run the image on the chosen free port.
     RunNew {
         name: String,
@@ -50,6 +57,7 @@ impl DatabaseAction {
             DatabaseAction::ExistingEnv { container, .. } => container.as_deref(),
             DatabaseAction::StartExisting { name, .. }
             | DatabaseAction::AlreadyRunning { name, .. }
+            | DatabaseAction::DockerDown { name, .. }
             | DatabaseAction::RunNew { name, .. } => Some(name),
         }
     }
@@ -61,6 +69,7 @@ impl DatabaseAction {
             | DatabaseAction::ExistingEnv { url, .. }
             | DatabaseAction::StartExisting { url, .. }
             | DatabaseAction::AlreadyRunning { url, .. }
+            | DatabaseAction::DockerDown { url, .. }
             | DatabaseAction::RunNew { url, .. } => url,
         }
     }
@@ -73,6 +82,7 @@ impl DatabaseAction {
             DatabaseAction::StartExisting { .. } | DatabaseAction::AlreadyRunning { .. } => {
                 "existing Docker container"
             }
+            DatabaseAction::DockerDown { .. } => "Docker (not running)",
             DatabaseAction::RunNew { .. } if applied => "new Docker container",
             DatabaseAction::RunNew { .. } => "Docker (planned)",
         }
@@ -101,15 +111,27 @@ impl DatabaseAction {
                 Status::Unchanged,
                 format!("already running on port {port}"),
             )),
+            DatabaseAction::DockerDown { name, port, .. } => Some(Change::new(
+                format!("docker:{name}"),
+                Status::Planned,
+                format!(
+                    "would run: {} - Docker is not running; start it first, or pass --url or --cloud",
+                    run_command(name, *port, IMAGE_PREFS[0])
+                ),
+            )),
             DatabaseAction::RunNew {
                 name, image, port, ..
             } => Some(Change::new(
                 format!("docker:{name}"),
                 Status::Planned,
-                format!("would run: docker run -d --name {name} -p 127.0.0.1:{port}:6379 {image}"),
+                format!("would run: {}", run_command(name, *port, image)),
             )),
         }
     }
+}
+
+fn run_command(name: &str, port: u16, image: &str) -> String {
+    format!("docker run -d --name {name} -p 127.0.0.1:{port}:6379 {image}")
 }
 
 /// The value the "connect later" path writes to .env; a run that finds it treats
@@ -152,12 +174,27 @@ fn parse_container_info(stdout: &str) -> Option<ContainerInfo> {
     Some(ContainerInfo { running, port })
 }
 
+/// Readable and unique per project: two checkouts that share a folder name must
+/// never share a database.
 fn container_name(cwd: &Path) -> String {
-    let basename = cwd
+    let path = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    let basename = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    format!("redis-init-{}", slug(&basename))
+    format!(
+        "redisctl-{}-{:08x}",
+        slug(&basename),
+        fnv1a(path.to_string_lossy().as_bytes()) as u32
+    )
+}
+
+/// A hash that stays the same across builds and toolchains, unlike std's
+/// `DefaultHasher` - the name must still match after an upgrade.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
+    })
 }
 
 /// Prefer an image that is already local - offline-safe and instant. Pull only as a
@@ -175,7 +212,7 @@ fn resolve_image() -> (String, bool) {
 }
 
 /// Probed on loopback and both wildcard families: Docker publishes ports via a
-/// dual-stack [::] listener an IPv4-only probe does not see, while SO_REUSEADDR
+/// dual-stack `[::]` listener an IPv4-only probe does not see, while SO_REUSEADDR
 /// (which the std listener sets) lets a wildcard probe succeed over a
 /// loopback-only listener.
 fn port_is_free(port: u16) -> bool {
@@ -190,17 +227,23 @@ fn free_port(start: u16) -> Option<u16> {
 }
 
 /// Decide the action for a `.env` that already carries a URL. A leftover container
-/// only counts when the URL still points at it - after a move to a remote database
-/// it must not poison the skill or get restarted. Split from the probe so that gate
-/// is testable without Docker.
+/// only counts when the URL still points at it (a local host on the container's
+/// published port) - otherwise it must not poison the skill or get restarted.
+/// Split from the probe so that gate is testable without Docker.
 fn decide_existing_env(url: String, name: String, info: Option<ContainerInfo>) -> DatabaseAction {
-    let local = url.contains("localhost") || url.contains("127.0.0.1");
-    let restart = info.as_ref().is_some_and(|info| !info.running && local);
+    let ours = info.filter(|info| url_targets_local_port(&url, info.port));
     DatabaseAction::ExistingEnv {
+        restart: ours.as_ref().is_some_and(|info| !info.running),
+        container: ours.map(|_| name),
         url,
-        container: info.filter(|_| local).map(|_| name),
-        restart,
     }
+}
+
+fn url_targets_local_port(url: &str, port: u16) -> bool {
+    redis::parse_redis_url(url).is_some_and(|parsed| {
+        matches!(parsed.host_str(), Some("localhost" | "127.0.0.1"))
+            && parsed.port().unwrap_or(6379) == port
+    })
 }
 
 /// Probe (read-only) how this project gets its local database.
@@ -222,7 +265,12 @@ pub(crate) fn plan_local_database(
     }
 
     if !docker_ok() {
-        return Err(InitError::DockerUnavailable);
+        let port = free_port(6379).ok_or(InitError::NoFreePort)?;
+        return Ok(DatabaseAction::DockerDown {
+            url: format!("redis://localhost:{port}"),
+            name,
+            port,
+        });
     }
 
     if let Some(info) = container_info(&name) {
@@ -256,6 +304,7 @@ pub(crate) async fn apply_database(
 ) -> Result<Option<Change>, InitError> {
     match action {
         DatabaseAction::Provided { .. } => Ok(None),
+        DatabaseAction::DockerDown { .. } => Err(InitError::DockerUnavailable),
         DatabaseAction::Placeholder => Ok(Some(placeholder_change())),
         DatabaseAction::ExistingEnv {
             url,
@@ -364,7 +413,7 @@ async fn connect(
         Ok(Err(e)) => Err(e.to_string()),
         Err(_) => Err(format!(
             "timed out connecting to {}",
-            crate::util::mask_url(url)
+            crate::workflows::init::engine::util::mask_url(url)
         )),
     }
 }
@@ -456,7 +505,7 @@ pub async fn validate(url: &str) -> Result<(), String> {
     if pong != "PONG" {
         return Err(format!("PING returned {pong:?}"));
     }
-    let key = "redis-init:selfcheck";
+    let key = "redisctl:selfcheck";
     let value = format!("ok {}", chrono::Utc::now().to_rfc3339());
     redis::cmd("SET")
         .arg(key)
@@ -563,18 +612,17 @@ mod tests {
     }
 
     #[test]
-    fn container_name_slugs_the_directory() {
-        assert_eq!(
-            container_name(Path::new("/tmp/My Demo App")),
-            "redis-init-my-demo-app"
-        );
+    fn container_name_slugs_the_directory_and_hashes_the_path() {
+        let name = container_name(Path::new("/nonexistent/My Demo App"));
+        assert_eq!(name, "redisctl-my-demo-app-0cab8864");
+        assert_ne!(name, container_name(Path::new("/elsewhere/My Demo App")));
     }
 
     #[test]
     fn existing_env_restart_is_previewed() {
         let action = DatabaseAction::ExistingEnv {
             url: "redis://localhost:6379".into(),
-            container: Some("redis-init-x".into()),
+            container: Some("redisctl-x".into()),
             restart: true,
         };
         let change = action.preview().unwrap();
@@ -583,7 +631,7 @@ mod tests {
 
         let no_restart = DatabaseAction::ExistingEnv {
             url: "redis://h:1".into(),
-            container: Some("redis-init-x".into()),
+            container: Some("redisctl-x".into()),
             restart: false,
         };
         assert!(no_restart.preview().is_none());
@@ -600,7 +648,7 @@ mod tests {
 
         let remote = decide_existing_env(
             "rediss://default:s3cret@cloud.example:12000".into(),
-            "redis-init-x".into(),
+            "redisctl-x".into(),
             stopped(),
         );
         assert_eq!(remote.container(), None);
@@ -611,14 +659,56 @@ mod tests {
 
         let local = decide_existing_env(
             "redis://localhost:6379".into(),
-            "redis-init-x".into(),
+            "redisctl-x".into(),
             stopped(),
         );
-        assert_eq!(local.container(), Some("redis-init-x"));
+        assert_eq!(local.container(), Some("redisctl-x"));
         assert!(matches!(
             local,
             DatabaseAction::ExistingEnv { restart: true, .. }
         ));
+
+        let default_port =
+            decide_existing_env("redis://127.0.0.1".into(), "redisctl-x".into(), stopped());
+        assert_eq!(default_port.container(), Some("redisctl-x"));
+    }
+
+    #[test]
+    fn leftover_container_on_another_port_is_not_the_database() {
+        let action = decide_existing_env(
+            "redis://localhost:6380".into(),
+            "redisctl-x".into(),
+            Some(ContainerInfo {
+                running: false,
+                port: 6379,
+            }),
+        );
+        assert_eq!(action.container(), None);
+        assert!(matches!(
+            action,
+            DatabaseAction::ExistingEnv { restart: false, .. }
+        ));
+        assert!(action.preview().is_none());
+    }
+
+    #[test]
+    fn docker_down_previews_the_container_and_fails_at_apply() {
+        let action = DatabaseAction::DockerDown {
+            name: "redisctl-x".into(),
+            port: 6379,
+            url: "redis://localhost:6379".into(),
+        };
+        let change = action.preview().unwrap();
+        assert_eq!(change.subject, "docker:redisctl-x");
+        assert!(
+            change.note.contains("Docker is not running"),
+            "{}",
+            change.note
+        );
+        let applied = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(apply_database(&action, &mut |_| {}));
+        assert!(matches!(applied, Err(InitError::DockerUnavailable)));
     }
 
     #[test]
@@ -642,7 +732,7 @@ mod tests {
     #[test]
     fn new_container_preview_binds_loopback() {
         let action = DatabaseAction::RunNew {
-            name: "redis-init-x".into(),
+            name: "redisctl-x".into(),
             image: "redis:8-alpine".into(),
             image_local: true,
             port: 6379,

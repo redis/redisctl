@@ -9,10 +9,10 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::workflows::init::engine::{self as engine, Change, CloudFacts, CloudTier, Status};
 use dialoguer::Select;
 use redis_cloud::CloudClient;
 use redisctl_core::cloud::quick_database::{self, QuickDatabaseError, QuickDatabaseParams};
-use redisctl_init::{self as engine, Change, CloudFacts, CloudTier, Status};
 
 use super::output;
 use super::wizard::RedisTheme;
@@ -366,7 +366,7 @@ fn pick<'a>(inv: &'a Inventory, db_name: &str) -> Result<Pick<'a>, RedisCtlError
             .items(&items)
             .default(0)
             .interact_opt()
-            .map_err(|e| RedisCtlError::Other(format!("prompt failed: {e}")))?;
+            .map_err(super::wizard::prompt_failed)?;
         match selection {
             None => {
                 return Err(RedisCtlError::Cancelled {
@@ -385,7 +385,7 @@ fn pick<'a>(inv: &'a Inventory, db_name: &str) -> Result<Pick<'a>, RedisCtlError
                     .default(db_name.to_string())
                     .validate_with(|input: &String| valid_db_name(input))
                     .interact_text()
-                    .map_err(|e| RedisCtlError::Other(format!("prompt failed: {e}")))?;
+                    .map_err(super::wizard::prompt_failed)?;
                 return Ok(Pick::Create(name));
             }
         }
@@ -513,7 +513,9 @@ async fn marker_subscription(
 
 fn quick_err(e: QuickDatabaseError) -> RedisCtlError {
     match e {
-        QuickDatabaseError::InvalidName(msg) => RedisCtlError::InvalidInput { message: msg },
+        QuickDatabaseError::InvalidName(msg) => {
+            RedisCtlError::init("invalid_input", crate::error::exit_code::VALIDATION, msg)
+        }
         other_err => other(other_err.to_string()),
     }
 }

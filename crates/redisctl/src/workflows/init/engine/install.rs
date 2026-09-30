@@ -4,11 +4,13 @@
 
 use std::path::Path;
 
-use crate::change::{Change, Status};
-use crate::env::{FileAction, read_for_planning};
-use crate::project::{Project, Runtime};
-use crate::util::{ending_with_newline, exists, has_bin, read_if, sh, sh_in};
-use crate::{Event, InitError};
+use crate::workflows::init::engine::change::{Change, Status};
+use crate::workflows::init::engine::env::{FileAction, read_for_planning};
+use crate::workflows::init::engine::project::{Project, Runtime};
+use crate::workflows::init::engine::util::{
+    ending_with_newline, exists, has_bin, read_if, sh, sh_in,
+};
+use crate::workflows::init::engine::{Event, InitError};
 
 const CLI_INSTALLER: &str = "https://packages.redis.io/redis-cli/install.sh";
 
@@ -297,12 +299,23 @@ fn decide_client(cwd: &Path, project: &Project, has: &dyn Fn(&str) -> bool) -> I
 }
 
 /// The product SDK per runtime; everything else talks REST (or MCP) directly.
-pub(crate) fn product_package(key: crate::ProductKey, runtime: Runtime) -> Option<&'static str> {
+pub(crate) fn product_package(
+    key: crate::workflows::init::engine::ProductKey,
+    runtime: Runtime,
+) -> Option<&'static str> {
     match (key, runtime) {
-        (crate::ProductKey::AgentMemory, Runtime::Node) => Some("@redis-iris/agent-memory"),
-        (crate::ProductKey::LangCache, Runtime::Node) => Some("@redis-ai/langcache"),
-        (crate::ProductKey::LangCache, Runtime::Python) => Some("langcache"),
-        (crate::ProductKey::ContextRetriever, Runtime::Python) => Some("redis-context-retriever"),
+        (crate::workflows::init::engine::ProductKey::AgentMemory, Runtime::Node) => {
+            Some("@redis-iris/agent-memory")
+        }
+        (crate::workflows::init::engine::ProductKey::LangCache, Runtime::Node) => {
+            Some("@redis-ai/langcache")
+        }
+        (crate::workflows::init::engine::ProductKey::LangCache, Runtime::Python) => {
+            Some("langcache")
+        }
+        (crate::workflows::init::engine::ProductKey::ContextRetriever, Runtime::Python) => {
+            Some("redis-context-retriever")
+        }
         _ => None,
     }
 }
@@ -310,7 +323,7 @@ pub(crate) fn product_package(key: crate::ProductKey, runtime: Runtime) -> Optio
 pub(crate) fn plan_product_install(
     cwd: &Path,
     project: &Project,
-    product: &crate::products::WiredProduct,
+    product: &crate::workflows::init::engine::products::WiredProduct,
 ) -> InstallAction {
     decide_product(cwd, project, product, &has_bin)
 }
@@ -318,7 +331,7 @@ pub(crate) fn plan_product_install(
 fn decide_product(
     cwd: &Path,
     project: &Project,
-    product: &crate::products::WiredProduct,
+    product: &crate::workflows::init::engine::products::WiredProduct,
     has: &dyn Fn(&str) -> bool,
 ) -> InstallAction {
     let label = format!("{} SDK", product.label());
@@ -474,7 +487,7 @@ fn decide_redis_cli(install: bool, has: &dyn Fn(&str) -> bool, local_bin: bool) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::detect;
+    use crate::workflows::init::engine::project::detect;
 
     fn project_in(dir: &Path) -> Project {
         detect(dir)

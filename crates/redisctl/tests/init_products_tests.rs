@@ -318,7 +318,7 @@ async fn both_products_wire_validate_and_never_leak_the_key() {
     }
 
     // The skill carries both products, their ids, and the env contract.
-    assert!(skill.contains("Agent memory (Redis Iris)"), "{skill}");
+    assert!(skill.contains("Agent Memory (Redis Iris)"), "{skill}");
     assert!(skill.contains("store-123"), "{skill}");
     assert!(skill.contains("AGENT_MEMORY_API_KEY"), "{skill}");
     assert!(skill.contains("Semantic cache (LangCache)"), "{skill}");
@@ -669,4 +669,59 @@ async fn the_flag_key_never_fills_another_products_placeholder() {
         env.contains("AGENT_MEMORY_API_KEY=\"<paste-from-redis-cloud>\""),
         "{env}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn api_key_fills_the_placeholder_a_first_run_left_for_every_product() {
+    let api = product_api().await;
+    let uri = api.uri();
+    let products: [(&[&str], &str, &str); 3] = [
+        (
+            &["--agent-memory", &uri, "--store", "store-123"],
+            "Agent Memory",
+            "AGENT_MEMORY_API_KEY",
+        ),
+        (
+            &["--langcache", &uri, "--cache", "cache-456"],
+            "LangCache",
+            "LANGCACHE_API_KEY",
+        ),
+        (
+            &["--context-retriever", &uri],
+            "Context Retriever",
+            "CONTEXT_RETRIEVER_AGENT_KEY",
+        ),
+    ];
+    for (flags, label, env_key) in products {
+        let project = tempfile::tempdir().unwrap();
+        let repo = skills_fixture();
+        let (_shim, path_env) = npm_shim();
+        run_init(project.path(), &repo, &path_env, flags)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(format!("waiting for {env_key}")));
+        let first = read(project.path(), ".env");
+        let placeholder = format!("{env_key}=\"<paste-from-redis-cloud>\"");
+        assert!(first.contains(&placeholder), "{first}");
+
+        let output = run_init(
+            project.path(),
+            &repo,
+            &path_env,
+            &[flags, &["--api-key", KEY]].concat(),
+        )
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!("✓ {label}")))
+        .stdout(predicate::str::contains("Action required").not())
+        .get_output()
+        .clone();
+        assert!(!String::from_utf8_lossy(&output.stdout).contains(KEY));
+        assert!(!String::from_utf8_lossy(&output.stderr).contains(KEY));
+        assert_eq!(
+            read(project.path(), ".env"),
+            first.replace(&placeholder, &format!("{env_key}=\"{KEY}\"")),
+            "{label}"
+        );
+    }
 }

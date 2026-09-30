@@ -28,10 +28,6 @@ fn replacing_a_url_preserves_dollar_characters() {
         ])
         .assert()
         .code(10);
-    assert_eq!(
-        redisctl_init::read_env_key(dir.path(), ".env", "REDIS_URL").as_deref(),
-        Some(url)
-    );
     let output = std::process::Command::new("sh")
         .args(["-c", ". ./.env; printf '%s' \"$REDIS_URL\""])
         .env_remove("REDISCTL_TEST_UNSET")

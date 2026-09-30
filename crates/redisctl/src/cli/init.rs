@@ -1,8 +1,9 @@
 //! `redisctl init` argument surface.
 //!
-//! This surface is the stability contract for the planned npm exec-wrapper: flags
-//! may be added, never renamed or repurposed once released.
+//! This surface is the stability contract for the `@redis/redisctl` npm wrapper:
+//! flags may be added, never renamed or repurposed once released.
 
+use crate::workflows::init::engine::mask_url;
 use clap::Args;
 
 /// Agents `redisctl init` can configure.
@@ -18,14 +19,15 @@ pub enum AgentArg {
 /// Onboard this project to Redis services + set up your AI coding agent.
 #[derive(Args)]
 pub struct InitArgs {
-    /// Use an existing redis:// or rediss:// database (default: provision a local
-    /// Docker container). Also accepts a pasted Redis Cloud connect command:
+    /// Use an existing redis:// or rediss:// database. Also accepts a pasted Redis
+    /// Cloud connect command:
     /// redisctl init --url "redis-cli -u redis://default:...@host:port"
-    #[arg(long, value_name = "REDIS_URL")]
+    #[arg(long, short_alias = 'u', value_name = "REDIS_URL")]
     pub url: Option<String>,
 
-    /// Take the database from Redis Cloud instead of local Docker: reuse the
-    /// database named by --name, or create one on the free Essentials plan
+    /// Take the database from Redis Cloud: reuse the database named by --name, pick
+    /// one on a terminal, or create one on the free Essentials plan. Signs in first
+    /// on a terminal when no Cloud profile exists
     #[arg(long, conflicts_with = "url")]
     pub cloud: bool,
 
@@ -82,8 +84,9 @@ pub struct InitArgs {
     #[arg(long = "agent", value_enum, value_delimiter = ',', value_name = "NAME")]
     pub agents: Vec<AgentArg>,
 
-    /// Take the defaults instead of asking; the wizard only runs on a terminal,
-    /// so piped stdin never prompts either
+    /// Take the defaults instead of asking: with no database flag that is a local
+    /// Docker container, since an unattended run cannot sign in to Redis Cloud.
+    /// Piped stdin never prompts either
     #[arg(long)]
     pub defaults: bool,
 
@@ -110,14 +113,9 @@ pub struct InitArgs {
     pub no_telemetry: bool,
 
     /// A pasted connect command, same as --url (the Cloud console's Copy button
-    /// output works verbatim)
-    #[arg(
-        value_name = "PASTED",
-        hide = true,
-        num_args = 0..,
-        trailing_var_arg = true,
-        allow_hyphen_values = true
-    )]
+    /// output works verbatim): `redis-cli` lands here and its `-u` is the hidden
+    /// alias of --url, so flags before or after the paste keep parsing as flags
+    #[arg(value_name = "PASTED", hide = true, num_args = 0..)]
     pub pasted: Vec<String>,
 }
 
@@ -129,11 +127,14 @@ impl std::fmt::Debug for InitArgs {
             .field("url", &self.url.as_ref().map(|_| "<redacted>"))
             .field("cloud", &self.cloud)
             .field("cloud_subscription", &self.cloud_subscription)
-            .field("agent_memory", &self.agent_memory)
+            .field("agent_memory", &self.agent_memory.as_deref().map(mask_url))
             .field("store", &self.store)
-            .field("langcache", &self.langcache)
+            .field("langcache", &self.langcache.as_deref().map(mask_url))
             .field("cache", &self.cache)
-            .field("context_retriever", &self.context_retriever)
+            .field(
+                "context_retriever",
+                &self.context_retriever.as_deref().map(mask_url),
+            )
             .field("iris", &self.iris)
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
             .field("complete", &self.complete)
@@ -156,7 +157,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn debug_never_prints_url_or_paste_content() {
+    fn debug_never_prints_url_endpoint_or_paste_passwords() {
         let args = InitArgs {
             url: Some("redis://default:s3cret@h:1".into()),
             cloud: false,
@@ -169,11 +170,11 @@ mod tests {
             skills_global: false,
             dry_run: false,
             no_telemetry: false,
-            agent_memory: None,
+            agent_memory: Some("https://u:s3cret@memory.example".into()),
             store: None,
-            langcache: None,
+            langcache: Some("rediss://default:s3cret@h:1".into()),
             cache: None,
-            context_retriever: None,
+            context_retriever: Some("https://u:s3cret@retriever.example".into()),
             iris: false,
             api_key: None,
             complete: false,

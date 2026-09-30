@@ -12,12 +12,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-use crate::change::{Change, Status};
-use crate::project::Agent;
-use crate::util::{has_bin, read_if, sh_in};
-use crate::{Event, InitError};
+use crate::workflows::init::engine::change::{Change, Status};
+use crate::workflows::init::engine::project::Agent;
+use crate::workflows::init::engine::util::{has_bin, read_if, sh_in};
+use crate::workflows::init::engine::{Event, InitError};
 
-use crate::SKILLS_DIR;
+use crate::workflows::init::engine::SKILLS_DIR;
 
 const LOCK_FILE: &str = "skills-lock.json";
 
@@ -158,7 +158,9 @@ fn unmanaged_collisions(cwd: &Path) -> BTreeMap<String, String> {
     let mut collisions = BTreeMap::new();
     for dir in target_dirs(cwd, false) {
         for name in skill_dirs(&dir) {
-            if name == crate::project_skill::NAME || managed.contains_key(&name) {
+            if name == crate::workflows::init::engine::project_skill::NAME
+                || managed.contains_key(&name)
+            {
                 continue;
             }
             if let Ok(content) = std::fs::read_to_string(dir.join(&name).join("SKILL.md")) {
@@ -236,9 +238,6 @@ pub(crate) struct SkillsOutcome {
     pub(crate) changes: Vec<Change>,
     pub(crate) installed: Vec<String>,
     pub(crate) installed_dir: Option<PathBuf>,
-    /// The standard CLI managed the layout (and its own symlinks); a checkout copy
-    /// did not.
-    pub(crate) via_npx: bool,
 }
 
 impl SkillsOutcome {
@@ -247,7 +246,6 @@ impl SkillsOutcome {
             changes: vec![change],
             installed: Vec::new(),
             installed_dir: None,
-            via_npx: false,
         }
     }
 }
@@ -287,12 +285,81 @@ impl SkillsAction {
         args
     }
 
-    pub(crate) fn preview(&self) -> Change {
-        let note = match &self.repo {
-            Some(repo) => format!("would copy skills from {}", repo.display()),
-            None => format!("would run: npx {}", self.npx_args().join(" ")),
-        };
-        Change::new(describe_target(self.global), Status::Planned, note)
+    pub(crate) fn preview(&self, cwd: &Path) -> Vec<Change> {
+        match &self.repo {
+            Some(repo) => match self.copy_steps(cwd, repo) {
+                Ok(steps) => steps.into_iter().map(|step| step.change).collect(),
+                Err(skipped) => vec![skipped],
+            },
+            None => vec![Change::new(
+                describe_target(self.global),
+                Status::Planned,
+                format!("would run: npx {}", self.npx_args().join(" ")),
+            )],
+        }
+    }
+
+    /// The checkout skills that need a `.claude/skills` link: a copy into the
+    /// shared dir places none itself, while a solo-Claude copy already lands there.
+    pub(crate) fn claude_links(&self, cwd: &Path) -> Vec<String> {
+        let shared = fallback_dir(cwd, self.global, &self.agents) == cwd.join(SKILLS_DIR);
+        match &self.repo {
+            Some(repo) if shared => self
+                .copy_steps(cwd, repo)
+                .map(|steps| steps.into_iter().map(|step| step.name).collect())
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// What a checkout copy does per skill, decided the same way for the preview
+    /// and the copy. `Err` is the one skipped line when there is nothing to copy.
+    fn copy_steps(&self, cwd: &Path, repo: &Path) -> Result<Vec<CopyStep>, Change> {
+        let skipped =
+            |note: String| Change::new(describe_target(self.global), Status::Skipped, note);
+        let source = repo.join("skills");
+        if !source.exists() {
+            return Err(skipped(format!(
+                "{} has no skills/ directory",
+                repo.display()
+            )));
+        }
+        let destination = fallback_dir(cwd, self.global, &self.agents);
+        let steps: Vec<CopyStep> = skill_dirs(&source)
+            .into_iter()
+            .map(|name| {
+                let src = source.join(&name);
+                let dst = destination.join(&name);
+                let subject = if self.global {
+                    format!("{}/", dst.display())
+                } else {
+                    format!("{}/", display_relative(cwd, &dst))
+                };
+                let change = if dirs_equal(&src, &dst) {
+                    Change::new(subject, Status::Unchanged, "")
+                } else {
+                    Change::new(
+                        subject,
+                        if dst.exists() {
+                            Status::Updated
+                        } else {
+                            Status::Created
+                        },
+                        "redis/agent-skills (local checkout; run npx skills add redis/agent-skills to adopt standard management)",
+                    )
+                };
+                CopyStep {
+                    name,
+                    src,
+                    dst,
+                    change,
+                }
+            })
+            .collect();
+        if steps.is_empty() {
+            return Err(skipped("no skills found in the checkout".to_string()));
+        }
+        Ok(steps)
     }
 
     pub(crate) fn perform(
@@ -301,15 +368,10 @@ impl SkillsAction {
         on_event: &mut dyn FnMut(Event),
     ) -> Result<SkillsOutcome, InitError> {
         if let Some(repo) = &self.repo {
-            let source = repo.join("skills");
-            if !source.exists() {
-                return Ok(SkillsOutcome::skipped(Change::new(
-                    describe_target(self.global),
-                    Status::Skipped,
-                    format!("{} has no skills/ directory", repo.display()),
-                )));
-            }
-            return self.copy_from(cwd, &source);
+            return match self.copy_steps(cwd, repo) {
+                Ok(steps) => self.copy_from(cwd, steps),
+                Err(skipped) => Ok(SkillsOutcome::skipped(skipped)),
+            };
         }
 
         if has_bin("npx") {
@@ -418,7 +480,6 @@ impl SkillsAction {
             changes,
             installed: after.into_keys().collect(),
             installed_dir,
-            via_npx: true,
         }
     }
 
@@ -469,59 +530,37 @@ impl SkillsAction {
             changes,
             installed: managed,
             installed_dir,
-            via_npx: true,
         }
     }
 
     /// Copy every skill from a checkout into the layout the real CLI would use.
-    fn copy_from(&self, cwd: &Path, source: &Path) -> Result<SkillsOutcome, InitError> {
-        let destination = fallback_dir(cwd, self.global, &self.agents);
+    fn copy_from(&self, cwd: &Path, steps: Vec<CopyStep>) -> Result<SkillsOutcome, InitError> {
         let mut changes = Vec::new();
         let mut installed = Vec::new();
-        for name in skill_dirs(source) {
-            let src = source.join(&name);
-            let dst = destination.join(&name);
-            let subject = if self.global {
-                format!("{}/", dst.display())
-            } else {
-                format!("{}/", display_relative(cwd, &dst))
-            };
-            if dirs_equal(&src, &dst) {
-                changes.push(Change::new(subject, Status::Unchanged, ""));
-                installed.push(name);
-                continue;
+        for step in steps {
+            if step.change.status != Status::Unchanged {
+                let _ = std::fs::remove_dir_all(&step.dst);
+                copy_dir(&step.src, &step.dst).map_err(|e| InitError::WriteFailed {
+                    rel: step.dst.display().to_string(),
+                    message: e.to_string(),
+                })?;
             }
-            let status = if dst.exists() {
-                Status::Updated
-            } else {
-                Status::Created
-            };
-            let _ = std::fs::remove_dir_all(&dst);
-            copy_dir(&src, &dst).map_err(|e| InitError::WriteFailed {
-                rel: dst.display().to_string(),
-                message: e.to_string(),
-            })?;
-            changes.push(Change::new(
-                subject,
-                status,
-                "redis/agent-skills (local checkout; run npx skills add redis/agent-skills to adopt standard management)",
-            ));
-            installed.push(name);
-        }
-        if changes.is_empty() {
-            return Ok(SkillsOutcome::skipped(Change::new(
-                describe_target(self.global),
-                Status::Skipped,
-                "no skills found in the checkout",
-            )));
+            changes.push(step.change);
+            installed.push(step.name);
         }
         Ok(SkillsOutcome {
             changes,
-            installed_dir: Some(destination),
+            installed_dir: Some(fallback_dir(cwd, self.global, &self.agents)),
             installed,
-            via_npx: false,
         })
     }
+}
+
+struct CopyStep {
+    name: String,
+    src: PathBuf,
+    dst: PathBuf,
+    change: Change,
 }
 
 /// A failed install's note leads with the installer's own first error line - a
@@ -578,7 +617,9 @@ mod tests {
             global: true,
             repo: None,
         };
-        let change = a.preview();
+        let [change] = &a.preview(Path::new("/p"))[..] else {
+            panic!("one npx line");
+        };
         assert_eq!(change.status, Status::Planned);
         assert_eq!(
             change.note,
@@ -610,9 +651,59 @@ mod tests {
     }
 
     #[test]
-    fn preview_names_the_checkout_when_one_is_given() {
-        let a = action(Path::new("/tmp/checkout"));
-        assert_eq!(a.preview().note, "would copy skills from /tmp/checkout");
+    fn checkout_preview_predicts_each_copy_including_drift() {
+        let repo = fake_checkout(&["redis-basics", "redis-search"]);
+        let project = tempfile::tempdir().unwrap();
+        let lines = |changes: Vec<Change>| {
+            changes
+                .into_iter()
+                .map(|c| (c.subject, c.status))
+                .collect::<Vec<_>>()
+        };
+        let a = action(repo.path());
+        let planned = lines(a.preview(project.path()));
+        assert_eq!(
+            planned,
+            lines(a.perform(project.path(), &mut |_| {}).unwrap().changes)
+        );
+        std::fs::write(
+            project.path().join(".agents/skills/redis-basics/SKILL.md"),
+            "user edit\n",
+        )
+        .unwrap();
+        let planned = lines(a.preview(project.path()));
+        assert_eq!(
+            planned,
+            vec![
+                (".agents/skills/redis-basics/".to_string(), Status::Updated),
+                (
+                    ".agents/skills/redis-search/".to_string(),
+                    Status::Unchanged
+                ),
+            ]
+        );
+        assert_eq!(
+            planned,
+            lines(a.perform(project.path(), &mut |_| {}).unwrap().changes)
+        );
+    }
+
+    #[test]
+    fn checkout_links_only_the_shared_layout() {
+        let repo = fake_checkout(&["redis-basics"]);
+        let cwd = Path::new("/p");
+        assert_eq!(action(repo.path()).claude_links(cwd), vec!["redis-basics"]);
+        let solo = SkillsAction {
+            agents: vec![Agent::Claude],
+            global: false,
+            repo: Some(repo.path().to_path_buf()),
+        };
+        assert!(solo.claude_links(cwd).is_empty());
+        let global = SkillsAction {
+            global: true,
+            ..action(repo.path())
+        };
+        assert!(global.claude_links(cwd).is_empty());
     }
 
     #[test]
@@ -654,7 +745,6 @@ mod tests {
             .perform(project.path(), &mut |_| {})
             .unwrap();
         assert_eq!(outcome.installed, vec!["redis-basics", "redis-search"]);
-        assert!(!outcome.via_npx);
         let summary: Vec<_> = outcome
             .changes
             .iter()
@@ -720,7 +810,11 @@ mod tests {
     #[test]
     fn unmanaged_collisions_ignore_the_lock_and_the_generated_skill() {
         let project = tempfile::tempdir().unwrap();
-        for name in ["mine", "managed", crate::project_skill::NAME] {
+        for name in [
+            "mine",
+            "managed",
+            crate::workflows::init::engine::project_skill::NAME,
+        ] {
             let dir = project.path().join(SKILLS_DIR).join(name);
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join("SKILL.md"), "x").unwrap();

@@ -4,10 +4,10 @@
 
 use std::io::IsTerminal;
 
+use super::engine;
 use dialoguer::console::Style;
 use dialoguer::theme::Theme;
 use dialoguer::{Input, MultiSelect, Select};
-use redisctl_init as engine;
 
 use crate::cli::InitArgs;
 use crate::error::RedisCtlError;
@@ -238,7 +238,7 @@ fn cancelled(prompt: &str) -> RedisCtlError {
     }
 }
 
-fn prompt_failed(e: dialoguer::Error) -> RedisCtlError {
+pub(crate) fn prompt_failed(e: dialoguer::Error) -> RedisCtlError {
     let dialoguer::Error::IO(io) = e;
     if io.kind() == std::io::ErrorKind::Interrupted {
         RedisCtlError::Cancelled {
@@ -474,6 +474,21 @@ mod tests {
     fn the_cloud_picker_cancel_gets_wizard_tips() {
         assert!(is_wizard_prompt(super::super::cloud::PICKER_PROMPT));
         assert!(!is_wizard_prompt("Delete user 5?"));
+    }
+
+    #[test]
+    fn ctrl_c_at_a_prompt_is_a_wizard_cancel() {
+        let err = prompt_failed(dialoguer::Error::IO(std::io::Error::from(
+            std::io::ErrorKind::Interrupted,
+        )));
+        assert_eq!(err.exit_code(), crate::error::exit_code::CANCELLED);
+        assert!(
+            err.suggestions()
+                .iter()
+                .any(|tip| tip.contains("--defaults")),
+            "{:?}",
+            err.suggestions()
+        );
     }
 
     #[test]

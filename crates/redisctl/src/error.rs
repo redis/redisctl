@@ -161,6 +161,15 @@ pub enum RedisCtlError {
     #[error("Output formatting error: {message}")]
     OutputError { message: String },
 
+    /// A `redisctl init` failure. The message names its own remedy, so no generic
+    /// tips apply.
+    #[error("{message}")]
+    Init {
+        code: &'static str,
+        exit_code: i32,
+        message: String,
+    },
+
     /// Agent-native surface error carrying a stable code + exit code (see
     /// [`crate::structured_error`]). Handled specially in `main` (JSON envelope to stdout,
     /// mapped exit code) rather than the generic 0/1 path.
@@ -171,38 +180,35 @@ pub enum RedisCtlError {
 /// Result type for redisctl operations
 pub type Result<T> = std::result::Result<T, RedisCtlError>;
 
-impl From<redisctl_init::InitError> for RedisCtlError {
-    fn from(err: redisctl_init::InitError) -> Self {
-        use redisctl_init::InitError;
-        match &err {
-            InitError::NoUrlInInput { .. } | InitError::InvalidEnvValue { .. } => {
-                RedisCtlError::InvalidInput {
-                    message: err.to_string(),
-                }
-            }
-            InitError::NotReady { .. } => RedisCtlError::ConnectionError {
-                message: err.to_string(),
-            },
-            InitError::UnreadableFile { rel } | InitError::WriteFailed { rel, .. } => {
-                RedisCtlError::FileError {
-                    path: rel.clone(),
-                    message: err.to_string(),
-                }
-            }
-            // Input-state problems: the invocation was fine, .env is not.
-            InitError::ProductIncomplete { .. } | InitError::NothingToComplete => {
-                RedisCtlError::InvalidInput {
-                    message: err.to_string(),
-                }
+impl From<crate::workflows::init::engine::InitError> for RedisCtlError {
+    fn from(err: crate::workflows::init::engine::InitError) -> Self {
+        use crate::workflows::init::engine::InitError;
+        let (code, exit_code) = match &err {
+            InitError::NoUrlInInput { .. }
+            | InitError::InvalidEnvValue { .. }
+            | InitError::ProductIncomplete { .. }
+            | InitError::NothingToComplete => ("invalid_input", exit_code::VALIDATION),
+            InitError::NotReady { .. } => ("connection_error", exit_code::NETWORK),
+            InitError::UnreadableFile { .. } | InitError::WriteFailed { .. } => {
+                ("file_error", exit_code::GENERIC)
             }
             InitError::DockerUnavailable
             | InitError::DockerCommand { .. }
-            | InitError::NoFreePort => RedisCtlError::Other(err.to_string()),
-        }
+            | InitError::NoFreePort => ("error", exit_code::GENERIC),
+        };
+        RedisCtlError::init(code, exit_code, err.to_string())
     }
 }
 
 impl RedisCtlError {
+    pub(crate) fn init(code: &'static str, exit_code: i32, message: impl Into<String>) -> Self {
+        RedisCtlError::Init {
+            code,
+            exit_code,
+            message: message.into(),
+        }
+    }
+
     /// Get helpful suggestions for resolving this error
     pub fn suggestions(&self) -> Vec<String> {
         match self {
@@ -240,14 +246,6 @@ impl RedisCtlError {
                 suggestions
                     .push("Test connectivity: redisctl profile validate --connect".to_string());
                 suggestions
-            }
-            // `redisctl init` connection failures carry their remedy inline; the
-            // profile-oriented tips below do not apply (no profile is involved).
-            RedisCtlError::ConnectionError { message }
-                if message.contains("remove REDIS_URL from .env")
-                    || message.contains("did not become ready") =>
-            {
-                vec![]
             }
             RedisCtlError::ConnectionError { message }
                 if message.contains("certificate")
@@ -313,13 +311,6 @@ impl RedisCtlError {
                 "Check the command documentation: redisctl <command> --help".to_string(),
                 "Use the appropriate command for your deployment type".to_string(),
             ],
-            // `redisctl init` input errors name the fix themselves; the file-format
-            // tips below would mislead.
-            RedisCtlError::InvalidInput { message }
-                if message.contains("no redis:// or rediss:// URL found") =>
-            {
-                vec![]
-            }
             RedisCtlError::InvalidInput { .. } => vec![
                 "Check the command syntax: redisctl <command> --help".to_string(),
                 "Verify input file format is correct (JSON/YAML)".to_string(),
@@ -336,7 +327,8 @@ impl RedisCtlError {
             {
                 vec![
                     "Re-run with --defaults to take the defaults without prompts".to_string(),
-                    "Flags answer questions up front: --url, --agent, --skills-global".to_string(),
+                    "Flags answer questions up front: --url or --cloud, --agent, --skills-global"
+                        .to_string(),
                 ]
             }
             RedisCtlError::Cancelled { .. } => vec![
@@ -372,6 +364,7 @@ impl RedisCtlError {
             RedisCtlError::ConnectionError { .. } => "connection_error",
             RedisCtlError::Timeout { .. } => "timeout",
             RedisCtlError::OutputError { .. } => "output_error",
+            RedisCtlError::Init { code, .. } => code,
             // Agent-native surface errors carry their own stable code.
             RedisCtlError::Structured(se) => se.code,
         }
@@ -425,6 +418,8 @@ impl RedisCtlError {
             // `Other` is the anyhow catch-all and `OutputError` covers
             // serialization and IO; neither is classified yet.
             RedisCtlError::Other(_) | RedisCtlError::OutputError { .. } => exit_code::GENERIC,
+
+            RedisCtlError::Init { exit_code, .. } => *exit_code,
 
             // The agent-native surface publishes its own 1-4 contract (see
             // docs/reference/agent-error-codes.md), where `retryable` is defined as exactly the
