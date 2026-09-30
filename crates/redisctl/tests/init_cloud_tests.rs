@@ -457,6 +457,29 @@ async fn piped_stdin_without_a_name_lists_both_tiers_and_refuses() {
     assert!(!project.path().join(".env").exists());
 }
 
+/// Signing in needs a person at a terminal; a piped run names the command instead
+/// of starting a browser flow nobody can finish.
+#[test]
+fn piped_stdin_without_a_profile_says_how_to_sign_in_and_writes_nothing() {
+    let cfg = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let repo = skills_fixture();
+    std::fs::write(cfg.path().join("config.toml"), "").unwrap();
+
+    run_init_cloud(&cfg, project.path(), &repo, &["--defaults"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "Sign in first: redisctl cloud auth login",
+        ))
+        .stderr(predicates::str::contains("Opening your browser").not());
+    assert!(!project.path().join(".env").exists());
+    assert_eq!(
+        std::fs::read_to_string(cfg.path().join("config.toml")).unwrap(),
+        ""
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn dry_run_reports_the_choice_it_would_offer() {
     let cfg = tempfile::tempdir().unwrap();

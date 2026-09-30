@@ -39,7 +39,7 @@ untouched.
 | Flag | Meaning |
 |---|---|
 | `--url <redis-url>` | use an existing database instead of Docker (`rediss://` supported; accepts a pasted `redis-cli -u ...` command) |
-| `--cloud` | take the database from Redis Cloud: connect to an existing database by `--name`, pick one interactively, or create one on the free Essentials plan |
+| `--cloud` | take the database from Redis Cloud: connect to an existing database by `--name`, pick one interactively, or create one on the free Essentials plan. Not signed in yet? On a terminal it opens the browser to sign in first |
 | `--cloud-subscription <id>` | create in this Essentials subscription instead of the free plan (requires `--cloud`) |
 | `--name <label>` | database name, recorded in the generated project skill; with `--cloud` it is also the reuse key |
 | `--agent <name>` | configure specific agents (`claude`, `cursor`, `vscode`, `codex`, `all`; repeatable or comma-separated). Default: detect installed tools |

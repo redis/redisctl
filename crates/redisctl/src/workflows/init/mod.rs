@@ -9,6 +9,8 @@ mod dns;
 mod output;
 pub(crate) mod wizard;
 
+use std::io::IsTerminal;
+
 use redisctl_init as engine;
 
 use crate::cli::{AgentArg, InitArgs};
@@ -130,22 +132,25 @@ pub async fn run(
     }
     let mut cloud_changes = Vec::new();
     if wants_cloud {
-        // A missing profile has one fix worth naming here; other client errors
-        // keep their own classification.
-        let client = conn_mgr.create_cloud_client(profile).await.map_err(|e| {
-            if matches!(
-                e,
-                RedisCtlError::NoProfileConfigured { .. }
-                    | RedisCtlError::MissingCredentials { .. }
-                    | RedisCtlError::ProfileNotFound { .. }
-            ) {
-                RedisCtlError::Other(format!(
-                    "{e}\n  Sign in first: redisctl cloud auth login   (or pass -p <profile> with API keys)"
-                ))
-            } else {
-                e
+        // Signing in needs a person at a terminal; anyone else gets the command.
+        let client = match conn_mgr.create_cloud_client(profile).await {
+            Err(
+                e @ (RedisCtlError::NoProfileConfigured { .. }
+                | RedisCtlError::MissingCredentials { .. }
+                | RedisCtlError::ProfileNotFound { .. }),
+            ) => {
+                let interactive = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+                if dry || !interactive {
+                    return Err(RedisCtlError::Other(format!(
+                        "{e}\n  Sign in first: redisctl cloud auth login   (or pass -p <profile> with API keys)"
+                    )));
+                }
+                let (signed_in, name) =
+                    crate::commands::cloud::auth::sign_in(conn_mgr, profile).await?;
+                signed_in.create_cloud_client(Some(&name)).await?
             }
-        })?;
+            other => other?,
+        };
         let outcome = cloud::resolve(
             &client,
             &cwd,
