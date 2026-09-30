@@ -116,10 +116,12 @@ impl Theme for RedisTheme {
         match default {
             Some(default) => write!(
                 f,
-                "{}  {} {}",
+                "{}  {}  {}",
                 brand().apply_to('◆'),
                 Style::new().bold().apply_to(prompt),
-                Style::new().dim().apply_to(format!("[{default}]"))
+                Style::new()
+                    .dim()
+                    .apply_to(format!("Enter keeps {default}, or type another: "))
             ),
             None => write!(
                 f,
@@ -183,6 +185,7 @@ pub(crate) fn is_wizard_prompt(prompt: &str) -> bool {
             | SKILLS_PROMPT
             | INTERRUPTED
     ) || prompt == super::cloud::PICKER_PROMPT
+        || prompt == super::cloud::NAME_PROMPT
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -473,7 +476,22 @@ mod tests {
     #[test]
     fn the_cloud_picker_cancel_gets_wizard_tips() {
         assert!(is_wizard_prompt(super::super::cloud::PICKER_PROMPT));
+        assert!(is_wizard_prompt(super::super::cloud::NAME_PROMPT));
         assert!(!is_wizard_prompt("Delete user 5?"));
+    }
+
+    #[test]
+    fn a_suggested_value_says_what_enter_does() {
+        use dialoguer::theme::Theme;
+        let mut line = String::new();
+        RedisTheme
+            .format_input_prompt(&mut line, "Name for the new database", Some("db-1-cloud"))
+            .unwrap();
+        let plain = dialoguer::console::strip_ansi_codes(&line);
+        assert!(
+            plain.ends_with("Name for the new database  Enter keeps db-1-cloud, or type another: "),
+            "{plain:?}"
+        );
     }
 
     #[test]
