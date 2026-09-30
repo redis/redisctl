@@ -1,8 +1,5 @@
 # @redis/redisctl
 
-> **Not yet self-contained:** until the `redisctl` binary npm package ships as a
-> dependency, this wrapper requires `redisctl` on PATH (see the checklist below).
-
 Onboard a project to Redis services and make its AI coding agent Redis-fluent:
 
 ```bash
@@ -12,47 +9,44 @@ npx @redis/redisctl init
 This package is a thin wrapper over [`redisctl init`](https://github.com/redis/redisctl):
 it maps npm muscle memory (`-y`/`--yes` after `init`) to `redisctl`'s `--defaults`, inherits the
 terminal (the wizard and banner work), and forwards exit codes verbatim
-(0 success / 2 usage / 6 validation / 10 network / 12 cancelled). Everything after
+(0 success / 1 failure / 2 usage / 6 invalid input / 10 connection / 12 cancelled). Everything after
 `npx @redis/redisctl` goes to `redisctl` unchanged, so other subcommands work too.
 
 Note the position of `-y`: `npx @redis/redisctl init -y` reaches the wrapper (and
 becomes `--defaults`); `npx -y @redis/redisctl init` is npx's own skip-prompt flag
 and never reaches it. Both are fine - they just answer different questions.
 
-## How the binary is found
+## Requirements
 
-`redisctl` resolves like any command: a dependency-shipped binary in the install's
-`node_modules/.bin` wins (npx puts it first on PATH), otherwise whatever `redisctl`
-is already installed. Until the first release with `init` ships, that means the
-branch build:
+The wrapper does not bundle the binary: it runs the `redisctl` already on PATH
+(skipping its own npm bin entry). Install it with any of:
 
 ```bash
-cargo install --git https://github.com/redis/redisctl --branch feat/init-command redisctl
+brew install redis/homebrew-tap/redisctl
+cargo install redisctl
+# or a binary from https://github.com/redis/redisctl/releases
 ```
 
-Without one, the wrapper prints that install line and exits 1. It never runs
+Without one, the wrapper prints those install options and exits 1. It never runs
 through a shell, so pasted connection URLs with `&`, `|`, `^` or spaces stay
 single arguments on every platform.
 
-## Publishing checklist (blocked on org decisions)
+## Publishing checklist
 
 1. Add `"npm"` to `installers` in the workspace `[workspace.metadata.dist]` and
    rerun `dist generate --mode ci`, so every release also publishes the `redisctl`
-   binary package (wrapper scope/name decided: `@redis/redisctl`).
+   binary package.
 2. Add that package here as an exact-version dependency (lockstep with the binary),
    and set this package's `version` from the release pipeline.
-3. Swap the install hint (in `bin/redisctl.js` and above) to the released
-   channels (`brew install redis/homebrew-tap/redisctl`, `cargo install redisctl`),
-   and probe for the `init` subcommand - a pre-init 0.11.x binary on PATH exits 2,
-   which the hint must explain.
-4. Include the repository LICENSE files in the tarball (`files` currently ships
-   `bin/` only).
-5. `npm publish --tag alpha` from the release workflow for a dress rehearsal;
-   promote to `latest` when the init stack ships.
+3. Probe for the `init` subcommand: a `redisctl` on PATH older than `init` exits 2,
+   which the install hint must explain.
+4. Include the repository LICENSE files in the tarball (`files` ships `bin/` only).
+5. `npm publish --tag alpha` from the release workflow for a dress rehearsal,
+   then promote to `latest`.
 
-Do not publish before step 1-2 exist: `npx @redis/redisctl init` on a clean
+Do not publish before steps 1-2 exist: `npx @redis/redisctl init` on a clean
 machine must work end to end, not exit with an install hint.
 
-Until then, test the wrapper itself with `npm pack` +
+Test the wrapper itself with `npm pack` +
 `npx --yes --package=./redis-redisctl-0.0.0.tgz redisctl init --dry-run` against
 a `redisctl` on PATH (that `--yes` belongs to npx, not the wrapper).

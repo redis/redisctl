@@ -4,10 +4,10 @@
 
 use std::path::Path;
 
-use crate::change::{Change, Status};
-use crate::env::{FileAction, read_for_planning};
-use crate::project::Runtime;
-use crate::{InitError, SKILLS_DIR};
+use crate::workflows::init::engine::change::{Change, Status};
+use crate::workflows::init::engine::env::{FileAction, read_for_planning};
+use crate::workflows::init::engine::project::Runtime;
+use crate::workflows::init::engine::{InitError, SKILLS_DIR};
 
 pub(crate) const NAME: &str = "redis-project-setup";
 const NOTE: &str = "project-specific facts, loaded only for Redis-related prompts";
@@ -16,10 +16,10 @@ const NOTE: &str = "project-specific facts, loaded only for Redis-related prompt
 pub(crate) struct SkillFacts<'a> {
     pub(crate) runtime: Runtime,
     pub(crate) name: Option<&'a str>,
-    pub(crate) cloud: Option<&'a crate::CloudFacts>,
+    pub(crate) cloud: Option<&'a crate::workflows::init::engine::CloudFacts>,
     pub(crate) database: bool,
     pub(crate) container: Option<&'a str>,
-    pub(crate) products: &'a [crate::WiredProduct],
+    pub(crate) products: &'a [crate::workflows::init::engine::WiredProduct],
     pub(crate) skills: &'a [String],
     pub(crate) client_installed: bool,
     pub(crate) cli_available: bool,
@@ -215,7 +215,12 @@ const CONTEXT_RETRIEVER_ANY_HINT: &str = r#"- Application code can use any MCP c
 const CONTEXT_RETRIEVER_CTL: &str = r#"- Provisioning stays outside the project secret boundary. Install the official CLI with `pipx install redis-context-retriever`, then use `ctxctl auth login`, `ctxctl surface ...`, and `ctxctl agent create ...`. Its login prompts hide credentials and its credential manager stores admin keys outside this repository.
 "#;
 
-fn fill_env(template: &str, product: &crate::WiredProduct, pkg: &str, runtime: Runtime) -> String {
+fn fill_env(
+    template: &str,
+    product: &crate::workflows::init::engine::WiredProduct,
+    pkg: &str,
+    runtime: Runtime,
+) -> String {
     template
         .replace("__PKG__", pkg)
         .replace("__URL__", product.spec.env_url)
@@ -224,17 +229,21 @@ fn fill_env(template: &str, product: &crate::WiredProduct, pkg: &str, runtime: R
         .replace("__RUNTIME__", runtime.as_str())
 }
 
-fn product_section(facts: &SkillFacts, product: &crate::WiredProduct) -> String {
-    let pkg = crate::install::product_package(product.spec.key, facts.runtime);
+fn product_section(
+    facts: &SkillFacts,
+    product: &crate::workflows::init::engine::WiredProduct,
+) -> String {
+    let pkg =
+        crate::workflows::init::engine::install::product_package(product.spec.key, facts.runtime);
     let pending = product.pending_env().map(pending_line).unwrap_or_default();
     match product.spec.key {
-        crate::ProductKey::AgentMemory => {
+        crate::workflows::init::engine::ProductKey::AgentMemory => {
             let hint = match pkg {
                 Some(pkg) => fill_env(AGENT_MEMORY_SDK_HINT, product, pkg, facts.runtime),
                 None => fill_env(AGENT_MEMORY_REST_HINT, product, "", facts.runtime),
             };
             format!(
-                "\n## Agent memory (Redis Iris)\n- Store `{id}` at `{url}`. Read all three from the environment - `{env_url}`, `{env_id}`, `{env_key}` are in `.env`; never hardcode the key or the store id.\n{pending}{hint}{AGENT_MEMORY_BULLETS}",
+                "\n## Agent Memory (Redis Iris)\n- Store `{id}` at `{url}`. Read all three from the environment - `{env_url}`, `{env_id}`, `{env_key}` are in `.env`; never hardcode the key or the store id.\n{pending}{hint}{AGENT_MEMORY_BULLETS}",
                 id = product.id.as_deref().unwrap_or_default(),
                 url = product.url(),
                 env_url = product.spec.env_url,
@@ -242,7 +251,7 @@ fn product_section(facts: &SkillFacts, product: &crate::WiredProduct) -> String 
                 env_key = product.spec.env_key,
             )
         }
-        crate::ProductKey::LangCache => {
+        crate::workflows::init::engine::ProductKey::LangCache => {
             let hint = if facts.runtime == Runtime::Python {
                 fill_env(LANGCACHE_PY_HINT, product, "", facts.runtime)
             } else {
@@ -262,7 +271,7 @@ fn product_section(facts: &SkillFacts, product: &crate::WiredProduct) -> String 
                 env_key = product.spec.env_key,
             )
         }
-        crate::ProductKey::ContextRetriever => {
+        crate::workflows::init::engine::ProductKey::ContextRetriever => {
             let client = if pkg.is_some() {
                 fill_env(CONTEXT_RETRIEVER_PY_HINT, product, "", facts.runtime)
             } else {
@@ -407,17 +416,29 @@ file.
     )
 }
 
-/// The plan-time line: the content depends on apply outcomes (which skills landed,
-/// whether the client installed), so the preview reports only what happens to the
-/// file.
-pub(crate) fn preview(cwd: &Path) -> Change {
+/// The plan-time lines: the content depends on apply outcomes (which skills
+/// landed, whether the client installed), so the preview reports only what happens
+/// to the file, then the same links [`generate`] makes.
+pub(crate) fn preview(cwd: &Path, link_for_claude: bool, also_link: &[String]) -> Vec<Change> {
     let rel = format!("{SKILLS_DIR}/{NAME}/SKILL.md");
     let status = if cwd.join(&rel).exists() {
         Status::Updated
     } else {
         Status::Created
     };
-    Change::new(rel, status, NOTE)
+    let mut changes = vec![Change::new(rel, status, NOTE)];
+    if link_for_claude {
+        changes.extend(
+            link_names(also_link)
+                .filter_map(|name| plan_link(cwd, name))
+                .map(|link| link.change),
+        );
+    }
+    changes
+}
+
+fn link_names(also_link: &[String]) -> impl Iterator<Item = &str> {
+    std::iter::once(NAME).chain(also_link.iter().map(String::as_str))
 }
 
 /// Write the skill and, for Claude Code, mirror the skills CLI's own layout with a
@@ -445,77 +466,87 @@ pub(crate) fn generate(
     };
     let mut changes = vec![action.perform(cwd)?];
     if link_for_claude {
-        changes.extend(link_claude_skill(cwd, NAME)?);
-        for name in also_link {
-            changes.extend(link_claude_skill(cwd, name)?);
+        for link in link_names(also_link).filter_map(|name| plan_link(cwd, name)) {
+            changes.push(link.perform()?);
         }
     }
     Ok(changes)
 }
 
-/// Claude Code reads `.claude/skills`; the skills CLI symlinks its installs there per
-/// skill. Mirror that layout for skills the CLI did not place. No entry is reported
-/// when the whole directory is already a symlink - it exposes everything by itself.
-#[cfg(unix)]
-fn link_claude_skill(cwd: &Path, name: &str) -> Result<Option<Change>, InitError> {
-    let parent = cwd.join(".claude/skills");
-    if parent.is_symlink() {
-        return Ok(None);
-    }
-    let subject = format!(".claude/skills/{name}");
-    let link = parent.join(name);
-    let target = std::path::PathBuf::from("../..")
-        .join(SKILLS_DIR)
-        .join(name);
-    match std::fs::symlink_metadata(&link) {
-        Ok(meta) if meta.is_symlink() => {
-            if std::fs::read_link(&link).ok().as_deref() == Some(&target) {
-                return Ok(Some(Change::new(subject, Status::Unchanged, "")));
+/// One `.claude/skills/<name>` entry, decided the same way for preview and apply.
+struct Link {
+    change: Change,
+    path: std::path::PathBuf,
+    target: std::path::PathBuf,
+}
+
+impl Link {
+    fn perform(self) -> Result<Change, InitError> {
+        if matches!(self.change.status, Status::Created | Status::Updated) {
+            let fail = |e: std::io::Error| InitError::WriteFailed {
+                rel: self.change.subject.clone(),
+                message: e.to_string(),
+            };
+            if self.change.status == Status::Updated {
+                std::fs::remove_file(&self.path).map_err(fail)?;
             }
-            std::fs::remove_file(&link).map_err(|e| InitError::WriteFailed {
-                rel: subject.clone(),
-                message: e.to_string(),
-            })?;
-            std::os::unix::fs::symlink(&target, &link).map_err(|e| InitError::WriteFailed {
-                rel: subject.clone(),
-                message: e.to_string(),
-            })?;
-            Ok(Some(Change::new(
-                subject,
-                Status::Updated,
-                format!("symlink to {SKILLS_DIR}/{name}"),
-            )))
+            if let Some(parent) = self.path.parent() {
+                std::fs::create_dir_all(parent).map_err(fail)?;
+            }
+            symlink(&self.target, &self.path).map_err(fail)?;
         }
-        Ok(_) => Ok(Some(Change::new(
-            subject,
-            Status::Kept,
-            "existing entry left untouched",
-        ))),
-        Err(_) => {
-            std::fs::create_dir_all(&parent).map_err(|e| InitError::WriteFailed {
-                rel: subject.clone(),
-                message: e.to_string(),
-            })?;
-            std::os::unix::fs::symlink(&target, &link).map_err(|e| InitError::WriteFailed {
-                rel: subject.clone(),
-                message: e.to_string(),
-            })?;
-            Ok(Some(Change::new(
-                subject,
-                Status::Created,
-                format!("symlink to {SKILLS_DIR}/{name}"),
-            )))
-        }
+        Ok(self.change)
     }
 }
 
+#[cfg(unix)]
+fn symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
 #[cfg(not(unix))]
-fn link_claude_skill(_cwd: &Path, name: &str) -> Result<Option<Change>, InitError> {
-    Ok(Some(Change::new(
-        format!(".claude/skills/{name}"),
-        Status::Skipped,
-        "symlinks are unix-only; Claude Code reads .agents/skills via its own discovery",
-    )))
+fn symlink(_target: &Path, _link: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// Claude Code reads `.claude/skills`; the skills CLI symlinks its installs there per
+/// skill. Mirror that layout for skills the CLI did not place. No entry is reported
+/// when the whole directory is already a symlink - it exposes everything by itself.
+fn plan_link(cwd: &Path, name: &str) -> Option<Link> {
+    let parent = cwd.join(".claude/skills");
+    if parent.is_symlink() {
+        return None;
+    }
+    let subject = format!(".claude/skills/{name}");
+    let path = parent.join(name);
+    let target = std::path::PathBuf::from("../..")
+        .join(SKILLS_DIR)
+        .join(name);
+    let linked = format!("symlink to {SKILLS_DIR}/{name}");
+    let change = if cfg!(not(unix)) {
+        Change::new(
+            subject,
+            Status::Skipped,
+            "symlinks are unix-only; Claude Code reads .agents/skills via its own discovery",
+        )
+    } else {
+        match std::fs::symlink_metadata(&path) {
+            Ok(meta) if meta.is_symlink() => {
+                if std::fs::read_link(&path).ok().as_deref() == Some(target.as_path()) {
+                    Change::new(subject, Status::Unchanged, "")
+                } else {
+                    Change::new(subject, Status::Updated, linked)
+                }
+            }
+            Ok(_) => Change::new(subject, Status::Kept, "existing entry left untouched"),
+            Err(_) => Change::new(subject, Status::Created, linked),
+        }
+    };
+    Some(Link {
+        change,
+        path,
+        target,
+    })
 }
 
 #[cfg(test)]
@@ -537,8 +568,11 @@ mod tests {
         }
     }
 
-    fn cloud_facts(tier: crate::CloudTier, profile: Option<&str>) -> crate::CloudFacts {
-        crate::CloudFacts {
+    fn cloud_facts(
+        tier: crate::workflows::init::engine::CloudTier,
+        profile: Option<&str>,
+    ) -> crate::workflows::init::engine::CloudFacts {
+        crate::workflows::init::engine::CloudFacts {
             name: "cloud-db".to_string(),
             subscription_id: "1".to_string(),
             database_id: "9".to_string(),
@@ -550,7 +584,7 @@ mod tests {
 
     #[test]
     fn cloud_facts_carry_ids_and_the_control_plane_command() {
-        let cloud = cloud_facts(crate::CloudTier::Essentials, None);
+        let cloud = cloud_facts(crate::workflows::init::engine::CloudTier::Essentials, None);
         let mut f = facts(None, &[]);
         f.cloud = Some(&cloud);
         let text = content(&f);
@@ -569,7 +603,10 @@ mod tests {
 
     #[test]
     fn flexible_databases_use_the_pro_api_path_and_name_the_profile() {
-        let cloud = cloud_facts(crate::CloudTier::Flexible, Some("qa"));
+        let cloud = cloud_facts(
+            crate::workflows::init::engine::CloudTier::Flexible,
+            Some("qa"),
+        );
         let mut f = facts(None, &[]);
         f.cloud = Some(&cloud);
         let text = content(&f);
@@ -583,8 +620,11 @@ mod tests {
     #[test]
     fn content_adapts_to_the_container_and_skills() {
         let skills = vec!["redis-core".to_string(), "redis-search".to_string()];
-        let text = content(&facts(Some("redis-init-demo"), &skills));
-        assert!(text.contains("docker start redis-init-demo"), "{text}");
+        let text = content(&facts(Some("redisctl-demo-1a2b3c4d"), &skills));
+        assert!(
+            text.contains("docker start redisctl-demo-1a2b3c4d"),
+            "{text}"
+        );
         // The connection string lives in .env only; the committed skill never
         // carries a URL.
         assert!(!text.contains("redis://"), "{text}");
@@ -610,11 +650,11 @@ mod tests {
 
     #[test]
     fn container_without_native_cli_offers_docker_exec() {
-        let mut f = facts(Some("redis-init-x"), &[]);
+        let mut f = facts(Some("redisctl-x-1a2b3c4d"), &[]);
         f.cli_available = false;
         let text = content(&f);
         assert!(
-            text.contains("docker exec -it redis-init-x redis-cli PING"),
+            text.contains("docker exec -it redisctl-x-1a2b3c4d redis-cli PING"),
             "{text}"
         );
     }

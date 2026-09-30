@@ -1,21 +1,21 @@
 //! `redisctl init` - onboard a project to Redis services and make its AI coding
 //! agent Redis-fluent.
 //!
-//! This module owns only the CLI surface: argument shaping, banner, colours, and
-//! rendering. The decisions live in the `redisctl-init` engine crate.
+//! The CLI side of init: the wizard, output, the `--cloud` database resolution and
+//! its DNS gate, and telemetry. Local detection, planning and apply live in
+//! [`engine`].
 
 mod cloud;
 mod dns;
+pub(crate) mod engine;
 mod output;
 mod telemetry;
 pub(crate) mod wizard;
 
 use std::io::IsTerminal;
 
-use redisctl_init as engine;
-
 use crate::cli::{AgentArg, InitArgs};
-use crate::error::RedisCtlError;
+use crate::error::{RedisCtlError, exit_code};
 use output::{bold, dim, ok, yellow};
 
 fn requested_agents(flags: &[AgentArg]) -> Option<Vec<engine::Agent>> {
@@ -52,12 +52,36 @@ pub async fn run(
     result
 }
 
+fn invalid_input(message: String) -> RedisCtlError {
+    RedisCtlError::init("invalid_input", exit_code::VALIDATION, message)
+}
+
+/// A pasted connect command given as positionals: quoted whole, or unquoted with
+/// `redis-cli` and the URL landing here and `-u` parsed as the alias of --url.
+/// Anything else is a stray argument, rejected so a typo cannot pass silently.
+fn check_pasted(pasted: &[String]) -> Result<(), RedisCtlError> {
+    let stray = pasted.iter().find(|token| {
+        let first = token.split_whitespace().next().unwrap_or_default();
+        first != "redis-cli" && !first.starts_with("redis://") && !first.starts_with("rediss://")
+    });
+    match stray {
+        Some(token) => Err(RedisCtlError::init(
+            "usage",
+            exit_code::USAGE,
+            format!(
+                "unexpected argument '{}' found\n  A connection string goes in --url; see redisctl init --help",
+                engine::mask_url(token)
+            ),
+        )),
+        None => Ok(()),
+    }
+}
+
 /// The product flag rules, checked before the banner so a bad invocation fails
 /// plainly. Wording teaches where each value comes from; the key never echoes.
 fn requested_products(args: &InitArgs) -> Result<Vec<engine::ProductRequest>, RedisCtlError> {
-    let invalid = |message: String| RedisCtlError::InvalidInput { message };
     if args.iris && args.complete {
-        return Err(invalid(
+        return Err(invalid_input(
             "--iris discovers what the project needs; --complete validates a product setup already present in .env."
                 .to_string(),
         ));
@@ -94,19 +118,20 @@ fn requested_products(args: &InitArgs) -> Result<Vec<engine::ProductRequest>, Re
             && !url.starts_with("http://")
             && !url.starts_with("https://")
         {
-            return Err(invalid(format!(
-                "--{flag} takes the service endpoint, not \"{url}\" - copy it from the console (https://...)."
+            return Err(invalid_input(format!(
+                "--{flag} takes the service endpoint, not \"{}\" - copy it from the console (https://...).",
+                engine::mask_url(url)
             )));
         }
         let id = match id_spec {
             Some((id_flag, id, id_name)) => match (url, id) {
                 (Some(_), None) => {
-                    return Err(invalid(format!(
+                    return Err(invalid_input(format!(
                         "--{flag} also needs --{id_flag} <{id_name}>, from the same console page."
                     )));
                 }
                 (None, Some(_)) => {
-                    return Err(invalid(format!(
+                    return Err(invalid_input(format!(
                         "--{id_flag} only applies with --{flag} <endpoint>."
                     )));
                 }
@@ -123,20 +148,20 @@ fn requested_products(args: &InitArgs) -> Result<Vec<engine::ProductRequest>, Re
         }
     }
     if args.iris && !requests.is_empty() {
-        return Err(invalid(
+        return Err(invalid_input(
             "--iris is discovery-only and cannot be combined with product flags. Run the focused product command after the agent recommends it."
                 .to_string(),
         ));
     }
     if args.api_key.is_some() {
         if requests.is_empty() {
-            return Err(invalid(
+            return Err(invalid_input(
                 "--api-key applies to an Iris product flag; a database URL carries its own password."
                     .to_string(),
             ));
         }
         if requests.len() > 1 {
-            return Err(invalid(
+            return Err(invalid_input(
                 "--api-key is ambiguous with more than one product. Pass the keys as environment variables instead:\n    AGENT_MEMORY_API_KEY=<key> LANGCACHE_API_KEY=<key> CONTEXT_RETRIEVER_AGENT_KEY=<key> redisctl init ..."
                     .to_string(),
             ));
@@ -151,6 +176,7 @@ async fn run_inner(
     profile: Option<&str>,
     telemetry: &mut telemetry::Telemetry,
 ) -> Result<(), RedisCtlError> {
+    check_pasted(&args.pasted)?;
     let pasted = [args.url.clone().unwrap_or_default()]
         .into_iter()
         .chain(args.pasted.iter().cloned())
@@ -161,9 +187,12 @@ async fn run_inner(
         true => None,
         false => Some(engine::extract_url(&pasted)?),
     };
-    let cwd = std::env::current_dir().map_err(|e| RedisCtlError::FileError {
-        path: ".".into(),
-        message: e.to_string(),
+    let cwd = std::env::current_dir().map_err(|e| {
+        RedisCtlError::init(
+            "file_error",
+            exit_code::GENERIC,
+            format!("cannot read the current directory: {e}"),
+        )
     })?;
     let products = requested_products(args)?;
     let mut options = engine::Options {
@@ -266,9 +295,20 @@ async fn run_inner(
             ) => {
                 let interactive = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
                 if dry || !interactive {
-                    return Err(RedisCtlError::Other(format!(
-                        "{e}\n  Sign in first: redisctl cloud auth login   (or pass -p <profile> with API keys)"
-                    )));
+                    // Its own Display suggests `profile set`, a second fix.
+                    let reason = match e {
+                        RedisCtlError::NoProfileConfigured { .. } => {
+                            "no Redis Cloud profile is configured".to_string()
+                        }
+                        other => other.to_string(),
+                    };
+                    return Err(RedisCtlError::init(
+                        "error",
+                        exit_code::GENERIC,
+                        format!(
+                            "{reason}\n  Sign in first: redisctl cloud auth login   (or pass -p <profile> with API keys)"
+                        ),
+                    ));
                 }
                 let signed_in = crate::commands::cloud::auth::sign_in(conn_mgr, profile, |url| {
                     output::step("sign in to Redis Cloud in your browser");
@@ -454,12 +494,14 @@ async fn run_inner(
                 } else {
                     "If this URL is stale, remove REDIS_URL from .env and re-run, or pass --url."
                 };
-                return Err(RedisCtlError::ConnectionError {
-                    message: format!(
+                return Err(RedisCtlError::init(
+                    "connection_error",
+                    exit_code::NETWORK,
+                    format!(
                         "could not talk to Redis at {}\n  {remedy}",
                         engine::mask_url(url)
                     ),
-                });
+                ));
             }
         }
     }

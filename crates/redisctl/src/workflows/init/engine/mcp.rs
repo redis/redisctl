@@ -1,16 +1,16 @@
 //! MCP registration per agent: the official Redis data-plane server in each agent's
 //! project config. Every config stays credential-free and safe to commit: a shell
-//! launcher sources `.env` when the MCP client starts the server, so the URL (and
-//! its password) never lands in a committed file.
+//! launcher reads the keys it needs from `.env` when the MCP client starts the
+//! server, so the URL (and its password) never lands in a committed file.
 
 use std::path::Path;
 
-use crate::InitError;
-use crate::change::{Change, Status};
-use crate::docker::docker_ok;
-use crate::env::{FileAction, read_for_planning};
-use crate::project::Agent;
-use crate::util::has_bin;
+use crate::workflows::init::engine::InitError;
+use crate::workflows::init::engine::change::{Change, Status};
+use crate::workflows::init::engine::docker::docker_ok;
+use crate::workflows::init::engine::env::{FileAction, read_for_planning};
+use crate::workflows::init::engine::project::Agent;
+use crate::workflows::init::engine::util::has_bin;
 
 /// How the launcher runs the server: uvx when available, a Docker bridge otherwise.
 /// With neither, the config is still written for uvx and the caller shows a note.
@@ -18,6 +18,19 @@ enum Runner {
     Uvx,
     Docker,
     UvxMissing,
+}
+
+/// `load KEY` exports KEY from `.env`, parsed like `env::read_env_key`: the first
+/// `[export] KEY = value` line, trimmed, one edge quote stripped. The file is never
+/// run as shell code, so any dotenv-valid content (or CRLF endings) is safe.
+const LOAD_FROM_ENV_FILE: &str = r#"load() { v=$(sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}$1[[:space:]]*=[[:space:]]*//p" .env 2>/dev/null | head -n 1 | sed -e 's/[[:space:]]*$//' -e "s/^[\"']//" -e "s/[\"']\$//"); [ -z "$v" ] || export "$1=$v"; }"#;
+
+fn launcher(keys: &[&str], command: &str) -> serde_json::Value {
+    let loads: String = keys.iter().map(|key| format!(" load {key};")).collect();
+    serde_json::json!({
+        "command": "sh",
+        "args": ["-c", format!("{LOAD_FROM_ENV_FILE};{loads} {command}")]
+    })
 }
 
 fn server_entry(runner: &Runner) -> serde_json::Value {
@@ -28,10 +41,7 @@ fn server_entry(runner: &Runner) -> serde_json::Value {
         }
         _ => r#"exec uvx --from redis-mcp-server@latest redis-mcp-server --url "$REDIS_URL""#,
     };
-    serde_json::json!({
-        "command": "sh",
-        "args": ["-c", format!("set -a; . ./.env 2>/dev/null; set +a; {inner}")]
-    })
+    launcher(&["REDIS_URL"], inner)
 }
 
 /// One agent's registration, decided at plan time.
@@ -65,7 +75,7 @@ pub(crate) struct McpPlan {
 
 /// The control-plane server: credentials stay in the redisctl profile, so the
 /// committed config carries only the launch command.
-fn control_plane_entry(cloud: &crate::CloudFacts) -> serde_json::Value {
+fn control_plane_entry(cloud: &crate::workflows::init::engine::CloudFacts) -> serde_json::Value {
     let args: Vec<String> = match &cloud.profile {
         Some(profile) => vec!["--profile".into(), profile.clone()],
         None => vec![],
@@ -78,7 +88,7 @@ fn control_plane_entry(cloud: &crate::CloudFacts) -> serde_json::Value {
 pub(crate) struct McpInputs<'a> {
     /// A database exists, so the data-plane `redis` server applies.
     pub(crate) database: bool,
-    pub(crate) cloud: Option<(&'a crate::CloudFacts, bool)>,
+    pub(crate) cloud: Option<(&'a crate::workflows::init::engine::CloudFacts, bool)>,
     /// `Some(npx_available)` when a Context Retriever product is wired.
     pub(crate) context_retriever: Option<bool>,
 }
@@ -87,10 +97,10 @@ pub(crate) struct McpInputs<'a> {
 /// resolves the agent key from its own environment and the config stays
 /// credential-free.
 fn context_retriever_entry() -> serde_json::Value {
-    serde_json::json!({
-        "command": "sh",
-        "args": ["-c", "set -a; . ./.env 2>/dev/null; set +a; exec npx -y mcp-remote \"$CONTEXT_RETRIEVER_MCP_URL\" --header 'X-API-Key:${CONTEXT_RETRIEVER_AGENT_KEY}'"]
-    })
+    launcher(
+        &["CONTEXT_RETRIEVER_MCP_URL", "CONTEXT_RETRIEVER_AGENT_KEY"],
+        r#"exec npx -y mcp-remote "$CONTEXT_RETRIEVER_MCP_URL" --header 'X-API-Key:${CONTEXT_RETRIEVER_AGENT_KEY}'"#,
+    )
 }
 
 pub(crate) fn plan_mcp(
@@ -256,12 +266,12 @@ mod tests {
         .unwrap()
     }
 
-    fn cloud_facts(profile: Option<&str>) -> crate::CloudFacts {
-        crate::CloudFacts {
+    fn cloud_facts(profile: Option<&str>) -> crate::workflows::init::engine::CloudFacts {
+        crate::workflows::init::engine::CloudFacts {
             name: "cloud-db".to_string(),
             subscription_id: "1".to_string(),
             database_id: "9".to_string(),
-            tier: crate::CloudTier::Essentials,
+            tier: crate::workflows::init::engine::CloudTier::Essentials,
             profile: profile.map(str::to_string),
             created: false,
         }
@@ -355,7 +365,7 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(dir.path().join(".mcp.json")).unwrap())
                 .unwrap();
         let launcher = claude["mcpServers"]["redis"]["args"][1].as_str().unwrap();
-        assert!(launcher.starts_with("set -a; . ./.env 2>/dev/null; set +a; exec "));
+        assert!(launcher.starts_with(LOAD_FROM_ENV_FILE), "{launcher}");
         assert!(launcher.contains("$REDIS_URL"));
         // Credential-free: the config carries the env reference, never a URL value.
         assert!(!launcher.contains("redis://"));
@@ -365,6 +375,36 @@ mod tests {
         )
         .unwrap();
         assert_eq!(vscode["servers"]["redis"]["type"], "stdio");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn context_retriever_launcher_exports_both_keys_without_sourcing_env() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let npx = dir.path().join("npx");
+        std::fs::write(
+            &npx,
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" \"$CONTEXT_RETRIEVER_AGENT_KEY\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&npx, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(
+            dir.path().join(".env"),
+            "TITLE=My App (dev)\r\nCONTEXT_RETRIEVER_MCP_URL=\"https://ctx.example/mcp\"\r\nCONTEXT_RETRIEVER_AGENT_KEY='k$y'\r\n",
+        )
+        .unwrap();
+        let entry = context_retriever_entry();
+        let output = std::process::Command::new("sh")
+            .args(["-c", entry["args"][1].as_str().unwrap()])
+            .current_dir(dir.path())
+            .env("PATH", format!("{}:/usr/bin:/bin", dir.path().display()))
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            "-y\nmcp-remote\nhttps://ctx.example/mcp\n--header\nX-API-Key:${CONTEXT_RETRIEVER_AGENT_KEY}\nk$y\n"
+        );
     }
 
     #[test]

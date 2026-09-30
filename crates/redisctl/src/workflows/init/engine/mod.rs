@@ -1,9 +1,9 @@
 //! Onboarding engine for `redisctl init`: project detection, secret-safe URL
 //! handling, typed planning, and idempotent apply.
 //!
-//! Callers (the CLI today, the MCP server eventually) own their surface - flags,
-//! prompts, rendering, exit codes - and consume this crate's decisions. Nothing
-//! here prints, prompts, or exits; long-running steps report through [`Event`].
+//! Callers own their surface - flags, prompts, rendering, exit codes - and consume
+//! this module's decisions. Nothing here prints, prompts, or exits; long-running
+//! steps report through [`Event`].
 
 mod change;
 mod docker;
@@ -41,7 +41,7 @@ pub enum InitError {
     NoUrlInInput { masked_input: String },
 
     #[error(
-        "Docker is not available and no --url was given.\n  Either start Docker, or point at an existing database:\n    redisctl init --url redis://localhost:6379"
+        "Docker is not available and no --url or --cloud was given.\n  Start Docker, point at an existing database:\n    redisctl init --url redis://localhost:6379\n  or create one on Redis Cloud:\n    redisctl init --cloud"
     )]
     DockerUnavailable,
 
@@ -260,8 +260,12 @@ impl Plan {
         changes.extend(self.cli.iter().map(|cli| cli.preview()));
         changes.extend(self.examples.iter().map(|example| example.preview()));
         changes.extend(self.example_note.iter().cloned());
-        changes.push(self.skills.preview());
-        changes.push(project_skill::preview(&self.cwd));
+        changes.extend(self.skills.preview(&self.cwd));
+        changes.extend(project_skill::preview(
+            &self.cwd,
+            self.agents.contains(&Agent::Claude),
+            &self.skills.claude_links(&self.cwd),
+        ));
         changes.extend(self.mcp.actions.iter().map(|action| action.preview()));
         changes
     }
@@ -477,18 +481,11 @@ pub async fn apply(plan: &Plan, on_event: &mut dyn FnMut(Event)) -> Result<Repor
         cli_available: util::has_bin("redis-cli"),
         docker: docker::docker_ok(),
     };
-    // Checkout-copied skills need links too; a global install lives under $HOME,
-    // where Claude Code's own discovery already reads it.
-    let also_link: &[String] = if !skills.via_npx && !plan.skills.global {
-        &skills.installed
-    } else {
-        &[]
-    };
     changes.extend(project_skill::generate(
         &plan.cwd,
         &facts,
         plan.agents.contains(&Agent::Claude),
-        also_link,
+        &plan.skills.claude_links(&plan.cwd),
     )?);
     for action in &plan.mcp.actions {
         changes.push(action.perform(&plan.cwd)?);

@@ -4,11 +4,11 @@
 
 use std::path::Path;
 
-use crate::change::{Change, Status};
-use crate::env::FileAction;
-use crate::products::{ProductKey, WiredProduct};
-use crate::project::Runtime;
-use crate::util::{exists, read_if};
+use crate::workflows::init::engine::change::{Change, Status};
+use crate::workflows::init::engine::env::FileAction;
+use crate::workflows::init::engine::products::{ProductKey, WiredProduct};
+use crate::workflows::init::engine::project::Runtime;
+use crate::workflows::init::engine::util::{exists, read_if};
 
 /// Only directories that already exist - no layout is invented for the example.
 fn source_dir(cwd: &Path) -> &'static str {
@@ -342,7 +342,7 @@ pub(crate) fn plan_examples(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::products::{ProductRequest, wire};
+    use crate::workflows::init::engine::products::{ProductRequest, wire};
 
     fn wired(dir: &Path) -> Vec<WiredProduct> {
         wire(

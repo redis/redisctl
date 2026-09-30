@@ -3333,7 +3333,6 @@ dependencies = [
  "config",
  "criterion",
  "dialoguer",
- "directories",
  "docker-wrapper",
  "files-sdk",
  "flate2",
@@ -3348,7 +3347,6 @@ dependencies = [
  "redis-cloud",
  "redis-enterprise",
  "redisctl-core",
- "redisctl-init",
  "regex",
  "reqwest 0.13.1",
  "rpassword",
@@ -3400,21 +3398,6 @@ dependencies = [
  "url",
  "urlencoding",
  "wiremock",
-]
-
-[[package]]
-name = "redisctl-init"
-version = "0.12.1"
-dependencies = [
- "chrono",
- "redis",
- "regex",
- "reqwest 0.13.1",
- "serde_json",
- "tempfile",
- "thiserror 2.0.17",
- "tokio",
- "which 7.0.3",
 ]
 
 [[package]]

@@ -21,7 +21,6 @@ path = "src/main.rs"
 
 [dependencies]
 redisctl-core = { version = "0.12.1", path = "../redisctl-core" }
-redisctl-init = { version = "0.12.1", path = "../redisctl-init" }
 redis-cloud = { workspace = true, features = ["tower-integration"] }
 redis-enterprise = { workspace = true, features = ["tower-integration"] }
 files-sdk = { workspace = true, optional = true }
@@ -67,7 +66,6 @@ regex = "1.12.2"
 zip = "6.0.0"
 which = "7"
 uuid = { version = "1", features = ["v4"] }
-directories = { workspace = true }
 reqwest = { workspace = true }
 redis = { workspace = true }
 

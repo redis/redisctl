@@ -46,4 +46,4 @@ coverage_output.txt
 lcov.info
 *.profraw
 target/tarpaulin/
-npm/redis-init/*.tgz
+npm/redisctl/*.tgz

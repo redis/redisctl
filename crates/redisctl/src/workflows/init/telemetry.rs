@@ -19,9 +19,9 @@ const SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 const NOTICE: &str = "  Anonymous usage data (which paths get used, never paths, names or credentials).\n  Opt out with --no-telemetry, REDISCTL_INIT_TELEMETRY=0, or DO_NOT_TRACK=1.";
 
-/// Release builds carry the key compiled in (the CI build step exports it); a
-/// runtime value overrides it, and an exported-but-empty value is the off switch -
-/// the compiled-in key does not resurface. Dev builds have neither and stay inert.
+/// The key comes from the runtime environment, else from the build environment at
+/// compile time; a build with neither sends nothing. An exported-but-empty runtime
+/// value is the off switch - a compiled-in key does not resurface.
 fn api_key() -> Option<String> {
     match std::env::var("REDISCTL_INIT_AMPLITUDE_KEY") {
         Ok(value) if value.trim().is_empty() => None,
@@ -66,7 +66,9 @@ fn debug(line: &str) {
 /// A random id in the cache directory. Random rather than derived, so it cannot be
 /// traced back to a machine or a user. `first` drives the one-time notice.
 fn identify() -> (String, bool) {
-    let path = directories::BaseDirs::new().map(|dirs| dirs.home_dir().join(".cache/redisctl/id"));
+    let path = std::env::home_dir()
+        .filter(|home| home.is_absolute())
+        .map(|home| home.join(".cache/redisctl/id"));
     if let Some(path) = &path
         && let Ok(existing) = std::fs::read_to_string(path)
         && !existing.trim().is_empty()

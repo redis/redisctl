@@ -1,16 +1,27 @@
 //! Terminal output for `redisctl init`: colour helpers and the banner.
 //!
-//! Colours only when stdout is a terminal, Redis red at the best depth the terminal
-//! offers (24-bit when COLORTERM says so, the nearest 256-colour index otherwise).
+//! Colours only when stdout is a terminal and NO_COLOR is unset or empty, Redis red at
+//! the best depth the terminal offers (24-bit when COLORTERM says so, the nearest
+//! 256-colour index otherwise).
 
+use std::ffi::OsString;
 use std::io::IsTerminal;
 
 fn tty() -> bool {
     std::io::stdout().is_terminal()
 }
 
+fn colour_allowed(tty: bool, no_color: Option<OsString>) -> bool {
+    tty && no_color.is_none_or(|value| value.is_empty())
+}
+
+/// Unit tests assert on plain text whether or not `cargo test` runs in a terminal.
+fn colour() -> bool {
+    !cfg!(test) && colour_allowed(tty(), std::env::var_os("NO_COLOR"))
+}
+
 fn paint(code: &str, s: &str) -> String {
-    if tty() {
+    if colour() {
         format!("\x1b[{code}m{s}\x1b[0m")
     } else {
         s.to_string()
@@ -38,8 +49,8 @@ pub fn red(s: &str) -> String {
     paint("31", s)
 }
 
-fn icon(status: redisctl_init::Status) -> String {
-    use redisctl_init::Status;
+fn icon(status: crate::workflows::init::engine::Status) -> String {
+    use crate::workflows::init::engine::Status;
     match status {
         Status::Created => brand_red("+"),
         Status::Updated => yellow("~"),
@@ -51,7 +62,7 @@ fn icon(status: redisctl_init::Status) -> String {
 }
 
 /// One summary line: icon, status, subject, note.
-pub fn change_line(change: &redisctl_init::Change) -> String {
+pub fn change_line(change: &crate::workflows::init::engine::Change) -> String {
     let note = if change.note.is_empty() {
         String::new()
     } else {
@@ -229,8 +240,6 @@ mod tests {
 
     #[test]
     fn progress_lines_join_the_wizard_rail() {
-        // Piped output (tests are not a tty), so no colour codes - the rail glyph
-        // still leads the line, keeping status steps visually part of the wizard.
         assert_eq!(
             progress_open_line("installing skills (npx skills add)"),
             "◇  installing skills (npx skills add)..."
@@ -239,23 +248,30 @@ mod tests {
 
     #[test]
     fn change_line_pads_the_status_and_appends_the_note() {
-        let change = redisctl_init::Change {
+        let change = crate::workflows::init::engine::Change {
             subject: ".env".into(),
-            status: redisctl_init::Status::Created,
+            status: crate::workflows::init::engine::Status::Created,
             note: "REDIS_URL".into(),
         };
-        // Piped output (tests are not a tty), so no colour codes.
         assert_eq!(change_line(&change), "  + created   .env  REDIS_URL");
     }
 
     #[test]
     fn change_line_without_a_note_has_no_trailing_spaces() {
-        let change = redisctl_init::Change {
+        let change = crate::workflows::init::engine::Change {
             subject: ".gitignore".into(),
-            status: redisctl_init::Status::Unchanged,
+            status: crate::workflows::init::engine::Status::Unchanged,
             note: String::new(),
         };
         assert_eq!(change_line(&change), "  = unchanged .gitignore");
+    }
+
+    #[test]
+    fn colour_needs_a_terminal_and_no_non_empty_no_color() {
+        assert!(colour_allowed(true, None));
+        assert!(colour_allowed(true, Some("".into())));
+        assert!(!colour_allowed(true, Some("1".into())));
+        assert!(!colour_allowed(false, None));
     }
 
     #[test]
