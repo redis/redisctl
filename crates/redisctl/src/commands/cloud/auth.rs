@@ -153,7 +153,10 @@ async fn login(
     let tokens = if use_device {
         run_device_flow_blocking(&authenticator).await?
     } else {
-        run_loopback_flow(&authenticator).await?
+        run_loopback_flow(&authenticator, |url| {
+            eprintln!("Opening your browser to sign in…\n  {url}")
+        })
+        .await?
     };
     let creds = complete_and_persist(
         conn_mgr,
@@ -180,15 +183,23 @@ async fn login(
     emit_signed_in(&creds, &profile_name, output)
 }
 
+/// Who `sign_in` signed in, and a manager over the config it saved.
+pub(crate) struct SignedIn {
+    pub conn_mgr: ConnectionManager,
+    pub profile: String,
+    pub email: Option<String>,
+}
+
 /// `login`'s browser flow for a command that finds no credentials part-way through
-/// (`init --cloud`). Returns a manager over the saved config and the profile it wrote.
+/// (`init --cloud`); the caller renders the sign-in link and the outcome.
 pub(crate) async fn sign_in(
     conn_mgr: &ConnectionManager,
     profile: Option<&str>,
-) -> CliResult<(ConnectionManager, String)> {
+    show_url: impl Fn(&str),
+) -> CliResult<SignedIn> {
     let (profile_name, authenticator, auth_cfg) = prepare(conn_mgr, profile)?;
     let superseded = superseded_key(&auth_cfg);
-    let tokens = run_loopback_flow(&authenticator).await?;
+    let tokens = run_loopback_flow(&authenticator, show_url).await?;
     let creds = complete_and_persist(
         conn_mgr,
         &profile_name,
@@ -204,19 +215,15 @@ pub(crate) async fn sign_in(
         },
     )
     .await?;
-    eprintln!(
-        "\u{2713} Signed in as {}. Credentials saved to profile '{}'.\n",
-        creds.email.as_deref().unwrap_or("your account"),
-        profile_name
-    );
     let config = match &conn_mgr.config_path {
         Some(path) => Config::load_from_path(path)?,
         None => Config::load()?,
     };
-    Ok((
-        ConnectionManager::with_config_path(config, conn_mgr.config_path.clone()),
-        profile_name,
-    ))
+    Ok(SignedIn {
+        conn_mgr: ConnectionManager::with_config_path(config, conn_mgr.config_path.clone()),
+        profile: profile_name,
+        email: creds.email,
+    })
 }
 
 /// The key a profile already holds, which a fresh mint for that profile replaces.
@@ -619,11 +626,14 @@ async fn run_device_flow_blocking(auth: &CloudAuthenticator) -> CliResult<TokenS
     client.poll(&authz, None).await.map_err(auth_err)
 }
 
-async fn run_loopback_flow(auth: &CloudAuthenticator) -> CliResult<TokenSet> {
+async fn run_loopback_flow(
+    auth: &CloudAuthenticator,
+    show_url: impl Fn(&str),
+) -> CliResult<TokenSet> {
     let tokens = auth
         .loopback()
         .login(&SCOPES, |url| {
-            eprintln!("Opening your browser to sign in…\n  {url}");
+            show_url(url);
             let _ = open_browser(url);
         })
         .await
