@@ -64,7 +64,7 @@ pub(crate) async fn resolve(
     defaults: bool,
 ) -> Result<CloudOutcome, RedisCtlError> {
     let mut db_name = name.map(str::to_string).unwrap_or_else(|| {
-        engine::slug(
+        default_db_name(
             &cwd.file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default(),
@@ -109,6 +109,16 @@ pub(crate) async fn resolve(
             Pick::Existing(cand) => return connect(client, cand, profile).await,
             Pick::Create(name) => db_name = name,
         }
+    }
+
+    // Nothing to pick from: a person at a terminal still gets to edit the name.
+    if name.is_none()
+        && inv.candidates.is_empty()
+        && !dry
+        && !defaults
+        && std::io::stdin().is_terminal()
+    {
+        db_name = ask_db_name(&db_name)?;
     }
 
     if dry {
@@ -328,6 +338,19 @@ enum Pick<'a> {
 
 /// Mirrors `quick_database`'s private `validate_name` (PRD §5.1.1): 3-40 chars of
 /// `[a-z0-9-]`, starting with a lowercase letter, ending alphanumeric, no `--`.
+/// The folder's slug, shaped to pass `valid_db_name`: a leading letter, 3-40 chars.
+fn default_db_name(folder: &str) -> String {
+    let mut name = engine::slug(folder);
+    if !name.starts_with(|c: char| c.is_ascii_lowercase()) {
+        name.insert_str(0, "db-");
+    }
+    if name.len() < 3 {
+        name.push_str("-db");
+    }
+    name.truncate(40);
+    name.trim_end_matches('-').to_string()
+}
+
 fn valid_db_name(name: &str) -> Result<(), String> {
     let bytes = name.as_bytes();
     let ok = (3..=40).contains(&name.len())
@@ -350,6 +373,16 @@ fn valid_db_name(name: &str) -> Result<(), String> {
 
 /// Registered with `wizard::is_wizard_prompt`, so cancelling gets wizard tips.
 pub(crate) const PICKER_PROMPT: &str = "Redis Cloud - this account already has databases";
+pub(crate) const NAME_PROMPT: &str = "Name for the new database";
+
+fn ask_db_name(suggested: &str) -> Result<String, RedisCtlError> {
+    dialoguer::Input::with_theme(&RedisTheme)
+        .with_prompt(NAME_PROMPT)
+        .default(suggested.to_string())
+        .validate_with(|input: &String| valid_db_name(input))
+        .interact_text()
+        .map_err(super::wizard::prompt_failed)
+}
 
 fn pick<'a>(inv: &'a Inventory, db_name: &str) -> Result<Pick<'a>, RedisCtlError> {
     let mut items: Vec<String> = inv.candidates.iter().map(describe).collect();
@@ -379,15 +412,7 @@ fn pick<'a>(inv: &'a Inventory, db_name: &str) -> Result<Pick<'a>, RedisCtlError
                     "  The free plan is already used up - connect to an existing database, or press Esc and re-run with --cloud-subscription <id>."
                 );
             }
-            Some(_) => {
-                let name: String = dialoguer::Input::with_theme(&RedisTheme)
-                    .with_prompt("Name for the new database")
-                    .default(db_name.to_string())
-                    .validate_with(|input: &String| valid_db_name(input))
-                    .interact_text()
-                    .map_err(super::wizard::prompt_failed)?;
-                return Ok(Pick::Create(name));
-            }
+            Some(_) => return Ok(Pick::Create(ask_db_name(db_name)?)),
         }
     }
 }
@@ -660,7 +685,24 @@ async fn create_pinned(
 
 #[cfg(test)]
 mod tests {
-    use super::valid_db_name;
+    use super::{default_db_name, valid_db_name};
+
+    #[test]
+    fn default_names_always_pass_the_rule() {
+        for folder in [
+            "1-cloud",
+            "x",
+            "",
+            "!!!",
+            "My App",
+            "9",
+            &"a".repeat(60),
+            "ab-cd-efgh-ijkl-mnop-qrst-uvwx-yzab-cdef-g",
+        ] {
+            let name = default_db_name(folder);
+            assert!(valid_db_name(&name).is_ok(), "{folder:?} -> {name:?}");
+        }
+    }
 
     #[test]
     fn name_rule_mirror_accepts_and_rejects_like_the_engine() {

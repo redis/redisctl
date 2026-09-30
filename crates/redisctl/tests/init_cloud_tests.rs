@@ -462,6 +462,42 @@ async fn dry_run_reports_the_choice_it_would_offer() {
     assert_eq!(props["dry_run"], true);
 }
 
+/// The folder name seeds the database name, and folders need not follow Redis
+/// Cloud's naming rule: the planned name must be one Cloud accepts.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_folder_name_cloud_rejects_still_plans_a_valid_database_name() {
+    let cfg = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let repo = skills_fixture();
+    let server = MockServer::start().await;
+    write_cloud_profile(&cfg, &server.uri());
+    for p in ["/fixed/subscriptions", "/subscriptions"] {
+        Mock::given(method("GET"))
+            .and(path(p))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "subscriptions": [] })))
+            .mount(&server)
+            .await;
+    }
+
+    for (folder, planned) in [
+        ("1-cloud", "db-1-cloud"),
+        ("x", "x-db"),
+        (
+            "a-very-long-project-folder-name-well-past-forty-characters",
+            "a-very-long-project-folder-name-well-pas",
+        ),
+    ] {
+        let project = root.path().join(folder);
+        std::fs::create_dir(&project).unwrap();
+        run_init_cloud(&cfg, &project, &repo, &["--dry-run", "--agent", "claude"])
+            .assert()
+            .success()
+            .stdout(predicates::str::contains(format!(
+                "would create a free Essentials subscription + database \"{planned}\""
+            )));
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn empty_account_creates_a_free_subscription_and_database() {
     let cfg = tempfile::tempdir().unwrap();
