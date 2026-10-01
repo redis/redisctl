@@ -26,6 +26,7 @@ pub fn config_path_resource() -> Resource {
                     meta: None,
                 }],
                 meta: None,
+                ..Default::default()
             })
         })
         .build()
@@ -60,6 +61,7 @@ pub fn profiles_resource() -> Resource {
                     meta: None,
                 }],
                 meta: None,
+                ..Default::default()
             })
         })
         .build()

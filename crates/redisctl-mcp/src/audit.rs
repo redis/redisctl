@@ -670,6 +670,8 @@ mod tests {
                     inner: McpRequest::CallTool(CallToolParams {
                         name: tool_name.clone(),
                         arguments,
+                        input_responses: None,
+                        request_state: None,
                         meta: None,
                         task: None,
                     }),
