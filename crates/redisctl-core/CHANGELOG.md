@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/redis/redisctl/compare/redisctl-core-v0.11.1...redisctl-core-v0.12.0) - 2026-10-01
+
+### Added
+
+- *(cloud)* sign in to Redis Cloud and provision a free database without an API key ([#1149](https://github.com/redis/redisctl/pull/1149))
+
+### Fixed
+
+- *(core)* repair keyring probe rustdoc ([#1165](https://github.com/redis/redisctl/pull/1165))
+- *(core)* check what quick-database reuses before adopting it ([#1155](https://github.com/redis/redisctl/pull/1155))
+- *(core)* validate the credentials variable name wherever it is written ([#1159](https://github.com/redis/redisctl/pull/1159))
+- *(core)* keep OAuth transport failures out of the credential verdict ([#1158](https://github.com/redis/redisctl/pull/1158))
+- *(core)* ask the keyring to hold something before minting a key ([#1157](https://github.com/redis/redisctl/pull/1157))
+- *(core)* refuse to mint when the session will not name the account ([#1156](https://github.com/redis/redisctl/pull/1156))
+
+### Other
+
+- *(mcp)* stabilize the library embedding API ([#1097](https://github.com/redis/redisctl/pull/1097))
+- harden project maintenance and release hygiene ([#1069](https://github.com/redis/redisctl/pull/1069))
+- *(core)* centralize API client resolution ([#1071](https://github.com/redis/redisctl/pull/1071))
+- remove dead resilience flags and modules ([#1050](https://github.com/redis/redisctl/pull/1050))
+- migrate to redis-cloud 0.11.0 (handle breaking changes) ([#1028](https://github.com/redis/redisctl/pull/1028))
+
 ## [0.11.0](https://github.com/redis-developer/redisctl/compare/redisctl-core-v0.10.1...redisctl-core-v0.11.0) - 2026-03-20
 
 ### Fixed
