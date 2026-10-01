@@ -2996,6 +2996,7 @@ dependencies = [
  "tower-mcp",
  "tracing",
  "tracing-subscriber",
+ "url",
  "urlencoding",
  "wiremock",
 ]

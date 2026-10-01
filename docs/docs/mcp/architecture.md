@@ -135,7 +135,7 @@ The policy engine evaluates every tool call against the active policy before exe
 The evaluation flow:
 
 1. **Registration-time filtering** -- tools outside the active tier are hidden from the AI (not registered with the router)
-2. **Runtime guards** -- write and destructive tools check the policy tier again inside the handler as defense-in-depth
+2. **Runtime guards** -- generated tools evaluate the same resolved global, toolset, and per-tool policy inside the handler as defense-in-depth
 3. **Allow/deny lists** -- evaluated per the [policy evaluation order](configuration.md#evaluation-order)
 
 ## Audit Layer

@@ -2,6 +2,7 @@
 
 use tower_mcp::{CallToolResult, ResultExt};
 
+use crate::policy::ToolSafety;
 use crate::tools::macros::{database_tool, mcp_module};
 
 /// A command entry for defining an alias.
@@ -33,16 +34,24 @@ database_tool!(write_stateful, alias_set, "redis_alias_set",
         if input.commands.is_empty() {
             return Err(tower_mcp::Error::tool("commands must not be empty"));
         }
-        for (i, cmd) in input.commands.iter().enumerate() {
-            if cmd.args.is_empty() {
-                return Err(tower_mcp::Error::tool(format!(
-                    "command at index {} has empty args", i
-                )));
-            }
-        }
+
+        let canonical_commands = super::command_safety::preflight_packed_commands(
+            state,
+            "redis_alias_set",
+            ToolSafety::Write,
+            ToolSafety::Write,
+            input.commands.iter().map(|command| command.args.as_slice()),
+        )?;
 
         let command_count = input.commands.len();
-        let commands: Vec<Vec<String>> = input.commands.into_iter().map(|c| c.args).collect();
+        let commands: Vec<Vec<String>> = input.commands
+            .into_iter()
+            .zip(canonical_commands)
+            .map(|(mut command, canonical_name)| {
+                command.args[0] = canonical_name;
+                command.args
+            })
+            .collect();
         state.set_alias(input.name.clone(), commands).await;
 
         Ok(CallToolResult::text(format!(
@@ -51,9 +60,10 @@ database_tool!(write_stateful, alias_set, "redis_alias_set",
     }
 );
 
-database_tool!(read_only_stateful, alias_run, "redis_alias_run",
+database_tool!(destructive_stateful, alias_run, "redis_alias_run",
     "Run a previously saved command alias. Executes the stored commands in order via a \
-     Redis pipeline and returns per-command results.\n\n\
+     Redis pipeline and returns per-command results. Commands are reclassified before every \
+     run; destructive or unknown commands require Full policy.\n\n\
      Use redis_alias_list to see available aliases.",
     {
         /// Alias name to run
@@ -64,9 +74,19 @@ database_tool!(read_only_stateful, alias_run, "redis_alias_run",
                 "Alias '{}' not found. Use redis_alias_list to see available aliases.", input.name
             )))?;
 
+        // Revalidate at execution time as defense in depth: aliases can be
+        // inserted through test/support APIs or survive future policy changes.
+        let canonical_commands = super::command_safety::preflight_packed_commands(
+            state,
+            "redis_alias_run",
+            ToolSafety::Destructive,
+            ToolSafety::Write,
+            commands.iter().map(Vec::as_slice),
+        )?;
+
         let mut pipe = redis::pipe();
-        for cmd_args in &commands {
-            let mut cmd = redis::cmd(&cmd_args[0]);
+        for (cmd_args, canonical_name) in commands.iter().zip(&canonical_commands) {
+            let mut cmd = redis::cmd(canonical_name);
             for arg in &cmd_args[1..] {
                 cmd.arg(arg);
             }
@@ -79,8 +99,13 @@ database_tool!(read_only_stateful, alias_run, "redis_alias_run",
             .tool_context(format!("Alias '{}' pipeline failed", input.name))?;
 
         let mut lines = Vec::with_capacity(results.len() + 2);
-        for (i, (cmd_args, result)) in commands.iter().zip(results.iter()).enumerate() {
-            let label = cmd_args.first().map(|s| s.as_str()).unwrap_or("?");
+        for (i, ((cmd_args, canonical_name), result)) in commands
+            .iter()
+            .zip(&canonical_commands)
+            .zip(results.iter())
+            .enumerate()
+        {
+            let label = canonical_name;
             let key = cmd_args.get(1).map(|s| s.as_str()).unwrap_or("");
             let result_str = super::format_value(result);
             lines.push(format!("[{:>4}] {:<12} {}  →  {}", i, label, key, result_str));
@@ -131,3 +156,30 @@ database_tool!(write_stateful, alias_delete, "redis_alias_delete",
         }
     }
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::CredentialSource;
+    use std::sync::Arc;
+
+    #[test]
+    fn alias_run_is_advertised_as_potentially_destructive() {
+        let state = Arc::new(
+            crate::state::AppState::new(
+                CredentialSource::Profiles(Vec::new()),
+                crate::state::AppState::test_write_policy(),
+                None,
+                false,
+                None,
+            )
+            .unwrap(),
+        );
+        let tool = alias_run(state);
+        let annotations = tool.annotations.expect("alias_run annotations");
+
+        assert!(!annotations.read_only_hint);
+        assert!(annotations.destructive_hint);
+        assert!(!annotations.idempotent_hint);
+    }
+}

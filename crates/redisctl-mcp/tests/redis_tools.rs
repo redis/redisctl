@@ -1485,6 +1485,15 @@ async fn test_raw_command() {
         .await;
     assert!(result.is_error, "CONFIG SET should be blocked via raw");
 
+    let result = redis::redis_command(state.clone())
+        .call(json!({"command": "AUTH", "args": ["default", "marker-password"]}))
+        .await;
+    assert!(
+        result.is_error,
+        "AUTH should be blocked on shared connections"
+    );
+    assert!(!format!("{result:?}").contains("marker-password"));
+
     // Dry run
     let text = call_tool_text(
         &redis::redis_command(state.clone()),

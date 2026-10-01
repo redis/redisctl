@@ -12,8 +12,6 @@
 //!   the user approves, runs the SM exchange, and persists. `login --device --wait` collapses
 //!   both into one blocking call for a human.
 
-#![allow(dead_code)] // Used by binary target
-
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -169,6 +167,13 @@ async fn login(
             },
             account: match account {
                 Some(id) => AccountChoice::Id(id),
+                // On a terminal, ask rather than refuse: core rejects a login whose session does
+                // not say which of several accounts is current, and re-running with `--account`
+                // means a second browser sign-in — and on an MFA account, a second code.
+                // `switch` already asks this exact question with this exact picker.
+                None if std::io::stdin().is_terminal() && std::io::stderr().is_terminal() => {
+                    AccountChoice::Prompt(Box::new(account_for_login))
+                }
                 None => AccountChoice::Current,
             },
             superseded,
@@ -178,6 +183,30 @@ async fn login(
     )
     .await?;
     emit_signed_in(&creds, &profile_name, output)
+}
+
+/// Which account a plain `login` mints for, asking only where the session leaves it open.
+///
+/// Answers exactly what `AccountChoice::Current` answers wherever it can — the account the
+/// session reports, or the only one there is nothing to choose between — so the prompt appears
+/// precisely where a non-interactive run refuses with `account_required`, and nowhere else.
+///
+/// Naming the single account when the session reports none does point the session at it, which
+/// `Current` would not have. That is the repair the state needs: the alternative is minting an
+/// access key from one account with a secret from whatever the session thinks it is on.
+fn account_for_login(accounts: &[LoginAccount], current: Option<u64>) -> Result<u64, AuthError> {
+    if let Some(id) = current
+        && accounts.iter().any(|a| a.id == id)
+    {
+        return Ok(id);
+    }
+    match accounts {
+        [] => Err(AuthError::Protocol(
+            "this login is not associated with any Redis Cloud account".into(),
+        )),
+        [only] => Ok(only.id),
+        several => prompt_account(several, current),
+    }
 }
 
 /// The key a profile already holds, which a fresh mint for that profile replaces.
@@ -214,7 +243,7 @@ async fn accounts(
         .refresh(&refresh_token)
         .await
         .map_err(|e| match e {
-            AuthError::Network(_) => auth_err(e),
+            AuthError::Network(_) | AuthError::Transport(_) => auth_err(e),
             _ => RedisCtlError::Structured(Box::new(StructuredError::not_authenticated(format!(
                 "the stored sign-in for profile '{profile_name}' is no longer usable. Run \
                  `redisctl --profile {profile_name} cloud auth login`."
@@ -224,11 +253,20 @@ async fn accounts(
     // Okta hands back a replacement refresh token only when the app rotates them — and when it
     // does, the one just used stops working. Every other command persists what it gets back;
     // this one mints nothing, so without this the next command would reach for a dead token.
-    // Best-effort: failing to store it must not fail a read.
+    // Failing to store it must not fail a read, but it must be said: the old token is already
+    // dead and the replacement is now lost, so the profile's sign-in is gone until it signs in
+    // again. Reporting `status: ok` and nothing else sends the caller to a token that cannot work.
+    let mut sign_in_stored = true;
     if let Some(rotated) = tokens.refresh_token.as_deref()
         && rotated != refresh_token
+        && let Err(e) = store.store_credential(&format!("{profile_name}-okta-refresh"), rotated)
     {
-        let _ = store.store_credential(&format!("{profile_name}-okta-refresh"), rotated);
+        sign_in_stored = false;
+        eprintln!(
+            "\n  warning: the identity provider rotated this profile's sign-in and the \
+             replacement could not be stored ({e}). The one it replaced is no longer valid, so \
+             run `redisctl --profile {profile_name} cloud auth login` before the next command."
+        );
     }
 
     let listing = authenticator
@@ -262,6 +300,9 @@ async fn accounts(
             "profile": profile_name,
             "email": listing.email,
             "account_id": profile_account,
+            // False when the sign-in rotated and the replacement could not be stored: the
+            // listing below is good, but this profile cannot be used again without a login.
+            "sign_in_stored": sign_in_stored,
             "accounts": accounts.iter().map(|a| serde_json::json!({
                 "id": a.id,
                 "name": a.name,
@@ -342,7 +383,7 @@ async fn switch(
         .refresh(&refresh_token)
         .await
         .map_err(|e| match e {
-            AuthError::Network(_) => auth_err(e),
+            AuthError::Network(_) | AuthError::Transport(_) => auth_err(e),
             _ => RedisCtlError::Structured(Box::new(StructuredError::not_authenticated(format!(
                 "the stored sign-in for profile '{profile_name}' is no longer usable — refresh \
                  tokens expire and are rotated. Run `redisctl --profile {profile_name} cloud auth \
@@ -674,6 +715,15 @@ async fn complete_and_persist(
                 ),
             )));
         }
+        // Selecting the keyring does not establish that it can hold anything: on the Secret
+        // Service backend the connection is made at get/set time, so a locked or absent keyring
+        // still hands back an entry. Ask it to keep a throwaway value before minting a key.
+        store.probe_writable().map_err(|e| {
+            RedisCtlError::Structured(Box::new(StructuredError::keyring_unavailable(format!(
+                "the OS keyring cannot store credentials ({e}). Re-run with \
+                 `--allow-plaintext` to store them in the config file (0600) instead."
+            ))))
+        })?;
         store
     };
 
@@ -1014,6 +1064,26 @@ impl Revocation {
     }
 }
 
+/// Why logout could not revoke anything, when the refresh that would have authorised it failed.
+///
+/// A request that never arrived says nothing about the sign-in. Calling it invalid reports that
+/// there was nothing to revoke, while logout goes on to delete the local credentials — leaving a
+/// live refresh token, which can mint another key, and the profile's key itself alive server-side
+/// with nothing left naming them.
+fn refresh_failure(e: &AuthError, no_key_because: impl Fn(&str) -> String) -> Revocation {
+    let (why, session) = match e {
+        AuthError::Network(_) | AuthError::Transport(_) => (
+            "the identity provider could not be reached",
+            "so the stored sign-in was not revoked.",
+        ),
+        _ => (
+            "the stored sign-in is no longer valid",
+            "so there was nothing to revoke.",
+        ),
+    };
+    Revocation::blocked(no_key_because(why), format!("{why}, {session}"))
+}
+
 /// Revoke the minted key and the stored sign-in, or explain why it could not be done.
 ///
 /// Every failure is reported rather than raised: logout has to finish locally regardless.
@@ -1048,13 +1118,7 @@ async fn revoke_remotely(
     };
     let tokens = match authenticator.refresh(&refresh_token).await {
         Ok(tokens) => tokens,
-        Err(_) => {
-            let why = "the stored sign-in is no longer valid";
-            return Revocation::blocked(
-                no_key_because(why),
-                format!("{why}, so there was nothing to revoke."),
-            );
-        }
+        Err(e) => return refresh_failure(&e, no_key_because),
     };
 
     // Independent from here. The key goes first because deleting it needs the sign-in, but its
@@ -1352,6 +1416,39 @@ fn open_browser(url: &str) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    /// Logout deletes the local credentials whatever happens, so the notes are the only thing
+    /// left saying what is still live server-side. A request that never arrived must not be
+    /// reported as a sign-in that was already dead: that reads as "nothing to revoke" while a
+    /// usable refresh token — and the key it can mint — outlive the command.
+    ///
+    /// Only `Transport` is exercised; `Network` shares its arm and cannot be constructed here
+    /// without taking a `reqwest` dependency for a test.
+    #[test]
+    fn a_refresh_that_never_arrived_is_not_a_dead_sign_in() {
+        let named = |why: &str| format!("the key k-1 was not revoked because {why}");
+        let notes = refresh_failure(&AuthError::Transport("connection refused".into()), named)
+            .notes()
+            .join(" ");
+
+        assert!(notes.contains("could not be reached"), "{notes}");
+        assert!(
+            !notes.contains("no longer valid") && !notes.contains("nothing to revoke"),
+            "a transport failure was reported as a dead sign-in: {notes}"
+        );
+        assert!(notes.contains("k-1"), "{notes}");
+    }
+
+    /// An expired or revoked grant is the other case, and still reads as one.
+    #[test]
+    fn a_rejected_grant_still_reports_nothing_to_revoke() {
+        let named = |why: &str| format!("the key k-1 was not revoked because {why}");
+        let notes = refresh_failure(&AuthError::Protocol("invalid_grant".into()), named)
+            .notes()
+            .join(" ");
+        assert!(notes.contains("no longer valid"), "{notes}");
+        assert!(notes.contains("nothing to revoke"), "{notes}");
+    }
+
     use super::*;
 
     fn minted(superseded_key_name: Option<&str>) -> MintedCredentials {
@@ -1439,6 +1536,34 @@ mod tests {
                 name: None,
             },
         ]
+    }
+
+    /// `login` only asks where the session leaves the account open. Anywhere
+    /// `AccountChoice::Current` could have answered, this answers the same way — otherwise a
+    /// login that used to just work would start stopping for a question.
+    ///
+    /// Not covered here: the several-accounts-and-nothing-to-go-on case, which reads stdin.
+    /// `resolve_account_choice` covers what the answer is then mapped to.
+    #[test]
+    fn login_asks_only_when_the_session_leaves_the_account_open() {
+        // The session names one of them: taken as-is, whatever else is on the list.
+        assert_eq!(
+            account_for_login(&accounts(), Some(481022)).unwrap(),
+            481022
+        );
+
+        // One account: nothing to choose between, whether or not the session claims something.
+        let one = vec![LoginAccount {
+            id: 316941,
+            name: Some("Acme".to_string()),
+        }];
+        for current in [None, Some(999)] {
+            assert_eq!(account_for_login(&one, current).unwrap(), 316941);
+        }
+
+        // No accounts at all is not a question either.
+        let err = account_for_login(&[], None).unwrap_err();
+        assert!(matches!(err, AuthError::Protocol(_)), "got {err:?}");
     }
 
     /// A config file names where credentials are sent, so an endpoint that is not transport-secure

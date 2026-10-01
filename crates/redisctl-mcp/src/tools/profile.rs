@@ -10,7 +10,16 @@ use tower_mcp::{
     CallToolResult, Error as McpError, McpRouter, ResultExt, Tool, ToolBuilder, ToolError,
 };
 
+use crate::policy::ToolSafety;
 use crate::state::AppState;
+
+fn require_tool_allowed(state: &AppState, name: &str, safety: ToolSafety) -> Result<(), McpError> {
+    if state.is_tool_allowed(name, safety) {
+        Ok(())
+    } else {
+        Err(crate::policy::policy_denied(name))
+    }
+}
 
 /// All tool names registered by the App/Profile toolset.
 pub const TOOL_NAMES: &[&str] = &[
@@ -54,9 +63,9 @@ pub fn list_profiles(state: Arc<AppState>) -> Tool {
         .read_only_safe()
         .extractor_handler(
             state,
-            |State(_state): State<Arc<AppState>>, Json(_input): Json<ListProfilesInput>| async move {
-                let config = Config::load()
-                    .tool_context("Failed to load config")?;
+            |State(state): State<Arc<AppState>>, Json(_input): Json<ListProfilesInput>| async move {
+                require_tool_allowed(&state, "profile_list", ToolSafety::ReadOnly)?;
+                let config = Config::load().tool_context("Failed to load config")?;
 
                 let profiles: Vec<ProfileSummary> = config
                     .list_profiles()
@@ -73,7 +82,9 @@ pub fn list_profiles(state: Arc<AppState>) -> Tool {
                             DeploymentType::Enterprise => {
                                 config.default_enterprise.as_ref() == Some(name)
                             }
-                            DeploymentType::Database => config.default_database.as_ref() == Some(name),
+                            DeploymentType::Database => {
+                                config.default_database.as_ref() == Some(name)
+                            }
                         };
 
                         ProfileSummary {
@@ -187,7 +198,8 @@ pub fn show_profile(state: Arc<AppState>) -> Tool {
         .read_only_safe()
         .extractor_handler(
             state,
-            |State(_state): State<Arc<AppState>>, Json(input): Json<ShowProfileInput>| async move {
+            |State(state): State<Arc<AppState>>, Json(input): Json<ShowProfileInput>| async move {
+                require_tool_allowed(&state, "profile_show", ToolSafety::ReadOnly)?;
                 let config = Config::load().tool_context("Failed to load config")?;
 
                 let profile = config
@@ -290,22 +302,26 @@ pub fn show_profile(state: Arc<AppState>) -> Tool {
 pub struct ConfigPathInput {}
 
 /// Build the profile_path tool
-pub fn config_path(_state: Arc<AppState>) -> Tool {
+pub fn config_path(state: Arc<AppState>) -> Tool {
     ToolBuilder::new("profile_path")
         .description("Show the configuration file path.")
         .read_only_safe()
-        .handler(|_input: ConfigPathInput| async move {
-            let path = Config::config_path().tool_context("Failed to get config path")?;
+        .extractor_handler(
+            state,
+            |State(state): State<Arc<AppState>>, Json(_input): Json<ConfigPathInput>| async move {
+                require_tool_allowed(&state, "profile_path", ToolSafety::ReadOnly)?;
+                let path = Config::config_path().tool_context("Failed to get config path")?;
 
-            let exists = path.exists();
-            let output = format!(
-                "Configuration file: {}\nExists: {}",
-                path.display(),
-                if exists { "yes" } else { "no" }
-            );
+                let exists = path.exists();
+                let output = format!(
+                    "Configuration file: {}\nExists: {}",
+                    path.display(),
+                    if exists { "yes" } else { "no" }
+                );
 
-            Ok(CallToolResult::text(output))
-        })
+                Ok(CallToolResult::text(output))
+            },
+        )
         .build()
 }
 
@@ -324,7 +340,8 @@ pub fn validate_config(state: Arc<AppState>) -> Tool {
         .read_only_safe()
         .extractor_handler(
             state,
-            |State(_state): State<Arc<AppState>>, Json(input): Json<ValidateConfigInput>| async move {
+            |State(state): State<Arc<AppState>>, Json(input): Json<ValidateConfigInput>| async move {
+            require_tool_allowed(&state, "profile_validate", ToolSafety::ReadOnly)?;
             let path = Config::config_path()
                 .tool_context("Failed to get config path")?;
 
@@ -467,7 +484,7 @@ pub fn validate_config(state: Arc<AppState>) -> Tool {
                         #[cfg(feature = "cloud")]
                         DeploymentType::Cloud => {
                             output.push_str(&format!("  {}: ", name));
-                            match _state.cloud_client_for_profile(Some(name)).await {
+                            match state.cloud_client_for_profile(Some(name)).await {
                                 Ok(client) => {
                                     use redis_cloud::flexible::SubscriptionHandler;
                                     let handler = SubscriptionHandler::new(client);
@@ -492,7 +509,7 @@ pub fn validate_config(state: Arc<AppState>) -> Tool {
                         #[cfg(feature = "enterprise")]
                         DeploymentType::Enterprise => {
                             output.push_str(&format!("  {}: ", name));
-                            match _state.enterprise_client_for_profile(Some(name)).await {
+                            match state.enterprise_client_for_profile(Some(name)).await {
                                 Ok(client) => {
                                     use redis_enterprise::cluster::ClusterHandler;
                                     let handler = ClusterHandler::new(client);
@@ -600,10 +617,11 @@ pub fn set_default_cloud(state: Arc<AppState>) -> Tool {
         .extractor_handler(
             state,
             |State(state): State<Arc<AppState>>, Json(input): Json<SetDefaultCloudInput>| async move {
-                // Check write permission
-                if !state.is_write_allowed() {
-                    return Err(McpError::tool("Write operations require --read-only=false"));
-                }
+                require_tool_allowed(
+                    &state,
+                    "profile_set_default_cloud",
+                    ToolSafety::Write,
+                )?;
 
                 let mut config = Config::load()
                     .tool_context("Failed to load config")?;
@@ -651,10 +669,11 @@ pub fn set_default_enterprise(state: Arc<AppState>) -> Tool {
         .extractor_handler(
             state,
             |State(state): State<Arc<AppState>>, Json(input): Json<SetDefaultEnterpriseInput>| async move {
-                // Check write permission
-                if !state.is_write_allowed() {
-                    return Err(McpError::tool("Write operations require --read-only=false"));
-                }
+                require_tool_allowed(
+                    &state,
+                    "profile_set_default_enterprise",
+                    ToolSafety::Write,
+                )?;
 
                 let mut config = Config::load()
                     .tool_context("Failed to load config")?;
@@ -701,12 +720,7 @@ pub fn delete_profile(state: Arc<AppState>) -> Tool {
         .extractor_handler(
             state,
             |State(state): State<Arc<AppState>>, Json(input): Json<DeleteProfileInput>| async move {
-                // Check destructive permission
-                if !state.is_destructive_allowed() {
-                    return Err(McpError::tool(
-                        "Destructive operations require policy tier 'full'",
-                    ));
-                }
+                require_tool_allowed(&state, "profile_delete", ToolSafety::Destructive)?;
 
                 let mut config = Config::load().tool_context("Failed to load config")?;
 
@@ -807,10 +821,7 @@ pub fn create_profile(state: Arc<AppState>) -> Tool {
             state,
             |State(state): State<Arc<AppState>>,
              Json(input): Json<CreateProfileInput>| async move {
-                // Check write permission
-                if !state.is_write_allowed() {
-                    return Err(McpError::tool("Write operations require --read-only=false"));
-                }
+                require_tool_allowed(&state, "profile_create", ToolSafety::Write)?;
 
                 let mut config = Config::load().unwrap_or_default();
 

@@ -25,9 +25,9 @@ use serial_test::serial;
 use tokio::sync::OnceCell;
 use tower_mcp::Tool;
 
-use redisctl_mcp::AppState;
 use redisctl_mcp::tools::redis;
-use support::{database_state_full, database_state_readonly, database_state_write};
+use redisctl_mcp::{AppState, CredentialSource, Policy, PolicyConfig, SafetyTier, ToolsetKind};
+use support::{database_state_full, database_state_readonly};
 
 // ============================================================================
 // Test infrastructure
@@ -84,12 +84,28 @@ fn make_state(port: u16) -> Arc<AppState> {
     database_state_readonly(redis_url(port))
 }
 
-fn make_rw_state(port: u16) -> Arc<AppState> {
-    database_state_write(redis_url(port))
-}
-
 fn make_full_state(port: u16) -> Arc<AppState> {
     database_state_full(redis_url(port))
+}
+
+fn make_rw_state_with_allows(port: u16, allow: &[&str]) -> Arc<AppState> {
+    let mut config = PolicyConfig::default();
+    config.tier = SafetyTier::ReadWrite;
+    config.allow = allow.iter().map(|name| (*name).to_string()).collect();
+    let mapping = redis::tool_names()
+        .into_iter()
+        .map(|name| (name, ToolsetKind::Database))
+        .collect();
+    Arc::new(
+        AppState::new(
+            CredentialSource::Profiles(Vec::new()),
+            Arc::new(Policy::new(config, mapping, "redis-stack-test".to_string())),
+            Some(redis_url(port)),
+            false,
+            None,
+        )
+        .expect("Redis Stack test state should be valid"),
+    )
 }
 
 async fn call_tool_text(tool: &Tool, input: serde_json::Value) -> String {
@@ -419,7 +435,7 @@ async fn test_bulk_seed_tools() {
     let ctx = get_redis_stack()
         .await
         .expect("Failed to get Redis Stack container");
-    let state = make_rw_state(ctx.port);
+    let state = make_rw_state_with_allows(ctx.port, &["redis_bulk_load"]);
     let mut conn = get_conn(ctx.port).await;
 
     cleanup(&mut conn, "bulk_").await;
@@ -445,6 +461,45 @@ async fn test_bulk_seed_tools() {
     // Verify bulk_k1
     let text = call_tool_text(&redis::get(state.clone()), json!({"key": "bulk_k1"})).await;
     assert!(text.contains("v1"), "get bulk_k1: {}", text);
+
+    // The entire batch is authorized before its first command. A destructive
+    // command under read-write policy must not leave the earlier SET applied.
+    let _: () = ::redis::cmd("SET")
+        .arg("bulk_canary")
+        .arg("preserved")
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    let result = redis::bulk_load(state.clone())
+        .call(json!({"commands": [
+            {"args": ["SET", "bulk_partial", "must-not-exist"]},
+            {"args": ["DEL", "bulk_canary"]}
+        ]}))
+        .await;
+    assert!(result.is_error, "mixed-risk batch should be denied");
+    let partial: Option<String> = ::redis::cmd("GET")
+        .arg("bulk_partial")
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    let canary: Option<String> = ::redis::cmd("GET")
+        .arg("bulk_canary")
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(partial, None);
+    assert_eq!(canary.as_deref(), Some("preserved"));
+
+    let result = redis::bulk_load(state.clone())
+        .call(json!({"commands": [{"args": ["BGSAVE"]}]}))
+        .await;
+    assert!(result.is_error, "blocked commands must fail at every tier");
+
+    let full_state = make_full_state(ctx.port);
+    let result = redis::bulk_load(full_state)
+        .call(json!({"commands": [{"args": ["DEL", "bulk_canary"]}]}))
+        .await;
+    assert!(!result.is_error, "Full policy should permit DEL");
 
     // redis_seed -- 5 hash records
     let text = call_tool_text(
@@ -647,7 +702,7 @@ async fn test_alias_tools() {
     let ctx = get_redis_stack()
         .await
         .expect("Failed to get Redis Stack container");
-    let state = make_rw_state(ctx.port);
+    let state = make_rw_state_with_allows(ctx.port, &["redis_alias_run"]);
     let mut conn = get_conn(ctx.port).await;
 
     cleanup(&mut conn, "alias_doc:").await;
@@ -702,6 +757,53 @@ async fn test_alias_tools() {
     )
     .await;
     assert!(text.contains("42"), "alias_run json-roundtrip: {}", text);
+
+    // Unsafe aliases are rejected before storage, and replay validates again
+    // in case an alias entered state through another API.
+    let result = redis::alias_set(state.clone())
+        .call(json!({"name": "blocked", "commands": [{"args": ["BGSAVE"]}]}))
+        .await;
+    assert!(result.is_error, "blocked alias should be rejected");
+    assert!(state.get_alias("blocked").await.is_none());
+
+    state
+        .set_alias(
+            "injected-blocked".to_string(),
+            vec![vec!["BGSAVE".to_string()]],
+        )
+        .await;
+    let result = redis::alias_run(state.clone())
+        .call(json!({"name": "injected-blocked"}))
+        .await;
+    assert!(result.is_error, "alias replay must revalidate commands");
+
+    state
+        .set_alias(
+            "injected-destructive".to_string(),
+            vec![vec!["DEL".to_string(), "alias_doc:1".to_string()]],
+        )
+        .await;
+    let result = redis::alias_run(state.clone())
+        .call(json!({"name": "injected-destructive"}))
+        .await;
+    assert!(
+        result.is_error,
+        "an explicit alias-run allow must not raise the dynamic safety ceiling"
+    );
+    let still_exists: bool = ::redis::cmd("EXISTS")
+        .arg("alias_doc:1")
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    assert!(still_exists, "denied alias must not execute DEL");
+
+    let result = redis::alias_set(state.clone())
+        .call(json!({"name": "destructive", "commands": [{"args": ["DEL", "alias_doc:1"]}]}))
+        .await;
+    assert!(
+        result.is_error,
+        "destructive alias should require Full policy"
+    );
 
     // redis_alias_delete -- delete ping-check
     let text = call_tool_text(

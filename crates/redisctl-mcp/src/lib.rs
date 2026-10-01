@@ -137,6 +137,30 @@ mod tests {
     }
 
     #[test]
+    fn test_app_state_uses_resolved_tool_policy() {
+        use policy::{Policy, PolicyConfig, ToolSafety, ToolsetKind};
+        let policy = Arc::new(Policy::new(
+            PolicyConfig {
+                allow: vec!["profile_create".to_string()],
+                ..Default::default()
+            },
+            std::collections::HashMap::from([("profile_create".to_string(), ToolsetKind::App)]),
+            "test".to_string(),
+        ));
+        let state = AppState::new(
+            CredentialSource::Profiles(vec![]),
+            policy,
+            None,
+            false,
+            None,
+        )
+        .unwrap();
+
+        assert!(state.is_tool_allowed("profile_create", ToolSafety::Write));
+        assert!(!state.is_tool_allowed("unregistered", ToolSafety::ReadOnly));
+    }
+
+    #[test]
     fn test_app_state_database_url() {
         let state = AppState::new(
             CredentialSource::Profiles(vec![]),

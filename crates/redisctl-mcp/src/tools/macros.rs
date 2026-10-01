@@ -14,9 +14,9 @@
 ///
 /// # Safety tiers
 ///
-/// - `read_only` — `.read_only_safe()`, no permission guard
-/// - `write` — `.non_destructive()`, checks `state.is_write_allowed()`
-/// - `destructive` — `.destructive()`, checks `state.is_destructive_allowed()`
+/// - `read_only` — `.read_only_safe()`, resolved read authorization
+/// - `write` — `.non_destructive()`, resolved write authorization
+/// - `destructive` — `.destructive()`, resolved destructive authorization
 ///
 /// # Example
 ///
@@ -35,21 +35,21 @@
 macro_rules! database_tool {
     // --- Permission guard dispatch ---
 
-    (@guard no_guard $state:ident) => {};
-
-    (@guard write_guard $state:ident) => {
-        if !$state.is_write_allowed() {
-            return Err(tower_mcp::Error::tool(
-                "Write operations not allowed in read-only mode",
-            ));
+    (@guard read_guard $state:ident, $tool_name:expr) => {
+        if !$state.is_tool_allowed($tool_name, crate::policy::ToolSafety::ReadOnly) {
+            return Err(crate::policy::policy_denied($tool_name));
         }
     };
 
-    (@guard destructive_guard $state:ident) => {
-        if !$state.is_destructive_allowed() {
-            return Err(tower_mcp::Error::tool(
-                "Destructive operations require policy tier 'full'",
-            ));
+    (@guard write_guard $state:ident, $tool_name:expr) => {
+        if !$state.is_tool_allowed($tool_name, crate::policy::ToolSafety::Write) {
+            return Err(crate::policy::policy_denied($tool_name));
+        }
+    };
+
+    (@guard destructive_guard $state:ident, $tool_name:expr) => {
+        if !$state.is_tool_allowed($tool_name, crate::policy::ToolSafety::Destructive) {
+            return Err(crate::policy::policy_denied($tool_name));
         }
     };
 
@@ -82,7 +82,7 @@ macro_rules! database_tool {
                         state,
                         |tower_mcp::extract::State(state): tower_mcp::extract::State<std::sync::Arc<crate::state::AppState>>,
                          tower_mcp::extract::Json(mut $input): tower_mcp::extract::Json<[<$fn_name:camel Input>]>| async move {
-                            database_tool!(@guard $guard state);
+                            database_tool!(@guard $guard state, $tool_name);
                             #[allow(unused_mut)]
                             let mut $conn = super::get_connection(
                                 $input.url.take(), $input.profile.as_deref(), &state
@@ -126,7 +126,7 @@ macro_rules! database_tool {
                         state,
                         |tower_mcp::extract::State($state): tower_mcp::extract::State<std::sync::Arc<crate::state::AppState>>,
                          tower_mcp::extract::Json(mut $input): tower_mcp::extract::Json<[<$fn_name:camel Input>]>| async move {
-                            database_tool!(@guard $guard $state);
+                            database_tool!(@guard $guard $state, $tool_name);
                             #[allow(unused_mut)]
                             let mut $conn = super::get_connection(
                                 $input.url.take(), $input.profile.as_deref(), &$state
@@ -143,7 +143,7 @@ macro_rules! database_tool {
     // --- Public entry points ---
 
     (read_only, $($rest:tt)*) => {
-        database_tool!(@impl read_only_safe, no_guard, $($rest)*);
+        database_tool!(@impl read_only_safe, read_guard, $($rest)*);
     };
     (write, $($rest:tt)*) => {
         database_tool!(@impl non_destructive, write_guard, $($rest)*);
@@ -154,7 +154,7 @@ macro_rules! database_tool {
 
     // Stateful variants — handler receives |state, conn, input| instead of |conn, input|
     (read_only_stateful, $($rest:tt)*) => {
-        database_tool!(@impl_stateful read_only_safe, no_guard, $($rest)*);
+        database_tool!(@impl_stateful read_only_safe, read_guard, $($rest)*);
     };
     (write_stateful, $($rest:tt)*) => {
         database_tool!(@impl_stateful non_destructive, write_guard, $($rest)*);
@@ -189,21 +189,21 @@ pub(crate) use database_tool;
 /// ```
 #[allow(unused_macros)]
 macro_rules! cloud_tool {
-    (@guard no_guard $state:ident) => {};
-
-    (@guard write_guard $state:ident) => {
-        if !$state.is_write_allowed() {
-            return Err(tower_mcp::Error::tool(
-                "Write operations not allowed in read-only mode",
-            ));
+    (@guard read_guard $state:ident, $tool_name:expr) => {
+        if !$state.is_tool_allowed($tool_name, crate::policy::ToolSafety::ReadOnly) {
+            return Err(crate::policy::policy_denied($tool_name));
         }
     };
 
-    (@guard destructive_guard $state:ident) => {
-        if !$state.is_destructive_allowed() {
-            return Err(tower_mcp::Error::tool(
-                "Destructive operations require policy tier 'full'",
-            ));
+    (@guard write_guard $state:ident, $tool_name:expr) => {
+        if !$state.is_tool_allowed($tool_name, crate::policy::ToolSafety::Write) {
+            return Err(crate::policy::policy_denied($tool_name));
+        }
+    };
+
+    (@guard destructive_guard $state:ident, $tool_name:expr) => {
+        if !$state.is_tool_allowed($tool_name, crate::policy::ToolSafety::Destructive) {
+            return Err(crate::policy::policy_denied($tool_name));
         }
     };
 
@@ -231,7 +231,7 @@ macro_rules! cloud_tool {
                         state,
                         |tower_mcp::extract::State(state): tower_mcp::extract::State<std::sync::Arc<crate::state::AppState>>,
                          tower_mcp::extract::Json($input): tower_mcp::extract::Json<[<$fn_name:camel Input>]>| async move {
-                            cloud_tool!(@guard $guard state);
+                            cloud_tool!(@guard $guard state, $tool_name);
                             let $client = state
                                 .cloud_client_for_profile($input.profile.as_deref())
                                 .await
@@ -247,7 +247,7 @@ macro_rules! cloud_tool {
     };
 
     (read_only, $($rest:tt)*) => {
-        cloud_tool!(@impl read_only_safe, no_guard, $($rest)*);
+        cloud_tool!(@impl read_only_safe, read_guard, $($rest)*);
     };
     (write, $($rest:tt)*) => {
         cloud_tool!(@impl non_destructive, write_guard, $($rest)*);
@@ -282,21 +282,21 @@ pub(crate) use cloud_tool;
 /// ```
 #[allow(unused_macros)]
 macro_rules! enterprise_tool {
-    (@guard no_guard $state:ident) => {};
-
-    (@guard write_guard $state:ident) => {
-        if !$state.is_write_allowed() {
-            return Err(tower_mcp::Error::tool(
-                "Write operations not allowed in read-only mode",
-            ));
+    (@guard read_guard $state:ident, $tool_name:expr) => {
+        if !$state.is_tool_allowed($tool_name, crate::policy::ToolSafety::ReadOnly) {
+            return Err(crate::policy::policy_denied($tool_name));
         }
     };
 
-    (@guard destructive_guard $state:ident) => {
-        if !$state.is_destructive_allowed() {
-            return Err(tower_mcp::Error::tool(
-                "Destructive operations require policy tier 'full'",
-            ));
+    (@guard write_guard $state:ident, $tool_name:expr) => {
+        if !$state.is_tool_allowed($tool_name, crate::policy::ToolSafety::Write) {
+            return Err(crate::policy::policy_denied($tool_name));
+        }
+    };
+
+    (@guard destructive_guard $state:ident, $tool_name:expr) => {
+        if !$state.is_tool_allowed($tool_name, crate::policy::ToolSafety::Destructive) {
+            return Err(crate::policy::policy_denied($tool_name));
         }
     };
 
@@ -324,7 +324,7 @@ macro_rules! enterprise_tool {
                         state,
                         |tower_mcp::extract::State(state): tower_mcp::extract::State<std::sync::Arc<crate::state::AppState>>,
                          tower_mcp::extract::Json($input): tower_mcp::extract::Json<[<$fn_name:camel Input>]>| async move {
-                            enterprise_tool!(@guard $guard state);
+                            enterprise_tool!(@guard $guard state, $tool_name);
                             let $client = state
                                 .enterprise_client_for_profile($input.profile.as_deref())
                                 .await
@@ -340,7 +340,7 @@ macro_rules! enterprise_tool {
     };
 
     (read_only, $($rest:tt)*) => {
-        enterprise_tool!(@impl read_only_safe, no_guard, $($rest)*);
+        enterprise_tool!(@impl read_only_safe, read_guard, $($rest)*);
     };
     (write, $($rest:tt)*) => {
         enterprise_tool!(@impl non_destructive, write_guard, $($rest)*);

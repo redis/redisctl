@@ -18,7 +18,7 @@ Or for a more complete configuration:
 enabled = true
 level = "all"
 include_args = true
-redact_fields = ["password", "api_key", "api_secret", "secret"]
+redact_fields = ["password", "db_password", "global_password", "api_key", "api_secret", "access_secret_key", "console_password", "bind_pass", "license_key", "secret", "token"]
 ```
 
 ## Configuration Reference
@@ -28,16 +28,21 @@ redact_fields = ["password", "api_key", "api_secret", "secret"]
 | `enabled` | bool | `false` | Master switch for audit logging |
 | `level` | string | `"all"` | Which events to log (see levels below) |
 | `include_args` | bool | `false` | Include tool arguments in log entries |
-| `redact_fields` | list | `["password", "api_key", "api_secret", "secret"]` | Field names to redact when `include_args` is true |
+| `redact_fields` | list | Common password, API credential, key, secret, and token fields | Additional field names to redact when `include_args` is true |
 
 ## Audit Levels
 
 | Level | Logs |
 |-------|------|
 | `all` | Every tool call (success, error, and denied) |
-| `writes` | Non-read-only calls + errors + denied |
-| `destructive` | Destructive calls + errors + denied |
-| `denied` | Only policy-denied calls and errors |
+| `writes` | Write and destructive calls, including their errors, plus every policy denial |
+| `destructive` | Destructive calls, including their errors, plus every policy denial |
+| `denied` | Only policy-denied calls |
+
+Policy denials are logged at every level. Other tool errors follow the safety
+classification of the tool that was called. The previously documented
+`"mutations"` value remains accepted as an alias for `"writes"`, but new
+configuration should use `"writes"`.
 
 Choose based on your needs:
 
@@ -69,12 +74,12 @@ Audit events are emitted as structured JSON via the `tracing` crate with `target
 | Event | Description |
 |-------|-------------|
 | `tool_invocation` | Tool was called and completed successfully |
-| `tool_denied` | Tool call was blocked by policy (error code -32007) |
+| `tool_denied` | Tool call was blocked by the router or a handler-time policy guard |
 | `tool_error` | Tool call failed with an error |
 
 ### With Arguments
 
-When `include_args = true`, an `arguments` field is added containing the tool's input parameters. Sensitive fields listed in `redact_fields` are replaced with `[REDACTED]`:
+When `include_args = true`, an `arguments` field is added containing the tool's input parameters. Built-in credential fields and the additional fields listed in `redact_fields` are replaced with `[REDACTED]`:
 
 ```json
 {
@@ -89,7 +94,13 @@ When `include_args = true`, an `arguments` field is added containing the tool's 
 }
 ```
 
-Redaction is recursive -- fields are redacted at any depth in the JSON structure.
+Redaction is recursive and matches common credential-field spellings across
+snake_case, kebab-case, and camelCase. Redis credentials embedded in
+`redis://`, `rediss://`, `redis+unix://`, and `unix://` URLs are always
+sanitized. The arbitrary-command tools retain the command name for diagnosis
+but always redact every positional operand, since Redis command arguments can
+carry credentials or application secrets. These mandatory protections cannot
+be disabled by changing `redact_fields`.
 
 ## Routing Audit Logs
 
