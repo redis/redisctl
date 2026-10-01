@@ -117,7 +117,7 @@ impl CredentialStore {
     /// Confirm the backend can actually hold a credential, by storing a throwaway value and
     /// reading it back.
     ///
-    /// [`CredentialStore::is_keyring_available`] only reads, and a backend can answer a read and
+    /// The keyring availability check only reads, and a backend can answer a read and
     /// still refuse a write — a locked macOS keychain, a Windows credential store the session
     /// cannot write, keyutils in a container without `CONFIG_KEYS`. Callers about to create
     /// something they cannot recreate — a minted API key, whose secret is returned once — should
