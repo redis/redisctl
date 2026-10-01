@@ -114,6 +114,14 @@ jobs:
       - name: Run integration tests
         run: cargo test --workspace --test '*' --all-features
 
+      - name: Run Redis MCP command-safety integration tests
+        env:
+          REUSE_CONTAINERS: "1"
+        run: |
+          cargo test -p redisctl-mcp --test redis_tools --all-features test_raw_command -- --ignored --test-threads=1
+          cargo test -p redisctl-mcp --test redis_stack_tools --all-features test_bulk_seed_tools -- --ignored --test-threads=1
+          cargo test -p redisctl-mcp --test redis_stack_tools --all-features test_alias_tools -- --ignored --test-threads=1
+
   # Platform builds - only required for main branch and releases
   build-platforms:
     name: Build - ${{ matrix.os }}

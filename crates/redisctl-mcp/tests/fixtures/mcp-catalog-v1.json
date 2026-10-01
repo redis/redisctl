@@ -7782,7 +7782,7 @@
       "name": "redis_alias_run",
       "toolset": "database",
       "submodule": "aliases",
-      "requiredTier": "read-only",
+      "requiredTier": "full",
       "inputSchema": {
         "properties": {
           "name": {
@@ -7811,9 +7811,9 @@
       "outputSchema": null,
       "annotations": {
         "title": null,
-        "readOnlyHint": true,
-        "destructiveHint": false,
-        "idempotentHint": true,
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
         "openWorldHint": true
       }
     },
@@ -7926,7 +7926,7 @@
       "name": "redis_bulk_load",
       "toolset": "database",
       "submodule": "bulk",
-      "requiredTier": "read-write",
+      "requiredTier": "full",
       "inputSchema": {
         "$defs": {
           "Command": {
@@ -7985,7 +7985,7 @@
       "annotations": {
         "title": null,
         "readOnlyHint": false,
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": false,
         "openWorldHint": true
       }

@@ -16,6 +16,27 @@ use tower_mcp::{CallToolResult, Error as McpError, Tool, ToolBuilder};
 use crate::audit::AuditConfig;
 use crate::presets::ToolsConfig;
 
+/// Stable marker used to distinguish policy denials from ordinary tool errors
+/// after tower-mcp converts handler errors into `CallToolResult::error`.
+pub(crate) const POLICY_DENIED_PREFIX: &str = "Redisctl policy denied:";
+
+pub(crate) fn policy_denied(name: &str) -> McpError {
+    McpError::tool(format!(
+        "{POLICY_DENIED_PREFIX} Tool '{name}' is not allowed by the active policy"
+    ))
+}
+
+#[cfg(any(feature = "database", test))]
+pub(crate) fn policy_denied_for_command(name: &str) -> McpError {
+    McpError::tool(format!(
+        "{POLICY_DENIED_PREFIX} Tool '{name}' is not allowed for this command by the active policy"
+    ))
+}
+
+pub(crate) fn is_policy_denied_message(message: &str) -> bool {
+    message.starts_with(POLICY_DENIED_PREFIX)
+}
+
 /// Safety tier determining which categories of tools are allowed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -28,6 +49,37 @@ pub enum SafetyTier {
     ReadWrite,
     /// All operations including destructive
     Full,
+}
+
+/// Runtime safety classification shared by router filtering and tool handlers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ToolSafety {
+    /// The operation does not modify state.
+    ReadOnly,
+    /// The operation may modify state but is not classified as destructive.
+    Write,
+    /// The operation may have destructive or otherwise high-risk effects.
+    Destructive,
+}
+
+impl ToolSafety {
+    fn from_tool(tool: &Tool) -> Self {
+        let annotations = tool.annotations.as_ref();
+        Self::from_hints(
+            annotations.is_some_and(|value| value.read_only_hint),
+            annotations.is_none_or(|value| value.destructive_hint),
+        )
+    }
+
+    pub(crate) fn from_hints(read_only: bool, destructive: bool) -> Self {
+        if read_only {
+            Self::ReadOnly
+        } else if destructive {
+            Self::Destructive
+        } else {
+            Self::Write
+        }
+    }
 }
 
 impl fmt::Display for SafetyTier {
@@ -329,39 +381,55 @@ impl Policy {
     /// 6. Per-toolset tier (if set) -> evaluate against annotations
     /// 7. Global tier -> evaluate against annotations
     pub fn is_tool_allowed(&self, tool: &Tool) -> bool {
-        let name = &tool.name;
-        let annotations = tool.annotations.as_ref();
-        let is_read_only = annotations.is_some_and(|a| a.read_only_hint);
-        let is_destructive = annotations.is_some_and(|a| a.destructive_hint);
+        self.is_named_tool_allowed(&tool.name, ToolSafety::from_tool(tool))
+    }
+
+    /// Evaluate a named tool at invocation time using the same resolved policy
+    /// order as router filtering.
+    pub(crate) fn is_named_tool_allowed(&self, name: &str, safety: ToolSafety) -> bool {
+        let toolset = self.tool_toolset.get(name).copied();
+
+        // A handler must belong to the resolved router (or be one of the two
+        // built-in system tools). This prevents direct/unfiltered invocation
+        // from turning an allow entry into registration of an unknown tool.
+        if toolset.is_none() && !crate::presets::SYSTEM_TOOLS.contains(&name) {
+            return false;
+        }
 
         // 1. Global deny always wins
-        if self.global_deny.contains(name.as_str()) {
+        if self.global_deny.contains(name) {
             return false;
         }
 
         // 2. Per-toolset deny
-        let toolset = self.tool_toolset.get(name.as_str()).copied();
+        if let Some(kind) = toolset
+            && self
+                .toolset_config(kind)
+                .is_some_and(|policy| policy.enabled == Some(false))
+        {
+            return false;
+        }
         if let Some(kind) = toolset
             && let Some(deny_set) = self.toolset_deny.get(&kind)
-            && deny_set.contains(name.as_str())
+            && deny_set.contains(name)
         {
             return false;
         }
 
         // 3. Category deny
-        if is_destructive && self.deny_destructive {
+        if safety == ToolSafety::Destructive && self.deny_destructive {
             return false;
         }
 
         // 4. Global allow overrides tier
-        if self.global_allow.contains(name.as_str()) {
+        if self.global_allow.contains(name) {
             return true;
         }
 
         // 5. Per-toolset allow overrides tier
         if let Some(kind) = toolset
             && let Some(allow_set) = self.toolset_allow.get(&kind)
-            && allow_set.contains(name.as_str())
+            && allow_set.contains(name)
         {
             return true;
         }
@@ -371,14 +439,52 @@ impl Policy {
             .and_then(|kind| self.toolset_config(kind).and_then(|tp| tp.tier))
             .unwrap_or(self.config.tier);
 
-        Self::tier_allows(effective_tier, is_read_only, is_destructive)
+        Self::tier_allows(effective_tier, safety)
+    }
+
+    /// Evaluate a dynamically discovered risk above a tool's advertised base
+    /// behavior. Explicit tool allows grant the advertised behavior, but must
+    /// not grant a more dangerous command embedded in a raw/bulk invocation.
+    #[cfg(feature = "database")]
+    pub(crate) fn is_dynamic_safety_allowed(&self, name: &str, safety: ToolSafety) -> bool {
+        let toolset = self.tool_toolset.get(name).copied();
+
+        if toolset.is_none() && !crate::presets::SYSTEM_TOOLS.contains(&name) {
+            return false;
+        }
+        if self.global_deny.contains(name) {
+            return false;
+        }
+        if let Some(kind) = toolset
+            && self
+                .toolset_config(kind)
+                .is_some_and(|policy| policy.enabled == Some(false))
+        {
+            return false;
+        }
+        if let Some(kind) = toolset
+            && self
+                .toolset_deny
+                .get(&kind)
+                .is_some_and(|deny| deny.contains(name))
+        {
+            return false;
+        }
+        if safety == ToolSafety::Destructive && self.deny_destructive {
+            return false;
+        }
+
+        let effective_tier = toolset
+            .and_then(|kind| self.toolset_config(kind).and_then(|policy| policy.tier))
+            .unwrap_or(self.config.tier);
+        Self::tier_allows(effective_tier, safety)
     }
 
     /// Check if a tier allows a tool based on its annotations.
-    fn tier_allows(tier: SafetyTier, is_read_only: bool, is_destructive: bool) -> bool {
+    fn tier_allows(tier: SafetyTier, safety: ToolSafety) -> bool {
         match tier {
-            SafetyTier::ReadOnly => is_read_only,
-            SafetyTier::ReadWrite => !is_destructive,
+            SafetyTier::ReadOnly => safety == ToolSafety::ReadOnly,
+            SafetyTier::ReadWrite => safety != ToolSafety::Destructive,
             SafetyTier::Full => true,
         }
     }
@@ -590,12 +696,26 @@ mod tests {
             .build()
     }
 
-    fn empty_mapping() -> HashMap<String, ToolsetKind> {
-        HashMap::new()
+    fn test_mapping() -> HashMap<String, ToolsetKind> {
+        [
+            "backup_database",
+            "cloud_raw_api",
+            "create_database",
+            "delete_database",
+            "enterprise_raw_api",
+            "flush_database",
+            "list_subscriptions",
+            "redis_command",
+            "redis_set",
+            "unknown",
+        ]
+        .into_iter()
+        .map(|name| (name.to_string(), ToolsetKind::Cloud))
+        .collect()
     }
 
     fn policy_with_config(config: PolicyConfig) -> Policy {
-        Policy::new(config, empty_mapping(), "test".to_string())
+        Policy::new(config, test_mapping(), "test".to_string())
     }
 
     // -- Tier evaluation tests --
@@ -685,6 +805,20 @@ mod tests {
         });
         let tool = make_write_tool("create_database");
         assert!(policy.is_tool_allowed(&tool));
+        assert!(policy.is_named_tool_allowed("create_database", ToolSafety::Write));
+    }
+
+    #[test]
+    fn unknown_tools_fail_closed_even_when_explicitly_allowed() {
+        let policy = policy_with_config(PolicyConfig {
+            tier: SafetyTier::Full,
+            allow: vec!["not_registered".to_string()],
+            ..Default::default()
+        });
+        let tool = make_read_only_tool("not_registered");
+
+        assert!(!policy.is_tool_allowed(&tool));
+        assert!(!policy.is_named_tool_allowed("not_registered", ToolSafety::ReadOnly));
     }
 
     #[test]
@@ -743,6 +877,28 @@ mod tests {
 
         assert!(policy.is_tool_allowed(&cloud_write)); // Cloud is read-write
         assert!(!policy.is_tool_allowed(&ent_write)); // Enterprise inherits read-only
+    }
+
+    #[test]
+    fn restrictive_toolset_tier_overrides_global_full() {
+        let mut mapping = HashMap::new();
+        mapping.insert("create_database".to_string(), ToolsetKind::Cloud);
+        let policy = Policy::new(
+            PolicyConfig {
+                tier: SafetyTier::Full,
+                cloud: Some(ToolsetPolicy {
+                    tier: Some(SafetyTier::ReadOnly),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            mapping,
+            "test".to_string(),
+        );
+        let tool = make_write_tool("create_database");
+
+        assert!(!policy.is_tool_allowed(&tool));
+        assert!(!policy.is_named_tool_allowed("create_database", ToolSafety::Write));
     }
 
     #[test]

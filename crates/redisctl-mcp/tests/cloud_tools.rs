@@ -3,6 +3,7 @@
 
 mod support;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use redis_cloud::testing::{
@@ -19,8 +20,8 @@ use wiremock::ResponseTemplate;
 // `body_partial_json`, which does a genuine partial (subset) match.
 use wiremock::matchers::body_partial_json;
 
-use redisctl_mcp::AppState;
 use redisctl_mcp::tools::cloud;
+use redisctl_mcp::{AppState, Policy, PolicyConfig, ToolsetKind};
 use support::state_full;
 
 /// Create an AppState with full-tier policy for testing write/destructive tools.
@@ -4967,6 +4968,29 @@ async fn cloud_auth_status_reports_authenticated_without_secrets() {
     assert!(!text.contains("secret"), "response leaked 'secret': {text}");
     assert!(!text.to_lowercase().contains("bearer"));
     assert!(!text.contains("api_secret"));
+}
+
+#[tokio::test]
+async fn cloud_auth_status_honors_handler_time_policy() {
+    let server = MockCloudServer::start().await;
+    let mut state = AppState::with_cloud_client(server.client());
+    let mut config = PolicyConfig::default();
+    config.deny = vec!["cloud_auth_status".to_string()];
+    state.set_test_policy(Arc::new(Policy::new(
+        config,
+        HashMap::from([("cloud_auth_status".to_string(), ToolsetKind::Cloud)]),
+        "cloud-auth-status-guard-test".to_string(),
+    )));
+    let tool = cloud::cloud_auth_status(Arc::new(state));
+
+    let result = tool.call(json!({})).await;
+    assert!(result.is_error);
+    let text = result
+        .content
+        .first()
+        .and_then(|content| content.as_text())
+        .unwrap_or_default();
+    assert!(text.contains("not allowed by the active policy"), "{text}");
 }
 
 #[tokio::test]

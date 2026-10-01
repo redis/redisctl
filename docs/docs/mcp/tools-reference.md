@@ -315,8 +315,13 @@ Session-scoped command aliases -- save, list, run, and delete named command sequ
 |------|-------------|
 | `redis_alias_set` | Save a named command alias *(write)* |
 | `redis_alias_list` | List all saved aliases |
-| `redis_alias_run` | Execute a saved alias |
+| `redis_alias_run` | Execute a saved alias *(destructive)* |
 | `redis_alias_delete` | Delete a saved alias *(write)* |
+
+`redis_alias_run` is conservatively advertised as destructive (Full by default): an alias may
+contain commands that mutate or delete data. Commands are classified again before every run.
+Destructive or unknown commands require Full policy, while blocked connection-state, blocking,
+and administrative variants cannot run at any policy tier.
 
 ### `database:bulk` (2 tools)
 
@@ -324,14 +329,22 @@ Bulk data generation and loading for repeatable prototyping and test workflows.
 
 | Tool | Description |
 |------|-------------|
-| `redis_bulk_load` | Execute a bounded batch of Redis commands *(write)* |
+| `redis_bulk_load` | Execute a bounded batch of arbitrary Redis commands *(destructive)* |
 | `redis_seed` | Generate representative Redis data structures *(write)* |
+
+`redis_bulk_load` is conservatively advertised as destructive (Full by default) and preflights the
+entire batch before executing its first command. Destructive or unknown commands require Full
+policy, and blocked commands reject the whole batch without applying earlier commands.
 
 ### `database:raw` (1 tool)
 
 | Tool | Description |
 |------|-------------|
 | `redis_command` | Execute arbitrary Redis commands |
+
+The raw, bulk, and alias command surfaces share one command classifier. See
+[Raw API and arbitrary-command tools](configuration.md#raw-api-and-arbitrary-command-tools) for
+classification and blocking rules.
 
 ## App Toolset (8 tools)
 
