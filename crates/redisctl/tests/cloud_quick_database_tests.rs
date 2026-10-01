@@ -737,3 +737,52 @@ async fn database_credentials_writes_existing_db_without_provisioning() {
     )));
     assert!(env_body.contains("REDIS_HOST=mock-host.example.com"));
 }
+
+/// `database-credentials` validates the variable name too. It shares the delivery path with
+/// `quick-database`, where the name is interpolated as `KEY=value`, so a newline would write an
+/// assignment of its own. No mocks are mounted: the refusal must come before any API call.
+#[tokio::test]
+async fn database_credentials_refuses_a_variable_that_is_not_an_env_var_name() {
+    let temp = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    write_cloud_profile(&temp, &server.uri());
+    let env_path = temp.path().join(".env");
+
+    let mut cmd = Command::cargo_bin("redisctl").unwrap();
+    cmd.env_remove("REDIS_CLOUD_API_KEY");
+    cmd.env_remove("REDIS_CLOUD_SECRET_KEY");
+    cmd.env_remove("REDIS_CLOUD_API_URL");
+    cmd.env_remove("REDISCTL_PROFILE");
+    let output = cmd
+        .arg("--config-file")
+        .arg(temp.path().join("config.toml"))
+        .args([
+            "cloud",
+            "workflow",
+            "database-credentials",
+            "--subscription-id",
+            &SUB_ID.to_string(),
+            "--database-id",
+            &DB_ID.to_string(),
+            "--variable",
+            "REDIS_URL\nINJECTED=owned",
+            "-o",
+            "json",
+        ])
+        .arg("--output-credentials")
+        .arg(&env_path)
+        .assert()
+        .code(2)
+        .get_output()
+        .clone();
+
+    let env: Value = serde_json::from_slice(&output.stdout).expect("stdout is JSON");
+    assert_eq!(env["status"], "error");
+    assert_eq!(env["error"]["code"], "invalid_name");
+    assert_eq!(env["error"]["retryable"], false);
+    assert!(!env_path.exists(), "no credentials file on refusal");
+    assert!(
+        server.received_requests().await.unwrap().is_empty(),
+        "refused after calling the API"
+    );
+}

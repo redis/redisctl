@@ -140,6 +140,7 @@ pub async fn existing_database_report(
     database_id: i32,
     params: &QuickDatabaseParams,
 ) -> QResult<QuickDatabaseReport> {
+    validate_variable(&params.variable)?;
     let db = fetch_ready_database(client, subscription_id, database_id, params).await?;
     deliver_and_report(&db, params, database_id, "existing", "essentials")
 }
@@ -198,15 +199,7 @@ fn deliver_and_report(
 /// no `--`.
 /// An env-var name, so it cannot carry a newline into the credentials file and inject lines.
 fn validate_variable(variable: &str) -> QResult<()> {
-    let valid = !variable.is_empty()
-        && variable
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && variable
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_');
-    if valid {
+    if super::env_delivery::is_env_var_name(variable) {
         Ok(())
     } else {
         Err(QuickDatabaseError::InvalidName(format!(
