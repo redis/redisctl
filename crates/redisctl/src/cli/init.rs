@@ -1,7 +1,7 @@
 //! `redisctl init` argument surface.
 //!
-//! This surface is the stability contract for the `@redis/redisctl` npm wrapper:
-//! flags may be added, never renamed or repurposed once released.
+//! Scripts, agents and wrappers drive these flags without a terminal, so they are a
+//! stability contract: flags may be added, never renamed or repurposed once released.
 
 use crate::workflows::init::engine::mask_url;
 use clap::Args;
