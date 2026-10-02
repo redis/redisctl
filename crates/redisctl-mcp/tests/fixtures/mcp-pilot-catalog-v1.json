@@ -1,0 +1,1300 @@
+{
+  "formatVersion": 1,
+  "tools": [
+    {
+      "name": "redis_dbsize",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "key_count": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "key_count"
+        ],
+        "title": "DbsizeOutput",
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "redis_digest",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "KeyInput",
+        "type": "object",
+        "properties": {
+          "key": {
+            "description": "Redis key.",
+            "type": "string"
+          },
+          "key_encoding": {
+            "description": "Encoding of `key`.",
+            "$ref": "#/$defs/InputEncoding",
+            "default": "utf8"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "key"
+        ],
+        "$defs": {
+          "InputEncoding": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "base64"
+            ]
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "exists": {
+            "type": "boolean"
+          },
+          "digest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "algorithm": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "exists",
+          "algorithm"
+        ],
+        "title": "DigestOutput",
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "redis_dump",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "DumpInput",
+        "type": "object",
+        "properties": {
+          "key": {
+            "description": "Redis key.",
+            "type": "string"
+          },
+          "key_encoding": {
+            "description": "Encoding of `key`.",
+            "$ref": "#/$defs/InputEncoding",
+            "default": "utf8"
+          },
+          "max_bytes": {
+            "description": "Maximum serialized payload bytes accepted by this call.",
+            "type": "integer",
+            "format": "uint",
+            "minimum": 1,
+            "default": 65536
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "key"
+        ],
+        "$defs": {
+          "InputEncoding": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "base64"
+            ]
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "key_encoding": {
+            "$ref": "#/$defs/InputEncoding"
+          },
+          "exists": {
+            "type": "boolean"
+          },
+          "payload_base64": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "payload_bytes": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "key",
+          "key_encoding",
+          "exists",
+          "payload_bytes"
+        ],
+        "title": "DumpOutput",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "InputEncoding": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "base64"
+            ]
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "redis_exists",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "KeysInput",
+        "type": "object",
+        "properties": {
+          "keys": {
+            "description": "Redis keys. Between 1 and 1000 keys are accepted per call.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "maxItems": 1000
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "keys"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "requested": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "existing": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "all_exist": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "requested",
+          "existing",
+          "all_exist"
+        ],
+        "title": "ExistsOutput",
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "redis_get",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "KeyInput",
+        "type": "object",
+        "properties": {
+          "key": {
+            "description": "Redis key.",
+            "type": "string"
+          },
+          "key_encoding": {
+            "description": "Encoding of `key`.",
+            "$ref": "#/$defs/InputEncoding",
+            "default": "utf8"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "key"
+        ],
+        "$defs": {
+          "InputEncoding": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "base64"
+            ]
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "key_encoding": {
+            "$ref": "#/$defs/InputEncoding"
+          },
+          "exists": {
+            "type": "boolean"
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "encoding": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ValueEncoding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "key",
+          "key_encoding",
+          "exists"
+        ],
+        "title": "GetOutput",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "InputEncoding": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "base64"
+            ]
+          },
+          "ValueEncoding": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "base64"
+            ]
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "redis_getrange",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GetRangeInput",
+        "type": "object",
+        "properties": {
+          "key": {
+            "description": "Redis key.",
+            "type": "string"
+          },
+          "key_encoding": {
+            "description": "Encoding of `key`.",
+            "$ref": "#/$defs/InputEncoding",
+            "default": "utf8"
+          },
+          "start": {
+            "description": "Inclusive non-negative byte offset.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "end": {
+            "description": "Inclusive non-negative byte offset, at most 65536 bytes after `start`.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "start",
+          "end"
+        ],
+        "$defs": {
+          "InputEncoding": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "base64"
+            ]
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "key_encoding": {
+            "$ref": "#/$defs/InputEncoding"
+          },
+          "start": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "end": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "bytes": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "value": {
+            "type": "string"
+          },
+          "encoding": {
+            "$ref": "#/$defs/ValueEncoding"
+          }
+        },
+        "required": [
+          "key",
+          "key_encoding",
+          "start",
+          "end",
+          "bytes",
+          "value",
+          "encoding"
+        ],
+        "title": "GetRangeOutput",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "InputEncoding": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "base64"
+            ]
+          },
+          "ValueEncoding": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "base64"
+            ]
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "redis_memory_usage",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "KeyInput",
+        "type": "object",
+        "properties": {
+          "key": {
+            "description": "Redis key.",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "key"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "exists": {
+            "type": "boolean"
+          },
+          "bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "key",
+          "exists"
+        ],
+        "title": "MemoryUsageOutput",
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "redis_mget",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "KeysInput",
+        "type": "object",
+        "properties": {
+          "keys": {
+            "description": "Redis keys. Between 1 and 1000 keys are accepted per call.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "maxItems": 1000
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "keys"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "values": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/MgetEntry"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "values",
+          "count"
+        ],
+        "title": "MgetOutput",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "MgetEntry": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "exists": {
+                "type": "boolean"
+              },
+              "value": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "encoding": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ValueEncoding"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "key",
+              "exists"
+            ]
+          },
+          "ValueEncoding": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "base64"
+            ]
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "redis_object_inspect",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ObjectInspectInput",
+        "type": "object",
+        "properties": {
+          "key": {
+            "description": "Redis key.",
+            "type": "string"
+          },
+          "key_encoding": {
+            "description": "Encoding of `key`.",
+            "$ref": "#/$defs/InputEncoding",
+            "default": "utf8"
+          },
+          "operation": {
+            "description": "One bounded OBJECT inspection; HELP is intentionally unavailable.",
+            "$ref": "#/$defs/ObjectOperation"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "operation"
+        ],
+        "$defs": {
+          "InputEncoding": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "base64"
+            ]
+          },
+          "ObjectOperation": {
+            "type": "string",
+            "enum": [
+              "encoding",
+              "frequency",
+              "idle_time",
+              "refcount"
+            ]
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "key_encoding": {
+            "$ref": "#/$defs/InputEncoding"
+          },
+          "operation": {
+            "$ref": "#/$defs/ObjectOperation"
+          },
+          "exists": {
+            "type": "boolean"
+          },
+          "encoding": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "key",
+          "key_encoding",
+          "operation",
+          "exists"
+        ],
+        "title": "ObjectInspectOutput",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "InputEncoding": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "base64"
+            ]
+          },
+          "ObjectOperation": {
+            "type": "string",
+            "enum": [
+              "encoding",
+              "frequency",
+              "idle_time",
+              "refcount"
+            ]
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "redis_ping",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "response": {
+            "type": "string"
+          },
+          "latency_ms": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "response",
+          "latency_ms"
+        ],
+        "title": "PingOutput",
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "redis_randomkey",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "encoding": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ValueEncoding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "RandomKeyOutput",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "ValueEncoding": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "base64"
+            ]
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "redis_scan",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ScanInput",
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "description": "Cursor returned by the previous scan. Start with zero.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0,
+            "default": 0
+          },
+          "pattern": {
+            "description": "Glob-style key pattern.",
+            "type": "string",
+            "default": "*"
+          },
+          "key_type": {
+            "description": "Optional Redis key type filter.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "count": {
+            "description": "Approximate number of keys Redis should inspect in this page.",
+            "type": "integer",
+            "format": "uint",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 100
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "page": {
+            "$ref": "#/$defs/PageMetadata"
+          }
+        },
+        "required": [
+          "cursor",
+          "keys",
+          "count",
+          "page"
+        ],
+        "title": "ScanOutput",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "PageMetadata": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "requested": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0
+              },
+              "returned": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0
+              },
+              "complete": {
+                "type": "boolean"
+              },
+              "continuation": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/PageContinuation"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "requested",
+              "returned",
+              "complete"
+            ]
+          },
+          "PageContinuation": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              },
+              "start": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "offset": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "redis_sort",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "SortInput",
+        "type": "object",
+        "properties": {
+          "key": {
+            "description": "List, set, or sorted-set source key.",
+            "type": "string"
+          },
+          "key_encoding": {
+            "description": "Encoding of `key`.",
+            "$ref": "#/$defs/InputEncoding",
+            "default": "utf8"
+          },
+          "by": {
+            "description": "Optional external-key BY pattern. Rejected on Redis Cluster because the expanded keys cannot be prevalidated.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SortPatternSelector"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "get": {
+            "description": "Optional external-key or `#` GET patterns.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SortPatternSelector"
+            },
+            "maxItems": 64
+          },
+          "offset": {
+            "description": "Zero-based result offset.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0,
+            "default": 0
+          },
+          "count": {
+            "description": "Maximum source elements to sort and return/store.",
+            "type": "integer",
+            "format": "uint",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 100
+          },
+          "order": {
+            "description": "Sort ascending or descending.",
+            "$ref": "#/$defs/SortOrder",
+            "default": "ascending"
+          },
+          "alpha": {
+            "description": "Sort lexicographically instead of parsing numeric values.",
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "key"
+        ],
+        "$defs": {
+          "InputEncoding": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "base64"
+            ]
+          },
+          "SortPatternSelector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/EncodedSortPattern"
+              }
+            ]
+          },
+          "EncodedSortPattern": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "description": "Redis SORT BY/GET pattern.",
+                "type": "string"
+              },
+              "encoding": {
+                "description": "Encoding of `value`.",
+                "$ref": "#/$defs/InputEncoding",
+                "default": "utf8"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "value"
+            ]
+          },
+          "SortOrder": {
+            "type": "string",
+            "enum": [
+              "ascending",
+              "descending"
+            ]
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "key_encoding": {
+            "$ref": "#/$defs/InputEncoding"
+          },
+          "source_exists": {
+            "type": "boolean"
+          },
+          "offset": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "requested_count": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "get_pattern_count": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "returned": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SortValue"
+            }
+          }
+        },
+        "required": [
+          "key",
+          "key_encoding",
+          "source_exists",
+          "offset",
+          "requested_count",
+          "get_pattern_count",
+          "returned",
+          "values"
+        ],
+        "title": "SortOutput",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "InputEncoding": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "base64"
+            ]
+          },
+          "SortValue": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "value": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "encoding": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ValueEncoding"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "ValueEncoding": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "base64"
+            ]
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "redis_strlen",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "KeyInput",
+        "type": "object",
+        "properties": {
+          "key": {
+            "description": "Redis key.",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "key"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "length_bytes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "key",
+          "length_bytes"
+        ],
+        "title": "StrlenOutput",
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "redis_ttl",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "KeyInput",
+        "type": "object",
+        "properties": {
+          "key": {
+            "description": "Redis key.",
+            "type": "string"
+          },
+          "key_encoding": {
+            "description": "Encoding of `key`.",
+            "$ref": "#/$defs/InputEncoding",
+            "default": "utf8"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "key"
+        ],
+        "$defs": {
+          "InputEncoding": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "base64"
+            ]
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "key_encoding": {
+            "$ref": "#/$defs/InputEncoding"
+          },
+          "ttl_seconds": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "exists": {
+            "type": "boolean"
+          },
+          "persistent": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "key_encoding",
+          "ttl_seconds",
+          "exists",
+          "persistent"
+        ],
+        "title": "TtlOutput",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "InputEncoding": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "base64"
+            ]
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "redis_type",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "KeyInput",
+        "type": "object",
+        "properties": {
+          "key": {
+            "description": "Redis key.",
+            "type": "string"
+          },
+          "key_encoding": {
+            "description": "Encoding of `key`.",
+            "$ref": "#/$defs/InputEncoding",
+            "default": "utf8"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "key"
+        ],
+        "$defs": {
+          "InputEncoding": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "base64"
+            ]
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "key_encoding": {
+            "$ref": "#/$defs/InputEncoding"
+          },
+          "key_type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "key_encoding",
+          "key_type"
+        ],
+        "title": "TypeOutput",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "InputEncoding": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "base64"
+            ]
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true
+      }
+    }
+  ]
+}

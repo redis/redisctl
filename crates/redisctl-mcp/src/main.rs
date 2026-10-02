@@ -11,8 +11,8 @@ use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use redisctl_core::Config;
 use redisctl_mcp::{
-    AuditConfig, AuditLayer, CredentialSource, McpServerBuilder, PolicyConfig, SafetyTier,
-    ToolsetKind,
+    AuditConfig, AuditLayer, CredentialSource, DatabaseBackend, McpServerBuilder, PolicyConfig,
+    SafetyTier, ToolsetKind,
 };
 use tower_mcp::{McpRouter, transport::StdioTransport};
 use tracing::info;
@@ -54,6 +54,10 @@ struct Args {
     /// Redis database URL for direct connections
     #[arg(long, env = "REDIS_URL")]
     database_url: Option<String>,
+
+    /// Database backend (redis-mcp is an experimental read-only pilot).
+    #[arg(long, value_enum, default_value = "legacy")]
+    database_backend: DatabaseBackend,
 
     /// Enable Redis Cluster mode (handles MOVED/ASK redirections)
     #[arg(long, env = "REDIS_CLUSTER")]
@@ -172,6 +176,7 @@ async fn main() -> Result<()> {
     let mut builder =
         McpServerBuilder::new(credential_source, policy_config.clone(), &policy_source)
             .with_database_url(args.database_url.clone())
+            .with_database_backend(args.database_backend)
             .with_cluster_mode(args.cluster)
             .with_client_name(args.client_name.clone())
             .with_skills_dir(skills_dir);
