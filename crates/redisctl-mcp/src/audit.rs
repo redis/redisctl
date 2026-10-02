@@ -694,6 +694,76 @@ mod tests {
             .collect()
     }
 
+    #[cfg(feature = "database-mcp-pilot")]
+    #[tokio::test]
+    async fn composed_pilot_retains_database_audit_mapping_and_redacts_credentials() {
+        use crate::{CredentialSource, DatabaseBackend, McpServerBuilder, PolicyConfig};
+
+        for deny in [false, true] {
+            let mut policy = PolicyConfig::default();
+            if deny {
+                policy.deny.push("redis_get".to_string());
+            }
+            let (mut router, toolsets) = McpServerBuilder::new(
+                CredentialSource::Profiles(Vec::new()),
+                policy,
+                "pilot-audit-test",
+            )
+            .with_database_backend(DatabaseBackend::RedisMcp)
+            .with_database_url(Some(
+                "redis://default:target-secret@127.0.0.1:1".to_string(),
+            ))
+            .with_tool_specs(["database"])
+            .unwrap()
+            .with_database_pilot_timeout(std::time::Duration::from_millis(100))
+            .build()
+            .unwrap()
+            .into_parts();
+            assert_eq!(toolsets.get("redis_get"), Some(&ToolsetKind::Database));
+            initialize_router(&mut router).await;
+            let annotations = router.tool_annotations_map();
+            let config = Arc::new(AuditConfig {
+                enabled: true,
+                include_args: true,
+                ..Default::default()
+            });
+            let audited = AuditLayer::new(config, toolsets).layer(router);
+            let mut service = InjectAnnotations::new(audited, annotations);
+            let capture = LogCapture::default();
+            let subscriber = tracing_subscriber::fmt()
+                .json()
+                .without_time()
+                .with_ansi(false)
+                .with_writer(capture.clone())
+                .finish();
+            let request = RouterRequest::new(
+                RequestId::Number(1),
+                McpRequest::CallTool(CallToolParams {
+                    name: "redis_get".to_string(),
+                    arguments: json!({"key":"redis://default:argument-secret@localhost/0"}),
+                    input_responses: None,
+                    request_state: None,
+                    meta: None,
+                    task: None,
+                }),
+            );
+            Service::call(&mut service, request)
+                .with_subscriber(subscriber)
+                .await
+                .unwrap();
+            let logs = capture.contents();
+            assert!(!logs.contains("target-secret"));
+            assert!(!logs.contains("argument-secret"));
+            let records = audit_records(&logs);
+            assert_eq!(records.len(), 1, "{logs}");
+            assert_eq!(records[0]["fields"]["toolset"], "database");
+            assert_eq!(
+                records[0]["fields"]["event"],
+                if deny { "tool_denied" } else { "tool_error" }
+            );
+        }
+    }
+
     // -- AuditConfig tests --
 
     #[test]

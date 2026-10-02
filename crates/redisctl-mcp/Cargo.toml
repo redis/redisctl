@@ -53,6 +53,9 @@ redis-enterprise = { workspace = true, optional = true }
 redis = { workspace = true, optional = true }
 urlencoding = { workspace = true, optional = true }
 
+# Experimental host integration; immutable revision for coordinated development.
+redis-mcp = { git = "https://github.com/redis-developer/redis-database-mcp-rs", rev = "8eff8240679d38157ee08b9d5e5eaeb656ce7550", default-features = false, features = ["keyspace", "strings"], optional = true }
+
 # Policy configuration
 toml = { workspace = true }
 directories = { workspace = true }
@@ -84,6 +87,7 @@ http = []
 cloud = ["dep:redis-cloud"]
 enterprise = ["dep:redis-enterprise"]
 database = ["dep:redis", "dep:urlencoding"]
+database-mcp-pilot = ["database", "dep:redis-mcp"]
 secure-storage = ["redisctl-core/secure-storage"]
 # Internal integration-test seam; not part of the supported Rust API.
 test-support = []
@@ -100,3 +104,6 @@ anyhow = { workspace = true }
 redis = { workspace = true }
 serial_test = { workspace = true }
 docker-wrapper = { git = "https://github.com/joshrotenberg/docker-wrapper", rev = "e122332360311e4acf4914ab4b8c97bc84b30ac1", features = ["testing", "template-redis"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+redis-server-wrapper = "0.5.0"

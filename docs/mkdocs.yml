@@ -173,6 +173,7 @@ nav:
       - Getting Started: mcp/getting-started.md
       - Configuration: mcp/configuration.md
       - Compatibility and Catalog: mcp/compatibility.md
+      - Experimental Database Pilot: mcp/database-pilot.md
       - Database Quickstart: mcp/database-quickstart.md
       - Cloud Quickstart: mcp/cloud-quickstart.md
       - Enterprise Quickstart: mcp/enterprise-quickstart.md
