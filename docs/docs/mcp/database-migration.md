@@ -171,7 +171,7 @@ is a plan, not a claim that migration tests already exist or pass.
 | Audit/secrets | Representative success, denial, timeout and parser/auth/TLS failures preserve host auditing without fake secret/URL leakage |
 | Budgets/timeouts | Connect and command failure paths terminate within documented limits; large replies respect library output budgets |
 | Lifecycle/rollback | Exercise process stop and disposal; record unresolved upstream lifecycle limitations; deselection restores the legacy backend |
-| Build/release | fmt, all-target/all-feature Clippy, workspace/integration tests, minimal-feature builds, strict rustdoc and packaging with released dependencies |
+| Build/release | fmt, all-target/all-feature Clippy, workspace/integration tests, minimal-feature builds, strict rustdoc and clean-consumer checks against the pinned Git revision; registry packaging before release |
 
 ## Dependency and cutover gates
 
@@ -180,9 +180,16 @@ Before pilot implementation:
 1. Accept this target contract in #1171.
 2. Merge the library's
    [published redis-tower dependency update](https://github.com/redis-developer/redis-database-mcp-rs/pull/124).
-3. Publish `redis-mcp`, verify a clean consumer resolves it from crates.io, and
-   use that released version in redisctl. The library server has its own
-   library-first release ordering; its binary is not a redisctl dependency.
+3. Pin `redis-mcp` to an immutable reviewed Git revision for reproducible builds
+   and CI. The merged #124 commit is the initial development baseline. Local
+   path overrides are allowed for coordinated development, but must not appear
+   as machine-specific dependencies in committed manifests or lockfiles.
+
+Publication is not a pilot implementation gate. Before shipping a release that
+includes this dependency, discuss publication, switch to the agreed published
+crate version, and verify registry packaging and clean-consumer resolution. The
+library server has its own library-first release ordering; its binary is not a
+redisctl dependency.
 
 Before making the new backend default:
 
