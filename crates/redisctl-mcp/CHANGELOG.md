@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1](https://github.com/redis/redisctl/compare/redisctl-mcp-v0.12.0...redisctl-mcp-v0.12.1) - 2026-10-01
+
+### Fixed
+
+- *(mcp)* upgrade Tower-MCP to 0.23.2 ([#1168](https://github.com/redis/redisctl/pull/1168))
+
 ## [0.12.0](https://github.com/redis/redisctl/compare/redisctl-mcp-v0.11.1...redisctl-mcp-v0.12.0) - 2026-10-01
 
 ### Added
