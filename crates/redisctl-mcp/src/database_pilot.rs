@@ -260,6 +260,25 @@ mod tests {
     }
 
     #[test]
+    fn profile_tls_ipv6_database_and_credentials_survive_url_encoding() {
+        let mut config = config();
+        config.profiles.get_mut("second").unwrap().credentials = ProfileCredentials::Database {
+            host: "::1".to_string(),
+            port: 6379,
+            username: "user:name".to_string(),
+            password: Some("p@ss?#/%:".to_string()),
+            tls: true,
+            database: 2,
+        };
+        let target = resolve_from_config(Some(&config), &names(&["second"]), None, false).unwrap();
+        assert_eq!(
+            target.url,
+            "rediss://user%3Aname:p%40ss%3F%23%2F%25%3A@[::1]:6379/2"
+        );
+        assert!(resolve_from_config(Some(&config), &names(&["second"]), None, true).is_err());
+    }
+
+    #[test]
     fn implicit_defaults_unknown_profiles_and_ambiguity_fail_closed() {
         let config = config();
         for selected in [names(&[]), names(&["missing"]), names(&["first", "second"])] {

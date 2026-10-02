@@ -64,6 +64,36 @@ async fn pilot_catalog_matches_separate_reviewed_baseline() {
     );
 }
 
+#[cfg(all(feature = "cloud", feature = "enterprise"))]
+#[tokio::test]
+async fn pilot_keeps_host_identity_and_management_toolsets() {
+    let server = builder(PolicyConfig::default())
+        .with_tool_specs(["database", "cloud", "enterprise", "app"])
+        .unwrap()
+        .build()
+        .unwrap();
+    let mut client = TestClient::from_router(server.into_router());
+    let initialized = client.initialize().await;
+    assert_eq!(initialized["serverInfo"]["name"], "redisctl-mcp");
+    let tools = client.list_tools().await;
+    let actual = names(&tools);
+    for name in [
+        "redis_get",
+        "list_subscriptions",
+        "list_enterprise_databases",
+        "profile_list",
+        "show_policy",
+        "list_available_tools",
+    ] {
+        assert!(actual.contains(name), "missing {name}");
+    }
+    assert_eq!(
+        actual.len(),
+        tools.len(),
+        "duplicate tool names after composition"
+    );
+}
+
 #[tokio::test]
 async fn pilot_catalog_is_library_owned_read_only_and_credential_free() {
     let mut policy = PolicyConfig::default();
