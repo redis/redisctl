@@ -173,17 +173,47 @@ is a plan, not a claim that migration tests already exist or pass.
 | Lifecycle/rollback | Exercise process stop and disposal; record unresolved upstream lifecycle limitations; deselection restores the legacy backend |
 | Build/release | fmt, all-target/all-feature Clippy, workspace/integration tests, minimal-feature builds, strict rustdoc and clean-consumer checks against the pinned Git revision; registry packaging before release |
 
-## Dependency and cutover gates
+## Development checkpoint and dependency gates
 
-Before pilot implementation:
+The target contract remains proposed until human review of
+[#1175](https://github.com/redis/redisctl/pull/1175). The isolated opt-in
+[pilot #1176](https://github.com/redis/redisctl/pull/1176) implements it for
+validation, not as an accepted default compatibility change.
 
-1. Accept this target contract in #1171.
-2. Merge the library's
-   [published redis-tower dependency update](https://github.com/redis-developer/redis-database-mcp-rs/pull/124).
-3. Pin `redis-mcp` to an immutable reviewed Git revision for reproducible builds
-   and CI. The merged #124 commit is the initial development baseline. Local
-   path overrides are allowed for coordinated development, but must not appear
-   as machine-specific dependencies in committed manifests or lockfiles.
+The library's
+[published redis-tower dependency update #124](https://github.com/redis-developer/redis-database-mcp-rs/pull/124)
+is merged. The pilot pins reviewed library revision
+`8eff8240679d38157ee08b9d5e5eaeb656ce7550`
+([#126](https://github.com/redis-developer/redis-database-mcp-rs/pull/126)) for
+reproducible committed builds. Local path overrides are allowed for coordinated
+development, but must not appear as machine-specific dependencies in committed
+manifests or lockfiles.
+
+Skills from #1174 are now embedded in main. Their resources and prompts remain
+host-owned; the pilot's `redisctl://skills` index must describe the actual
+composed, policy-visible catalog. Missing library families must not be advertised
+as available merely because a bundled workflow refers to them.
+
+### Source-access prerequisite
+
+The pinned library repository is INTERNAL. Public CI cannot currently fetch it.
+An approved read-access mechanism, owner and reference are required; this work
+does not provision credentials, change visibility, reuse release tokens or
+expose secrets to untrusted forks. Verify uncached resolution before every
+affected Cargo entry point, not only compile jobs:
+
+- `ci.yml`: Clippy/core checks, unit/integration/live tests, platform builds and
+  coverage.
+- `docs.yml`: default embedding API and all-feature workspace rustdoc.
+- `cargo-deny.yml`: both dependency-graph check groups.
+- `release.yml`: dist plan metadata, local/global builds and any host metadata
+  resolution; `release-plz.yml`: version/package/publish resolution.
+
+The lockfile-based `cargo audit` in `security.yml` is distinct from these graph
+checks. A trusted-CI read mechanism would not solve anonymous default-feature or
+public-fork builds: Cargo still resolves optional Git dependencies when their
+feature is disabled. Public source consumption requires a separate agreed
+distribution/access path. A warm cache is not clean-consumer evidence.
 
 Publication is not a pilot implementation gate. Before shipping a release that
 includes this dependency, discuss publication, switch to the agreed published
@@ -195,8 +225,11 @@ Before making the new backend default:
 
 - Complete the pilot, each family's parity/catalog gates, and compatibility
   migration treatment; delete duplicate handlers only in reviewed slices.
-- Verify reconnect/Cluster setup replay through
-  [redis-tower #736](https://github.com/joshrotenberg/redis-tower/issues/736).
+- Adopt and verify the library's
+  [connection setup #128](https://github.com/redis-developer/redis-database-mcp-rs/pull/128).
+  Upstream replay support in
+  [redis-tower #736](https://github.com/joshrotenberg/redis-tower/issues/736)
+  is complete, but not yet consumed by the immutable pilot pin.
 - Verify host-usable, deterministic executor shutdown, tracked in
   [redis-database-mcp-rs #125](https://github.com/redis-developer/redis-database-mcp-rs/issues/125).
 - Record live standalone, TLS/authentication, Cluster, rollback and release
