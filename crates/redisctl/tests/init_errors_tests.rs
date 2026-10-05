@@ -132,7 +132,7 @@ fn a_bare_url_or_quoted_paste_positional_is_accepted() {
             .args([paste, "--dry-run"])
             .assert()
             .success()
-            .stdout(predicate::str::contains("via provided URL"))
+            .stdout(predicate::str::contains("via local Redis"))
             .stdout(predicate::str::contains("S3cretPw").not());
     }
 }

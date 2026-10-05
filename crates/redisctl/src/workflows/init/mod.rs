@@ -228,7 +228,10 @@ async fn run_inner(
     );
 
     let project = engine::detect_project(&cwd);
-    let mut descriptor = project.runtime.as_str().to_string();
+    let mut descriptor = match project.runtime {
+        engine::Runtime::Unknown => "no package manifest".to_string(),
+        runtime => runtime.as_str().to_string(),
+    };
     if let Some(pm) = project.pm {
         descriptor.push_str(&format!(", {pm}"));
     }
@@ -264,6 +267,7 @@ async fn run_inner(
             .filter(|url| url != engine::PLACEHOLDER_URL);
         let answers = wizard::run(
             &pending,
+            options.agents.as_deref(),
             &engine::detect_agents(&cwd),
             engine::docker_available(),
             local,
@@ -360,16 +364,21 @@ async fn run_inner(
         .count();
 
     let proj = &plan.project;
-    let agent_bits = proj
+    let existing = proj
         .agent_markers
         .iter()
-        .map(|(marker, found)| format!("{marker} {}", if *found { ok("✓") } else { dim("✗") }))
-        .collect::<Vec<_>>()
-        .join("  ");
+        .filter(|(_, found)| *found)
+        .map(|(marker, _)| marker.to_string())
+        .collect::<Vec<_>>();
+    let existing = if existing.is_empty() {
+        "none".to_string()
+    } else {
+        existing.join(", ")
+    };
     let names = plan
         .agents
         .iter()
-        .map(|a| a.as_str())
+        .map(|a| a.label())
         .collect::<Vec<_>>()
         .join(", ");
     // A rail entry, so the wizard's rail runs unbroken into the status steps.
@@ -384,17 +393,9 @@ async fn run_inner(
             } else {
                 String::new()
             },
-            dim(&format!("existing: {agent_bits}"))
+            dim(&format!("existing: {existing}"))
         ))
     );
-    if proj.runtime == engine::Runtime::Unknown {
-        println!(
-            "{}",
-            output::rail_line(&yellow(
-                "note: no package manifest detected - continuing; everything redisctl init writes is language-agnostic."
-            ))
-        );
-    }
     println!("{}", output::rail_gap());
 
     let subject = |applied: bool| match plan.database_url() {

@@ -254,6 +254,7 @@ pub(crate) fn prompt_failed(e: dialoguer::Error) -> RedisCtlError {
 
 pub fn run(
     pending: &[Question],
+    requested: Option<&[engine::Agent]>,
     detected: &[engine::Agent],
     docker: bool,
     local: engine::LocalRedis,
@@ -276,7 +277,12 @@ pub fn run(
                 }
             },
             Question::Agents => answers.agents = Some(ask_agents(detected)?),
-            Question::Skills => answers.skills_global = Some(ask_skills_scope()?),
+            Question::Skills => {
+                let agents =
+                    engine::resolve_agents(answers.agents.as_deref().or(requested), detected);
+                answers.skills_global =
+                    Some(ask_skills_scope(engine::project_skills_dir(&agents))?);
+            }
         }
     }
     Ok(answers)
@@ -400,7 +406,7 @@ fn ask_paste() -> Result<DatabaseChoice, RedisCtlError> {
 /// to write .cursor/mcp.json into this repo.
 fn ask_agents(detected: &[engine::Agent]) -> Result<Vec<engine::Agent>, RedisCtlError> {
     const PROMPT: &str = AGENTS_PROMPT;
-    const LABELS: [&str; 4] = ["Claude Code", "Cursor", "VS Code", "Codex"];
+    let labels: Vec<&str> = engine::KNOWN_AGENTS.iter().map(|a| a.label()).collect();
     let preselected: Vec<bool> = engine::KNOWN_AGENTS
         .iter()
         .map(|agent| detected.contains(agent))
@@ -408,7 +414,7 @@ fn ask_agents(detected: &[engine::Agent]) -> Result<Vec<engine::Agent>, RedisCtl
     loop {
         let picks = MultiSelect::with_theme(&RedisTheme)
             .with_prompt(format!("{PROMPT} (space toggles, enter confirms)"))
-            .items(&LABELS)
+            .items(&labels)
             .defaults(&preselected)
             .interact_opt()
             .map_err(prompt_failed)?;
@@ -425,14 +431,18 @@ fn ask_agents(detected: &[engine::Agent]) -> Result<Vec<engine::Agent>, RedisCtl
     }
 }
 
-fn ask_skills_scope() -> Result<bool, RedisCtlError> {
+fn skills_scope_items(project_dir: &str) -> [String; 2] {
+    [
+        format!("This project only ({project_dir})"),
+        "Global (available in every project)".to_string(),
+    ]
+}
+
+fn ask_skills_scope(project_dir: &str) -> Result<bool, RedisCtlError> {
     const PROMPT: &str = SKILLS_PROMPT;
     let selection = Select::with_theme(&RedisTheme)
         .with_prompt(PROMPT)
-        .items(&[
-            "This project only (.agents/skills)",
-            "Global (available in every project)",
-        ])
+        .items(&skills_scope_items(project_dir))
         .default(0)
         .interact_opt()
         .map_err(prompt_failed)?;
@@ -478,6 +488,21 @@ mod tests {
         assert!(is_wizard_prompt(super::super::cloud::PICKER_PROMPT));
         assert!(is_wizard_prompt(super::super::cloud::NAME_PROMPT));
         assert!(!is_wizard_prompt("Delete user 5?"));
+    }
+
+    #[test]
+    fn the_project_skills_option_names_the_dir_the_agents_get() {
+        use engine::Agent;
+        let solo = engine::project_skills_dir(&[Agent::Claude]);
+        let shared = engine::project_skills_dir(&[Agent::Claude, Agent::Cursor]);
+        assert_eq!(
+            skills_scope_items(solo)[0],
+            "This project only (.claude/skills)"
+        );
+        assert_eq!(
+            skills_scope_items(shared)[0],
+            "This project only (.agents/skills)"
+        );
     }
 
     #[test]

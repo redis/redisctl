@@ -113,6 +113,9 @@ fn full_run_provisions_validates_and_rerun_is_unchanged() {
         .success()
         .stdout(predicate::str::contains("unchanged .env"))
         .stdout(predicate::str::contains("unchanged .gitignore"))
+        .stdout(predicate::str::contains(format!(
+            "unchanged docker:{container}  already running on port"
+        )))
         .stdout(predicate::str::contains("✓ PING  ✓ SET/GET"));
     assert_eq!(std::fs::read_to_string(dir.join(".env")).unwrap(), env);
 }

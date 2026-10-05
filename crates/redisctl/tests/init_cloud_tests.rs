@@ -262,6 +262,9 @@ async fn reuse_by_name_connects_validates_and_creates_nothing() {
         "database 9 in Essentials subscription 1",
     ))
     .stdout(predicates::str::contains("✓ PING"))
+    .stdout(predicates::str::contains(
+        "Start your coding agent here (Claude Code)",
+    ))
     .stdout(predicates::str::contains(MOCK_PASSWORD).not())
     .get_output()
     .clone();

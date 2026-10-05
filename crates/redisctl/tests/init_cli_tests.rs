@@ -89,14 +89,86 @@ fn dry_run_detects_a_node_project_and_plans_the_env_wiring() {
 }
 
 #[test]
-fn unknown_runtime_gets_a_note_and_continues() {
+fn an_empty_folder_reads_plainly_in_the_header() {
     let dir = tempfile::tempdir().unwrap();
-    redisctl()
+    let output = redisctl()
         .current_dir(dir.path())
-        .args(["init", "--dry-run", "--url", "redis://localhost:6379"])
+        .args([
+            "init",
+            "--dry-run",
+            "--no-telemetry",
+            "--url",
+            "redis://localhost:6379",
+            "--agent",
+            "claude",
+        ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("no package manifest detected"));
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("(no package manifest)"), "{stdout}");
+    assert!(!stdout.contains("(unknown)"), "{stdout}");
+    assert!(
+        stdout.contains("Agents   Claude Code   existing: none"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains('✗'), "{stdout}");
+    assert_eq!(
+        stdout.matches("no package manifest detected").count(),
+        1,
+        "{stdout}"
+    );
+}
+
+/// The wizard's "use the local Redis" answer arrives as a localhost URL; the plan
+/// names it as the local server, while a remote URL stays a provided one.
+#[test]
+fn a_localhost_url_is_named_as_the_local_redis() {
+    for (url, source) in [
+        ("redis://localhost:6379", "via local Redis)"),
+        ("redis://127.0.0.1:6390", "via local Redis)"),
+        ("redis://cache.example.com:6379", "via provided URL)"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        redisctl()
+            .current_dir(dir.path())
+            .args([
+                "init",
+                "--dry-run",
+                "--no-telemetry",
+                "--agent",
+                "claude",
+                "--url",
+                url,
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(source));
+    }
+}
+
+#[test]
+fn the_header_lists_only_the_agent_files_that_exist() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("CLAUDE.md"), "# notes\n").unwrap();
+    redisctl()
+        .current_dir(dir.path())
+        .args([
+            "init",
+            "--dry-run",
+            "--no-telemetry",
+            "--url",
+            "redis://localhost:6379",
+            "--agent",
+            "claude,cursor",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Agents   Claude Code, Cursor   existing: CLAUDE.md",
+        ))
+        .stdout(predicate::str::contains("✓").not());
 }
 
 #[test]
@@ -185,7 +257,7 @@ fn verbatim_unquoted_console_paste_is_accepted() {
         .assert()
         .code(10)
         .stdout(predicate::str::contains("redis://default:****@127.0.0.1:9"))
-        .stdout(predicate::str::contains("via provided URL"))
+        .stdout(predicate::str::contains("via local Redis"))
         .stdout(predicate::str::contains("s3cret").not())
         .stderr(predicate::str::contains("could not talk to Redis"))
         .stderr(predicate::str::contains("s3cret").not());

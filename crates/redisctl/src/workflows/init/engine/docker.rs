@@ -76,6 +76,7 @@ impl DatabaseAction {
 
     pub(crate) fn source(&self, applied: bool) -> &'static str {
         match self {
+            DatabaseAction::Provided { url } if url_is_local(url) => "local Redis",
             DatabaseAction::Provided { .. } => "provided URL",
             DatabaseAction::Placeholder => "placeholder - fill .env",
             DatabaseAction::ExistingEnv { .. } => "existing .env",
@@ -100,17 +101,18 @@ impl DatabaseAction {
                 "would start existing container",
             )),
             DatabaseAction::Placeholder => Some(placeholder_change()),
+            DatabaseAction::ExistingEnv {
+                restart: false,
+                container: Some(name),
+                url,
+            } => Some(already_running(name, url_port(url))),
             DatabaseAction::Provided { .. } | DatabaseAction::ExistingEnv { .. } => None,
             DatabaseAction::StartExisting { name, .. } => Some(Change::new(
                 format!("docker:{name}"),
                 Status::Planned,
                 "would start existing container",
             )),
-            DatabaseAction::AlreadyRunning { name, port, .. } => Some(Change::new(
-                format!("docker:{name}"),
-                Status::Unchanged,
-                format!("already running on port {port}"),
-            )),
+            DatabaseAction::AlreadyRunning { name, port, .. } => Some(already_running(name, *port)),
             DatabaseAction::DockerDown { name, port, .. } => Some(Change::new(
                 format!("docker:{name}"),
                 Status::Planned,
@@ -239,11 +241,27 @@ fn decide_existing_env(url: String, name: String, info: Option<ContainerInfo>) -
     }
 }
 
+fn already_running(name: &str, port: u16) -> Change {
+    Change::new(
+        format!("docker:{name}"),
+        Status::Unchanged,
+        format!("already running on port {port}"),
+    )
+}
+
+fn url_port(url: &str) -> u16 {
+    redis::parse_redis_url(url)
+        .and_then(|parsed| parsed.port())
+        .unwrap_or(6379)
+}
+
+fn url_is_local(url: &str) -> bool {
+    redis::parse_redis_url(url)
+        .is_some_and(|parsed| matches!(parsed.host_str(), Some("localhost" | "127.0.0.1")))
+}
+
 fn url_targets_local_port(url: &str, port: u16) -> bool {
-    redis::parse_redis_url(url).is_some_and(|parsed| {
-        matches!(parsed.host_str(), Some("localhost" | "127.0.0.1"))
-            && parsed.port().unwrap_or(6379) == port
-    })
+    url_is_local(url) && url_port(url) == port
 }
 
 /// Probe (read-only) how this project gets its local database.
@@ -312,7 +330,9 @@ pub(crate) async fn apply_database(
             restart,
         } => {
             let (true, Some(name)) = (*restart, container.as_deref()) else {
-                return Ok(None);
+                return Ok(container
+                    .as_deref()
+                    .map(|name| already_running(name, url_port(url))));
             };
             // A failed start must not read as updated; validation reports the truth.
             if sh("docker", &["start", name]).status != 0 {
@@ -325,11 +345,7 @@ pub(crate) async fn apply_database(
                 "restarted stopped container",
             )))
         }
-        DatabaseAction::AlreadyRunning { name, port, .. } => Ok(Some(Change::new(
-            format!("docker:{name}"),
-            Status::Unchanged,
-            format!("already running on port {port}"),
-        ))),
+        DatabaseAction::AlreadyRunning { name, port, .. } => Ok(Some(already_running(name, *port))),
         DatabaseAction::StartExisting { name, url } => {
             let r = sh("docker", &["start", name]);
             if r.status != 0 {
@@ -619,7 +635,7 @@ mod tests {
     }
 
     #[test]
-    fn existing_env_restart_is_previewed() {
+    fn existing_env_container_is_previewed() {
         let action = DatabaseAction::ExistingEnv {
             url: "redis://localhost:6379".into(),
             container: Some("redisctl-x".into()),
@@ -629,12 +645,21 @@ mod tests {
         assert_eq!(change.status, Status::Planned);
         assert!(change.note.contains("would start"), "{}", change.note);
 
-        let no_restart = DatabaseAction::ExistingEnv {
-            url: "redis://h:1".into(),
+        let running = DatabaseAction::ExistingEnv {
+            url: "redis://localhost:6380".into(),
             container: Some("redisctl-x".into()),
             restart: false,
         };
-        assert!(no_restart.preview().is_none());
+        let change = running.preview().unwrap();
+        assert_eq!(change.status, Status::Unchanged);
+        assert_eq!(change.note, "already running on port 6380");
+
+        let no_container = DatabaseAction::ExistingEnv {
+            url: "redis://h:1".into(),
+            container: None,
+            restart: false,
+        };
+        assert!(no_container.preview().is_none());
     }
 
     #[test]

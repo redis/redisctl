@@ -19,7 +19,8 @@ mod util;
 
 pub use change::{Change, Status};
 pub use docker::docker_ok as docker_available;
-pub use project::{detect as detect_project, detect_agents};
+pub use project::{detect as detect_project, detect_agents, resolve_agents};
+pub use skills::project_dir as project_skills_dir;
 
 pub(crate) const SKILLS_DIR: &str = ".agents/skills";
 pub use docker::{LOCAL_REDIS_URL, LocalRedis, PLACEHOLDER_URL, probe_local_redis, validate};

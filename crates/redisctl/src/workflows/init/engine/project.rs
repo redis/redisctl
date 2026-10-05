@@ -24,6 +24,15 @@ impl Agent {
             Agent::Codex => "codex",
         }
     }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Agent::Claude => "Claude Code",
+            Agent::Cursor => "Cursor",
+            Agent::Vscode => "VS Code",
+            Agent::Codex => "Codex",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

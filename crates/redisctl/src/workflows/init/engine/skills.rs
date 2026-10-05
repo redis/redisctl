@@ -69,12 +69,24 @@ pub(crate) fn describe_target(global: bool) -> String {
     }
 }
 
+/// The project dir a skills install lands in for this agent set.
+pub fn project_dir(agents: &[Agent]) -> &'static str {
+    if solo_claude(agents) {
+        ".claude/skills"
+    } else {
+        SKILLS_DIR
+    }
+}
+
+fn solo_claude(agents: &[Agent]) -> bool {
+    agents == [Agent::Claude]
+}
+
 /// The offline fallback picks a real destination itself, mirroring the CLI's layout
 /// choice: a lone claude-code target lands in that agent's own dir.
 fn fallback_dir(cwd: &Path, global: bool, agents: &[Agent]) -> PathBuf {
-    let solo_claude = agents == [Agent::Claude];
     let dirs = target_dirs(cwd, global);
-    if solo_claude {
+    if solo_claude(agents) {
         dirs[1].clone()
     } else {
         dirs[0].clone()
@@ -471,9 +483,16 @@ impl SkillsAction {
             };
             changes.push(Change::new(subject, status, "npx skills add"));
         }
+        let lock_status = if &after == before {
+            Status::Unchanged
+        } else if before.is_empty() {
+            Status::Created
+        } else {
+            Status::Updated
+        };
         changes.push(Change::new(
             LOCK_FILE,
-            Status::Unchanged,
+            lock_status,
             "owned by the skills CLI",
         ));
         SkillsOutcome {
@@ -881,7 +900,41 @@ mod tests {
             Some(&Status::Unchanged)
         );
         assert_eq!(by_subject.get(".agents/skills/mine/"), Some(&Status::Kept));
-        assert_eq!(by_subject.get(LOCK_FILE), Some(&Status::Unchanged));
+        assert_eq!(by_subject.get(LOCK_FILE), Some(&Status::Updated));
+    }
+
+    #[test]
+    fn the_lock_line_reports_what_the_installer_did_to_it() {
+        let project = tempfile::tempdir().unwrap();
+        let dir = project.path().join(SKILLS_DIR).join("a");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), "x").unwrap();
+        std::fs::write(
+            project.path().join(LOCK_FILE),
+            r#"{"skills":{"a":{"computedHash":"h"}}}"#,
+        )
+        .unwrap();
+        let a = SkillsAction {
+            agents: vec![Agent::Claude],
+            global: false,
+            repo: None,
+        };
+        let lock_status = |before: BTreeMap<String, String>| {
+            a.report_project(project.path(), &before, &BTreeMap::new())
+                .changes
+                .into_iter()
+                .find(|c| c.subject == LOCK_FILE)
+                .map(|c| c.status)
+        };
+        assert_eq!(lock_status(BTreeMap::new()), Some(Status::Created));
+        assert_eq!(
+            lock_status(BTreeMap::from([("a".to_string(), "old".to_string())])),
+            Some(Status::Updated)
+        );
+        assert_eq!(
+            lock_status(BTreeMap::from([("a".to_string(), "h".to_string())])),
+            Some(Status::Unchanged)
+        );
     }
 
     #[test]
