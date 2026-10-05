@@ -17,6 +17,12 @@ cargo build --release -p redisctl-mcp
 
 ## Quick Start
 
+After connecting, read `redisctl://skills` for the embedded workflow index or
+select the `redisctl-setup` prompt for safe setup guidance. Workflows load on
+demand rather than being copied into initialization instructions. Credentials
+must be entered through a trusted local user flow, not chat or tool arguments.
+See [Embedded Skills and Setup](https://redis.github.io/redisctl/mcp/skills/).
+
 ### With Claude Desktop
 
 Add to your Claude Desktop configuration (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
@@ -118,20 +124,21 @@ redisctl-mcp --transport http --port 8080 \
 The server uses `redisctl` profiles for credential management. Configure profiles in `~/.config/redisctl/config.toml`:
 
 ```toml
-default_cloud_profile = "cloud-prod"
-default_enterprise_profile = "enterprise-dev"
+default_cloud = "cloud-prod"
+default_enterprise = "enterprise-dev"
 
 [profiles.cloud-prod]
-type = "cloud"
+deployment_type = "cloud"
 api_key = "${REDIS_CLOUD_API_KEY}"
 api_secret = "${REDIS_CLOUD_SECRET_KEY}"
 
 [profiles.enterprise-dev]
-type = "enterprise"
+deployment_type = "enterprise"
 url = "https://cluster.example.com:9443"
 username = "admin"
 password = "${RE_PASSWORD}"
-insecure = true
+insecure = false
+# ca_cert = "/absolute/path/to/trusted-ca.pem"  # for a private CA
 ```
 
 ### Environment Variables
@@ -148,7 +155,7 @@ export REDIS_CLOUD_SECRET_KEY=your-secret
 export REDIS_ENTERPRISE_URL=https://cluster:9443
 export REDIS_ENTERPRISE_USER=admin
 export REDIS_ENTERPRISE_PASSWORD=secret
-export REDIS_ENTERPRISE_INSECURE=true  # optional, for self-signed certs
+# For a private CA, configure ca_cert in the profile; retain TLS verification.
 
 # Direct Redis connection
 export REDIS_URL=redis://localhost:6379
@@ -168,7 +175,7 @@ Options:
       --cluster                    Enable Redis Cluster mode
       --client-name <NAME>         Redis client name [default: redisctl-mcp]
       --tools <SPECS>              Toolsets or sub-modules to expose
-      --skills-dir <PATH>          Directory of SKILL.md prompt packages
+      --skills-dir <PATH>          Custom skill directory overriding embedded resources and prompts
 
   HTTP Options:
       --host <HOST>                Bind host [default: 127.0.0.1]
@@ -183,7 +190,7 @@ Options:
 ## Library Usage
 
 You can build the same policy-filtered router used by the binary. The builder
-installs policy, visibility presets, system tools, prompts, skills, and server
+installs policy, visibility presets, system tools, prompts, embedded skill resources, and server
 instructions as one unit:
 
 ```rust

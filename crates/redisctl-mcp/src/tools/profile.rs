@@ -964,4 +964,10 @@ pub fn router(state: Arc<AppState>) -> McpRouter {
         .resource(crate::resources::config_path_resource())
         .resource(crate::resources::profiles_resource())
         .resource(crate::resources::help_resource())
+        // Retain published resource addresses while using redisctl:// canonically.
+        .resource(crate::resources::config_path_resource_at(
+            "redis://config/path",
+        ))
+        .resource(crate::resources::profiles_resource_at("redis://profiles"))
+        .resource(crate::resources::help_resource_at("redis://help"))
 }
