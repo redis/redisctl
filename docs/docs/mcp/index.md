@@ -92,6 +92,7 @@ Ready to set up MCP? Choose your path:
 - **[Enterprise Quickstart](enterprise-quickstart.md)** - Redis Enterprise users: includes multi-cluster setup
 - **[Getting Started](getting-started.md)** - Full installation and configuration guide
 - **[Configuration](configuration.md)** - Tool selection, safety tiers, and presets
+- **[Embedded Skills and Setup](skills.md)** - Discover workflows and let your agent guide safe first-run setup
 
 Want to see what's possible? Check out [Advanced Usage](advanced-usage.md) for JMESPath integration and complex analytics pipelines.
 
