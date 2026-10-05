@@ -4,6 +4,10 @@ The opt-in backend proves composition with `redis-mcp` without replacing
 redisctl's production database backend. Legacy remains the build/runtime default.
 This is development work for #1172, not a production migration or release promise.
 
+The [fixed-target contract](database-migration.md) was accepted for this opt-in
+pilot in [#1175](https://github.com/redis/redisctl/pull/1175). This does not approve
+source access, publication or a default backend change.
+
 ## Try it
 
 Building from this branch currently requires access to the INTERNAL
