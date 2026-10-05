@@ -1,4 +1,4 @@
-//! MCP Resources for Redis management
+//! MCP resources for redisctl configuration and usage.
 //!
 //! Resources expose read-only data that can be fetched by URI.
 
@@ -8,18 +8,22 @@ use tower_mcp::resource::{Resource, ResourceBuilder};
 
 /// Build a resource exposing the current configuration path
 pub fn config_path_resource() -> Resource {
-    ResourceBuilder::new("redis://config/path")
+    config_path_resource_at("redisctl://config/path")
+}
+
+pub(crate) fn config_path_resource_at(uri: &'static str) -> Resource {
+    ResourceBuilder::new(uri)
         .name("Configuration Path")
         .description("Path to the redisctl configuration file")
         .mime_type("text/plain")
-        .handler(|| async {
+        .handler(move || async move {
             let path = Config::config_path()
                 .map(|p: std::path::PathBuf| p.display().to_string())
                 .unwrap_or_else(|_| "(no config path available)".to_string());
 
             Ok(ReadResourceResult {
                 contents: vec![ResourceContent {
-                    uri: "redis://config/path".to_string(),
+                    uri: uri.to_string(),
                     mime_type: Some("text/plain".to_string()),
                     text: Some(path),
                     blob: None,
@@ -34,29 +38,41 @@ pub fn config_path_resource() -> Resource {
 
 /// Build a resource exposing the list of configured profiles
 pub fn profiles_resource() -> Resource {
-    ResourceBuilder::new("redis://profiles")
+    profiles_resource_at("redisctl://profiles")
+}
+
+fn profiles_summary(config: redisctl_core::config::Result<Config>) -> String {
+    match config {
+        Ok(config) => {
+            let mut profile_names = config.profiles.keys().collect::<Vec<_>>();
+            profile_names.sort();
+            serde_json::json!({
+                "profiles": profile_names,
+                "default_cloud": config.default_cloud,
+                "default_enterprise": config.default_enterprise
+            })
+            .to_string()
+        }
+        // TOML errors may include the credential-bearing source line. Do not
+        // send raw config errors to an MCP client, including through aliases.
+        Err(_) => serde_json::json!({
+            "error": "Cannot load redisctl configuration. Validate it locally; do not share config contents or credentials."
+        })
+        .to_string(),
+    }
+}
+
+pub(crate) fn profiles_resource_at(uri: &'static str) -> Resource {
+    ResourceBuilder::new(uri)
         .name("Profiles")
         .description("List of configured redisctl profiles")
         .mime_type("application/json")
-        .handler(|| async {
-            let profiles = match Config::load() {
-                Ok(config) => {
-                    let profile_names: Vec<&String> = config.profiles.keys().collect();
-                    serde_json::json!({
-                        "profiles": profile_names,
-                        "default_cloud": config.default_cloud,
-                        "default_enterprise": config.default_enterprise
-                    })
-                    .to_string()
-                }
-                Err(e) => serde_json::json!({"error": e.to_string()}).to_string(),
-            };
-
+        .handler(move || async move {
             Ok(ReadResourceResult {
                 contents: vec![ResourceContent {
-                    uri: "redis://profiles".to_string(),
+                    uri: uri.to_string(),
                     mime_type: Some("application/json".to_string()),
-                    text: Some(profiles),
+                    text: Some(profiles_summary(Config::load())),
                     blob: None,
                     meta: None,
                 }],
@@ -69,36 +85,30 @@ pub fn profiles_resource() -> Resource {
 
 /// Build a resource exposing server instructions/help
 pub fn help_resource() -> Resource {
-    ResourceBuilder::new("redis://help")
+    help_resource_at("redisctl://help")
+}
+
+pub(crate) fn help_resource_at(uri: &'static str) -> Resource {
+    ResourceBuilder::new(uri)
         .name("Help")
-        .description("Usage instructions for the Redis MCP server")
+        .description("Usage instructions for the redisctl MCP server")
         .mime_type("text/markdown")
         .text(
             r#"# Redis MCP Server Help
 
-## Tool Categories
+Read `redisctl://skills` for workflow discovery and tools available in this session.
+Read `redisctl://skills/redisctl-setup` for safe first-run setup. Skills are also
+available as prompts; load only the workflow needed for the task.
 
-### Redis Cloud
-- **Subscriptions**: list_subscriptions, get_subscription
-- **Databases**: list_databases, get_database, get_backup_status, get_slow_log
-- **Account**: get_account, list_account_users
-- **Tasks**: list_tasks, get_task
-
-### Redis Enterprise
-- **Cluster**: get_cluster, get_cluster_stats
-- **License**: get_license, get_license_usage
-- **Databases**: list_enterprise_databases, get_enterprise_database
-- **Nodes**: list_nodes, get_node, get_node_stats
-- **Modules**: list_modules, get_module
-
-### Direct Redis
-- **Connection**: redis_ping, redis_info, redis_dbsize
-- **Keys**: redis_keys, redis_get, redis_type, redis_ttl
-- **Data Structures**: redis_hgetall, redis_lrange, redis_smembers, redis_zrange
+Tool selection and policy still apply. Call `show_policy` and
+`list_available_tools` when available; never invoke unavailable tools or enable
+writes merely to follow a workflow. Enter credentials through a trusted local
+user flow, not chat or model-visible tool arguments.
 
 ## Prompts
 
 Use prompts for common workflows:
+
 - `troubleshoot_database` - Diagnose database issues
 - `analyze_performance` - Analyze performance metrics
 - `capacity_planning` - Help with capacity planning decisions
@@ -106,9 +116,14 @@ Use prompts for common workflows:
 
 ## Resources
 
-- `redis://config/path` - Configuration file location
-- `redis://profiles` - List of configured profiles
-- `redis://help` - This help text
+- `redisctl://config/path` - Configuration file location, not file contents
+- `redisctl://profiles` - Profile names and defaults, not credentials
+- `redisctl://help` - This help text
+- `redisctl://skills` - Workflow index and current tool availability
+- `redisctl://skills/<name>` - One complete workflow
+
+The old `redis://config/path`, `redis://profiles`, and `redis://help` URIs remain
+compatible aliases. These describe redisctl, not a particular Redis instance.
 "#,
         )
 }
@@ -120,7 +135,7 @@ mod tests {
     #[tokio::test]
     async fn test_help_resource() {
         let resource = help_resource();
-        assert_eq!(resource.uri, "redis://help");
+        assert_eq!(resource.uri, "redisctl://help");
         assert_eq!(resource.name, "Help");
 
         let result = resource.read().await;
@@ -137,7 +152,7 @@ mod tests {
     #[tokio::test]
     async fn test_config_path_resource() {
         let resource = config_path_resource();
-        assert_eq!(resource.uri, "redis://config/path");
+        assert_eq!(resource.uri, "redisctl://config/path");
 
         let result = resource.read().await;
         assert_eq!(result.contents.len(), 1);
@@ -148,12 +163,23 @@ mod tests {
     #[tokio::test]
     async fn test_profiles_resource() {
         let resource = profiles_resource();
-        assert_eq!(resource.uri, "redis://profiles");
+        assert_eq!(resource.uri, "redisctl://profiles");
 
         let result = resource.read().await;
         assert_eq!(result.contents.len(), 1);
         // Should return JSON (either profiles or error)
         let text = result.contents[0].text.as_ref().unwrap();
         assert!(text.starts_with('{'));
+    }
+
+    #[test]
+    fn profile_resource_errors_never_include_toml_source() {
+        let error =
+            toml::from_str::<Config>("files_api_key = \"resource-secret-sentinel").unwrap_err();
+        assert!(error.to_string().contains("resource-secret-sentinel"));
+        let summary = profiles_summary(Err(error.into()));
+        assert!(!summary.contains("resource-secret-sentinel"));
+        assert!(!summary.contains("files_api_key"));
+        assert!(summary.contains("Validate it locally"));
     }
 }

@@ -8,9 +8,7 @@ use anyhow::{Result, bail};
 use redisctl_core::Config;
 #[cfg(any(feature = "cloud", feature = "enterprise", feature = "database"))]
 use redisctl_core::DeploymentType;
-use tower_mcp::{
-    CapabilityFilter, DenialBehavior, DynamicPromptRegistry, McpRouter, PromptBuilder, Tool,
-};
+use tower_mcp::{CapabilityFilter, DenialBehavior, McpRouter, Tool};
 
 use crate::policy::{Policy, PolicyConfig, ToolsetKind};
 use crate::presets::{self, ToolVisibility, ToolsConfig};
@@ -99,7 +97,11 @@ impl McpServerBuilder {
         self
     }
 
-    /// Load Agent Skills from the provided directory as dynamic MCP prompts.
+    /// Add custom Agent Skills as MCP resources and prompts.
+    ///
+    /// Built-in skills are embedded and always available. Custom skills replace
+    /// built-ins with the same name and extend the catalog with new names.
+    /// An unreadable directory or invalid skill returns an error from `build`.
     pub fn with_skills_dir(mut self, skills_dir: Option<PathBuf>) -> Self {
         self.skills_dir = skills_dir;
         self
@@ -513,13 +515,6 @@ fn build_router(
     prompt_registry.register(prompts::capacity_planning_prompt());
     prompt_registry.register(prompts::migration_planning_prompt());
 
-    if let Some(directory) = skills_dir {
-        let count = load_skills(directory, &prompt_registry);
-        if count > 0 {
-            tracing::info!(count, dir = %directory.display(), "Loaded skill prompts");
-        }
-    }
-
     router = router.tool(crate::policy::show_policy_tool(policy.clone()));
 
     let all_tools = tool_toolset.keys().cloned().collect::<HashSet<_>>();
@@ -536,6 +531,37 @@ fn build_router(
         );
     }
 
+    let annotations = router.tool_annotations_map();
+    let mut available_tools = tool_toolset
+        .keys()
+        .filter(|name| visible.contains(*name))
+        .filter(|name| {
+            let hints = annotations.get(name);
+            let safety = crate::policy::ToolSafety::from_hints(
+                hints.is_some_and(|value| value.read_only_hint),
+                hints.is_none_or(|value| value.destructive_hint),
+            );
+            policy.is_named_tool_allowed(name, safety)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    available_tools.extend(
+        presets::SYSTEM_TOOLS
+            .iter()
+            .filter(|name| policy.is_named_tool_allowed(name, crate::policy::ToolSafety::ReadOnly))
+            .map(|name| (*name).to_string()),
+    );
+    available_tools.sort();
+    let mut enabled_toolsets = enabled.iter().map(ToString::to_string).collect::<Vec<_>>();
+    enabled_toolsets.sort();
+    router = crate::skills::register(
+        router,
+        &prompt_registry,
+        skills_dir,
+        enabled_toolsets,
+        available_tools,
+    )?;
+
     let visibility = Arc::new(ToolVisibility {
         visible: visible.clone(),
         all_tools: tool_toolset.clone(),
@@ -543,26 +569,24 @@ fn build_router(
     });
     router = router.tool(presets::list_available_tools_tool(visibility));
 
-    let mut prefix = format!(
-        "# Redis Cloud and Enterprise MCP Server\n\n## Safety Model\n\n{}\n",
-        policy.describe()
-    );
-    if preset_active {
-        prefix.push_str(&format!(
-            "\n## Tool Visibility\n\n\
-             A visibility preset is active: {active}/{total} tools are loaded. \
-             Use the `list_available_tools` tool to see all tools grouped by toolset, \
-             including hidden tools that can be enabled via the `include` list in the \
-             policy config.\n",
-            active = visible.len(),
-            total = all_tools.len(),
-        ));
-    }
-    let suffix = "\n## Authentication\n\n\
-         Credentials are resolved from redisctl profiles in both transport modes.\n\
-         HTTP transport does not authenticate clients; keep it on loopback or place it \
-         behind a trusted gateway that provides authentication, authorization, and TLS.";
-    router = router.auto_instructions_with(Some(prefix), Some(suffix));
+    // Keep initialization bounded: schemas come from tools/list and workflows are
+    // read on demand. Do not inline the catalog, skill bodies, or operator config.
+    router = router.instructions(format!(
+        "Redisctl MCP manages Cloud, Enterprise, and Redis databases. \
+         Global safety tier: {}; toolset overrides may apply.\n\n\
+         Read redisctl://skills for the workflow index and currently available tools. \
+         Read only the relevant workflow, starting with redisctl://skills/redisctl-setup \
+         for setup. If resources are unavailable in your client, select the \
+         redisctl-setup prompt.\n\n\
+         Check show_policy and list_available_tools when available. Respect policy \
+         denials and tool selection; workflows do not grant permissions. Never \
+         enable writes merely to follow a skill.\n\n\
+         Enter credentials through a trusted local user flow, never in chat or \
+         model-visible tool arguments. Credentials resolve from redisctl profiles. \
+         HTTP transport does not authenticate clients: keep it on loopback or behind \
+         a trusted gateway providing authentication, authorization, and TLS.",
+        policy.global_tier(),
+    ));
 
     let policy_for_filter = policy.clone();
     let visible_for_filter = Arc::new(visible);
@@ -586,8 +610,9 @@ pub(crate) struct Skill {
 
 fn strip_yaml_quotes(value: &str) -> &str {
     let value = value.trim();
-    if (value.starts_with('"') && value.ends_with('"'))
-        || (value.starts_with('\'') && value.ends_with('\''))
+    if value.len() >= 2
+        && ((value.starts_with('"') && value.ends_with('"'))
+            || (value.starts_with('\'') && value.ends_with('\'')))
     {
         &value[1..value.len() - 1]
     } else {
@@ -637,50 +662,6 @@ pub(crate) fn parse_skill(content: &str) -> Option<Skill> {
         description: description?,
         body,
     })
-}
-
-fn load_skills(directory: &Path, registry: &DynamicPromptRegistry) -> usize {
-    let entries = match std::fs::read_dir(directory) {
-        Ok(entries) => entries,
-        Err(error) => {
-            tracing::warn!(
-                "Failed to read skills directory {}: {error}",
-                directory.display()
-            );
-            return 0;
-        }
-    };
-
-    let mut count = 0;
-    for entry in entries.flatten() {
-        if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
-            continue;
-        }
-        let skill_file = entry.path().join("SKILL.md");
-        if let Ok(content) = std::fs::read_to_string(&skill_file)
-            && let Some(skill) = parse_skill(&content)
-        {
-            tracing::info!(skill = %skill.name, "Loaded skill prompt");
-            let body = skill.body.clone();
-            let description = skill.description.clone();
-            let prompt = PromptBuilder::new(&skill.name)
-                .description(&skill.description)
-                .handler(move |_arguments| {
-                    let body = body.clone();
-                    let description = description.clone();
-                    async move {
-                        Ok(tower_mcp::GetPromptResult::user_message_with_description(
-                            body,
-                            description,
-                        ))
-                    }
-                })
-                .build();
-            registry.register(prompt);
-            count += 1;
-        }
-    }
-    count
 }
 
 #[cfg(test)]
