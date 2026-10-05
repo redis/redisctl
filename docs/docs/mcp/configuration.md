@@ -20,7 +20,7 @@ This page covers all three, with emphasis on `--tools` for controlling the tool 
 | `--cluster` | -- | `REDIS_CLUSTER` | `false` | Enable Redis Cluster mode for direct database connections |
 | `--client-name` | -- | `REDIS_CLIENT_NAME` | `redisctl-mcp` | Client name shown in Redis `CLIENT LIST` |
 | `--tools` | -- | -- | -- | Comma-delimited toolset/sub-module selection (see below) |
-| `--skills-dir` | -- | `REDISCTL_MCP_SKILLS_DIR` | -- | Directory containing Agent Skills to expose as MCP prompts |
+| `--skills-dir` | -- | `REDISCTL_MCP_SKILLS_DIR` | -- | Custom skill directory; adds to or overrides embedded resources and prompts |
 | `--host` | -- | -- | `127.0.0.1` | HTTP bind host (HTTP transport only) |
 | `--port` | -- | -- | `8080` | HTTP bind port (HTTP transport only) |
 | `--max-concurrent` | -- | -- | `10` | Maximum concurrent requests |
@@ -79,7 +79,8 @@ The server resolves which toolsets to load in this order:
 3. **All compiled-in features** -- fallback when neither of the above applies
 
 !!! note
-    When `--tools` is not explicitly set, toolsets marked `enabled = false` in a policy file are also removed. When `--tools` is explicit, policy-based toolset disabling is skipped.
+    Toolsets marked `enabled = false` in a policy file remain unavailable even
+    when selected explicitly with `--tools`.
 
 ### Available Toolsets and Sub-Modules
 

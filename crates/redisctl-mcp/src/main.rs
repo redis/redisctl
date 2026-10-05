@@ -88,8 +88,8 @@ struct Args {
     request_timeout_secs: u64,
 
     // --- Skills ---
-    /// Directory containing SKILL.md files to load as MCP prompts.
-    /// Each subdirectory should contain a SKILL.md with YAML frontmatter.
+    /// Directory of custom SKILL.md files to expose as resources and prompts.
+    /// Overrides same-name embedded skills; other built-ins remain available.
     #[arg(long, env = "REDISCTL_MCP_SKILLS_DIR")]
     skills_dir: Option<PathBuf>,
 
@@ -168,13 +168,12 @@ async fn main() -> Result<()> {
     init_tracing(&args.log_level, audit_config.enabled);
 
     let credential_source = CredentialSource::Profiles(args.profile.clone());
-    let skills_dir = resolve_skills_dir(&args);
     let mut builder =
         McpServerBuilder::new(credential_source, policy_config.clone(), &policy_source)
             .with_database_url(args.database_url.clone())
             .with_cluster_mode(args.cluster)
             .with_client_name(args.client_name.clone())
-            .with_skills_dir(skills_dir);
+            .with_skills_dir(args.skills_dir.clone());
 
     if let Some(tool_specs) = &args.tools {
         builder = builder.with_tool_specs(tool_specs)?;
@@ -258,30 +257,6 @@ fn init_tracing(log_level: &str, audit_enabled: bool) {
             )
             .init();
     }
-}
-
-/// Resolve the skills directory: explicit flag > bundled skills.
-fn resolve_skills_dir(args: &Args) -> Option<PathBuf> {
-    if let Some(ref dir) = args.skills_dir {
-        if dir.is_dir() {
-            return Some(dir.clone());
-        }
-        tracing::warn!("Skills directory not found: {}", dir.display());
-        return None;
-    }
-
-    // Fall back to bundled skills next to the binary
-    if let Ok(exe) = std::env::current_exe() {
-        let bundled = exe
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join("skills");
-        if bundled.is_dir() {
-            return Some(bundled);
-        }
-    }
-
-    None
 }
 
 /// Run the HTTP server with middleware

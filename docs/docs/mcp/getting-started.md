@@ -449,7 +449,7 @@ The MCP server uses:
 
 - **Transport**: stdio (standard input/output)
 - **Protocol Version**: 2024-11-05
-- **Capabilities**: Tools, Resources (`redis://config/path`, `redis://profiles`, `redis://help`), and Prompts (`troubleshoot_database`, `analyze_performance`, `capacity_planning`, `migration_planning`, plus dynamic skill prompts)
+- **Capabilities**: Tools, [Resources and embedded skills](skills.md) (`redisctl://config/path`, `redisctl://profiles`, `redisctl://help`, `redisctl://skills`, and individual workflows), and Prompts (`troubleshoot_database`, `analyze_performance`, `capacity_planning`, `migration_planning`, plus skill prompts). The three previously published `redis://` metadata URIs remain compatible aliases.
 
 For MCP protocol details, see the [MCP Specification](https://spec.modelcontextprotocol.io/).
 
