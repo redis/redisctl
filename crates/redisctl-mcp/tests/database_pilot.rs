@@ -31,6 +31,24 @@ fn names(tools: &[Value]) -> HashSet<String> {
         .collect()
 }
 
+async fn assert_skill_catalog(client: &mut TestClient, actual: &HashSet<String>) {
+    let result = client.read_resource("redisctl://skills").await;
+    let text = result.contents[0].text.as_ref().unwrap();
+    let index: Value = serde_json::from_str(text).unwrap();
+    let reported = index["available_tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|name| name.as_str().unwrap().to_string())
+        .collect::<HashSet<_>>();
+    assert_eq!(
+        &reported, actual,
+        "skills must describe the composed router"
+    );
+    assert!(!text.contains("pilot-discovery-secret"));
+    assert!(!text.contains("127.0.0.1:1"));
+}
+
 #[tokio::test]
 async fn pilot_catalog_matches_separate_reviewed_baseline() {
     let mut client = client(builder(PolicyConfig::default())).await;
@@ -68,6 +86,9 @@ async fn pilot_catalog_matches_separate_reviewed_baseline() {
 #[tokio::test]
 async fn pilot_keeps_host_identity_and_management_toolsets() {
     let server = builder(PolicyConfig::default())
+        .with_database_url(Some(
+            "redis://default:pilot-discovery-secret@127.0.0.1:1".to_string(),
+        ))
         .with_tool_specs(["database", "cloud", "enterprise", "app"])
         .unwrap()
         .build()
@@ -75,6 +96,11 @@ async fn pilot_keeps_host_identity_and_management_toolsets() {
     let mut client = TestClient::from_router(server.into_router());
     let initialized = client.initialize().await;
     assert_eq!(initialized["serverInfo"]["name"], "redisctl-mcp");
+    let instructions = initialized["instructions"].as_str().unwrap();
+    assert!(instructions.len() < 2_000);
+    assert!(instructions.contains("redisctl://skills"));
+    assert!(!instructions.contains("pilot-discovery-secret"));
+    assert!(!instructions.contains("127.0.0.1:1"));
     let tools = client.list_tools().await;
     let actual = names(&tools);
     for name in [
@@ -92,6 +118,24 @@ async fn pilot_keeps_host_identity_and_management_toolsets() {
         tools.len(),
         "duplicate tool names after composition"
     );
+    assert_skill_catalog(&mut client, &actual).await;
+    let setup = client
+        .read_resource("redisctl://skills/redisctl-setup")
+        .await;
+    assert!(
+        setup.contents[0]
+            .text
+            .as_ref()
+            .unwrap()
+            .contains("redisctl profile init")
+    );
+    let prompt = client
+        .get_prompt("redisctl-setup", Default::default())
+        .await;
+    let prompt = serde_json::to_string(&prompt).unwrap();
+    assert!(prompt.contains("redisctl://skills"));
+    assert!(prompt.contains("never invoke unavailable"));
+    assert!(!prompt.contains("pilot-discovery-secret"));
 }
 
 #[tokio::test]
@@ -152,6 +196,7 @@ async fn host_policy_and_visibility_apply_to_discovery_and_invocation() {
             .await;
         assert!(!denied.to_string().contains("127.0.0.1:1"));
     }
+    assert_skill_catalog(&mut client, &actual).await;
 }
 
 #[tokio::test]
@@ -165,6 +210,7 @@ async fn disabled_database_requires_no_target_and_keeps_other_toolsets() {
     let actual = names(&tools);
     assert!(actual.contains("profile_list"));
     assert!(!actual.contains("redis_get"));
+    assert_skill_catalog(&mut client, &actual).await;
 }
 
 #[tokio::test]
@@ -503,15 +549,16 @@ mod live {
     }
 
     fn cluster_port() -> u16 {
-        for _ in 0..100 {
-            let port = std::net::TcpListener::bind("127.0.0.1:0")
-                .unwrap()
-                .local_addr()
-                .unwrap()
-                .port();
-            if port > 55000 {
-                continue;
-            }
+        let seed = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        for offset in 0..100u16 {
+            // macOS can allocate a long consecutive run above 55,000, leaving
+            // no room for Redis's +10,000 bus ports. Probe a bounded lower
+            // range instead of repeatedly rejecting OS-assigned ports.
+            let port = 20_000 + (seed % 20_000 + offset * 3) % 20_000;
             let sockets = [
                 port,
                 port + 1,

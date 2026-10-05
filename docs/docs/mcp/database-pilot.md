@@ -6,6 +6,12 @@ This is development work for #1172, not a production migration or release promis
 
 ## Try it
 
+Building from this branch currently requires access to the INTERNAL
+`redis-developer/redis-database-mcp-rs` repository. The manifest pins revision
+`8eff8240679d38157ee08b9d5e5eaeb656ce7550`; it does not require a crates.io
+publication to develop or review the pilot. See the access gate below before
+assuming a public checkout or fork can build it.
+
 ```bash
 cargo build -p redisctl-mcp --features database-mcp-pilot
 ./target/debug/redisctl-mcp --database-backend redis-mcp --tools database,app \
@@ -45,19 +51,52 @@ redisctl-owned. Global/per-toolset allow rules cannot add writes or raw commands
   completeness. Cluster-wide keyspace semantics are a default-cutover gate.
 - Reconnect/Cluster-safe `CLIENT SETNAME` is not implemented by this pilot. An
   explicit warning is emitted; production users needing naming stay on legacy.
-  This remains a default-cutover gate tracked in redis-tower #736.
+  Upstream replay support in
+  [redis-tower #736](https://github.com/joshrotenberg/redis-tower/issues/736)
+  is complete; adoption through the library's
+  [setup PR #128](https://github.com/redis-developer/redis-database-mcp-rs/pull/128)
+  remains outside this immutable pilot pin and is a default-cutover gate.
 - Deterministic library shutdown/lifecycle remains a cutover gate tracked in
   redis-database-mcp-rs #125. The pilot does not introduce session families.
 - The immutable Git dependency is intentional for coordinated development.
   Before publishing a dependent redisctl release, switch to the real published
   library and rerun clean-room packaging. Publication is not required to review
   this pilot, but this branch is not a release-ready package manifest.
-- Legacy-dependent bundled skills/prompts remain unchanged. Many reference
-  tools absent from the pilot; this backend is not their production target.
+- Embedded skills/resources and prompts remain available. The
+  `redisctl://skills` index reports the tools actually exposed by this backend
+  after host policy and visibility filtering. Read it before using a workflow:
+  many workflows reference tools absent from the pilot. Setup guidance must
+  not enable writes or silently switch backends to satisfy those workflows.
 
 Rollback is `--database-backend legacy` (or omit the selector); disabling the
-Cargo feature also removes the experimental dependency. Selecting an uncompiled
-pilot fails explicitly rather than silently falling back.
+Cargo feature removes the experimental runtime backend, not Cargo's need to
+resolve its optional Git dependency. Selecting an uncompiled pilot fails
+explicitly rather than silently falling back.
+
+### Source-access gate
+
+Public CI currently cannot fetch the internal repository. An approved read
+mechanism, its owner, and an existing reference are needed before access wiring;
+this branch does not provision credentials, reuse release tokens, change
+repository visibility, or expose secrets to untrusted fork jobs.
+
+Access must work before uncached Cargo resolution in all affected entry points:
+
+| Workflow | Cargo-resolving entry points |
+| --- | --- |
+| `ci.yml` | Clippy/core checks, package unit tests, integration/live tests, platform builds/tests, coverage |
+| `docs.yml` | Default embedding API rustdoc and all-feature workspace rustdoc |
+| `cargo-deny.yml` | Both advisory and bans/licenses/sources dependency-graph checks |
+| `release.yml` | `dist plan` metadata, local/global builds and any host step resolving workspace metadata |
+| `release-plz.yml` | Workspace/version resolution and eventual package/publish validation |
+
+`security.yml` runs `cargo audit` against the lockfile; that is distinct from
+the Cargo-resolving graph checks above. A cache hit is not proof of clean fetch
+access. CI-only credentials would unblock trusted jobs, but would **not** make
+anonymous default-feature builds or public fork builds resolve this optional
+Git dependency. Public source consumption needs a separate distribution/access
+decision. Registry packaging remains a later release gate; no release or
+default cutover is authorized by local pilot success.
 
 ## Catalog and result differences
 
