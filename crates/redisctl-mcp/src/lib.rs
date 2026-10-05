@@ -51,6 +51,7 @@ mod prompts;
 mod resources;
 mod serde_helpers;
 mod server;
+mod skills;
 mod state;
 
 #[cfg(not(feature = "test-support"))]

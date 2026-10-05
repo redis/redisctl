@@ -172,6 +172,7 @@ nav:
       - mcp/index.md
       - Getting Started: mcp/getting-started.md
       - Configuration: mcp/configuration.md
+      - Embedded Skills and Setup: mcp/skills.md
       - Compatibility and Catalog: mcp/compatibility.md
       - Experimental Database Pilot: mcp/database-pilot.md
       - Database Quickstart: mcp/database-quickstart.md
