@@ -69,6 +69,9 @@ skip = [
 unknown-registry = "warn"
 unknown-git = "warn"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# Development-only integration test helper. Keep this explicit so new git
-# dependencies continue to be surfaced by cargo-deny.
-allow-git = ["https://github.com/joshrotenberg/docker-wrapper"]
+# Reviewed development dependencies: integration test helper and immutable
+# opt-in MCP pilot. Keep this explicit so new git sources remain surfaced.
+allow-git = [
+    "https://github.com/joshrotenberg/docker-wrapper",
+    "https://github.com/redis-developer/redis-database-mcp-rs",
+]
