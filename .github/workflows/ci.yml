@@ -114,6 +114,12 @@ jobs:
       - name: Run integration tests
         run: cargo test --workspace --test '*' --all-features
 
+      - name: Install local Redis for the opt-in MCP pilot
+        run: sudo apt-get update && sudo apt-get install -y redis-server openssl
+
+      - name: Run fixed-target MCP pilot live tests
+        run: cargo test -p redisctl-mcp --all-features --test database_pilot -- --ignored --test-threads=1
+
       - name: Run Redis MCP command-safety integration tests
         env:
           REUSE_CONTAINERS: "1"
