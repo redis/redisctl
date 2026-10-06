@@ -10,11 +10,11 @@ source access, publication or a default backend change.
 
 ## Try it
 
-Building from this branch currently requires access to the INTERNAL
-`redis-developer/redis-database-mcp-rs` repository. The manifest pins revision
+The `redis-developer/redis-database-mcp-rs` repository is public. The manifest pins revision
 `8eff8240679d38157ee08b9d5e5eaeb656ce7550`; it does not require a crates.io
-publication to develop or review the pilot. See the access gate below before
-assuming a public checkout or fork can build it.
+publication or GitHub release to develop or review the pilot. Anonymous Git
+checkout and uncached Cargo resolution have been verified for both default
+features and `database-mcp-pilot`; no dependency-access credentials are required.
 
 ```bash
 cargo build -p redisctl-mcp --features database-mcp-pilot
@@ -63,9 +63,10 @@ redisctl-owned. Global/per-toolset allow rules cannot add writes or raw commands
 - Deterministic library shutdown/lifecycle remains a cutover gate tracked in
   redis-database-mcp-rs #125. The pilot does not introduce session families.
 - The immutable Git dependency is intentional for coordinated development.
-  Before publishing a dependent redisctl release, switch to the real published
-  library and rerun clean-room packaging. Publication is not required to review
-  this pilot, but this branch is not a release-ready package manifest.
+  Before publishing redisctl crates to crates.io, switch to a real registry
+  dependency and rerun clean-room packaging. Library publication is not required
+  to review or build this pilot. Binary release packaging and supported
+  distribution remain separate gates; this branch is not a release approval.
 - Embedded skills/resources and prompts remain available. The
   `redisctl://skills` index reports the tools actually exposed by this backend
   after host policy and visibility filtering. Read it before using a workflow:
@@ -77,14 +78,15 @@ Cargo feature removes the experimental runtime backend, not Cargo's need to
 resolve its optional Git dependency. Selecting an uncompiled pilot fails
 explicitly rather than silently falling back.
 
-### Source-access gate
+### Public source resolution and release gates
 
-Public CI currently cannot fetch the internal repository. An approved read
-mechanism, its owner, and an existing reference are needed before access wiring;
-this branch does not provision credentials, reuse release tokens, change
-repository visibility, or expose secrets to untrusted fork jobs.
+The repository owner made the library public on October 6, 2026. The former
+internal-source access blocker is resolved: the exact pin can be fetched with
+an empty Cargo home, credential helpers disabled, no global/system Git config,
+and no inherited authentication environment. Public CI must still pass its
+current-head compilation and test gates; public visibility is not test evidence.
 
-Access must work before uncached Cargo resolution in all affected entry points:
+Source resolution matters in all affected entry points:
 
 | Workflow | Cargo-resolving entry points |
 | --- | --- |
@@ -96,11 +98,11 @@ Access must work before uncached Cargo resolution in all affected entry points:
 
 `security.yml` runs `cargo audit` against the lockfile; that is distinct from
 the Cargo-resolving graph checks above. A cache hit is not proof of clean fetch
-access. CI-only credentials would unblock trusted jobs, but would **not** make
-anonymous default-feature builds or public fork builds resolve this optional
-Git dependency. Public source consumption needs a separate distribution/access
-decision. Registry packaging remains a later release gate; no release or
-default cutover is authorized by local pilot success.
+access. Default-feature Cargo resolution still fetches the optional Git source
+even though it does not activate the pilot backend. Anonymous resolution and
+current-head CI are distinct evidence; neither proves registry packaging or
+authorizes a release or default cutover. Publishing and release workflow host
+steps remain separately gated and are not run merely to validate this pilot.
 
 ## Catalog and result differences
 
