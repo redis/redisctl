@@ -22,12 +22,33 @@ Source links below point to that main revision. Existing tests/workflows are
 evidence of implemented checks, not proof that every release journey has run.
 Open PRs are not part of this baseline, even if their own checks pass.
 
+## Accepted targets and subsequent updates
+
+On October 6, Josh Rotenberg accepted **required meaningful CI, independent agent
+review and his merge decision**, and **GitHub private vulnerability reporting with
+a named human triage owner**. These are accepted targets, not undecided alternatives.
+The triage person, permanent standard owner/home and exact settings adoption remain
+unresolved. Existing required GitHub human approval remains in force; this record
+does not authorize a bypass or silently change the ruleset. A private reporting
+route must not be advertised as maintained before its owner and adoption are verified.
+
+The source assessment below remains the historical `1453352` snapshot. A subsequent
+merge was separately verified: opt-in pilot [#1176](https://github.com/redis/redisctl/pull/1176)
+merged October 6 at **19:08:45 UTC** as
+[`2f139f15caa7dd93400a283e578c6b5641323586`](https://github.com/redis/redisctl/commit/2f139f15caa7dd93400a283e578c6b5641323586).
+Its immutable public library pin remains `8eff8240679d38157ee08b9d5e5eaeb656ce7550`.
+The merged pilot is opt-in/read-only; legacy remains default. See the
+[pilot guide](../mcp/database-pilot.md). This merge does not complete setup/lifecycle
+adoption, full migration or registry/release packaging. No broader source assessment
+is claimed simply because this draft incorporates that main revision.
+
 ## Ownership, support and distribution
 
 [Workspace metadata](https://github.com/redis/redisctl/blob/1453352a88017612fda48f2e54b286100a64bd88/Cargo.toml)
 names Josh Rotenberg as author. That is identity evidence, not assignment of all
-CI, vulnerability, release or shared-standard responsibilities. Those explicit
-human assignments and the permanent standard home remain pending.
+CI, vulnerability, release or shared-standard responsibilities. Josh's merge
+decision is now the accepted review target; other explicit human assignments and
+the permanent standard home remain pending.
 
 Public bug reports use the [issue tracker](https://github.com/redis/redisctl/issues);
 user/contributor guidance is in the [README](https://github.com/redis/redisctl/blob/1453352a88017612fda48f2e54b286100a64bd88/README.md),
@@ -128,12 +149,12 @@ No secret values, private reports or customer environments were inspected.
 | PUB-02 | Partial | Install/quick-start instructions exist. This assessment did not execute clean consumer installs; archive/ARM64 and stale example gaps above remain. |
 | PUB-03 | Partial | MIT/Apache license files and workspace/package metadata exist. Actual shipped contents were not inspected here. |
 | PUB-04 | Partial | Effective contributor/community files and local check commands exist. Author metadata is present; responsibility assignments, stale manual-release guidance, closed good-first-issue examples and migration-specific PR-template phases need follow-up. AGENTS.md still describes registry SDK dependencies as Git dependencies. |
-| PUB-05 | Missing | SECURITY.md requests private reports but provides no actionable private destination (“Email … via GitHub”). Private reporting is disabled; route/triage owner and existing response-time promises need human decisions. |
+| PUB-05 | Missing | SECURITY.md requests private reports but provides no actionable private destination (“Email … via GitHub”). GitHub private reporting is the accepted target, but the observed setting remains disabled; a named triage owner, verified adoption and realistic response expectations remain unresolved. |
 | PUB-06 | Partial | Quick/unit/integration and MkDocs outcomes are enforced by their aggregates. Required Linux and strict rustdoc failures are omitted; controlled negative aggregate cases have not been demonstrated. |
 | PUB-07 | Partial | `CI Status` runs on every PR. Docs path filtering excludes Rust/Cargo-only changes despite rustdoc requirements; other path-filtered checks are explicitly separate. |
 | PUB-08 | Partial | Default token is read and Docker publishing permissions are job-scoped. Explicit validation permissions and broader release-workflow permission scoping/fork evidence are incomplete. |
 | PUB-09 | Partial | Action SHA pins, weekly Actions Dependabot and cargo-deny/audit exist. Dependabot does not cover Cargo; assigned finding triage/update dispositions remain incomplete. |
-| PUB-10 | Partial | PR guidance and one-approval ruleset exist. Shared human review model and revision-specific review records for adoption remain pending; agent reports are not human approval. |
+| PUB-10 | Partial | PR guidance and one-approval ruleset exist. Required meaningful CI, independent agent review and Josh's merge decision are the accepted target. Actual ruleset adoption and revision-specific review evidence remain separate; agent reports do not satisfy required human approval automatically. |
 | PUB-11 | Partial | Lockstep versioning, 1.x policy, changelogs and release workflows exist. Clean install/upgrade/artifact evidence, release ownership and rollback procedures remain #1087. |
 | PUB-12 | Partial | Scheduled audits and tracked backlog exist. Permanent drift/security/CI triage owners and accepted exception review dates are not assigned by this assessment. |
 
@@ -166,18 +187,22 @@ testing infrastructure, API stabilization, artifact/upgrade validation and suppo
 coverage retain their existing scopes. Truthful CI/docs aggregates are a separate
 proposed implementation slice, not implemented or certified here.
 
-Human decisions are still required for the shared review model, private-reporting
-destination and triage owner, and permanent standard/repository responsibility
-assignments. No exception is approved by this document. Pending owners/review dates
+The review model and GitHub private-reporting target are accepted. Human decisions
+are still required for the named security triage owner, permanent standard
+ownership/home and repository responsibility assignments, and exact settings
+adoption. No exception is approved by this document. Pending owners/review dates
 must be filled by the adopting maintainer before calling a gap an accepted exception.
 
-At this observation, opt-in migration [#1176](https://github.com/redis/redisctl/pull/1176),
-Unicode profile fix [#1180](https://github.com/redis/redisctl/pull/1180) and release
-[#1178](https://github.com/redis/redisctl/pull/1178) are separate open PRs, not audited
-main. The pilot's public immutable library source resolves its former source-access
-gate; it does not change the baseline's legacy default, publish a registry package
-or complete the broader migration. No pin/default/credential/release decision is
-made by this record.
+Pilot #1176 is now merged as recorded above. Unicode profile fix
+[#1180](https://github.com/redis/redisctl/pull/1180) and release
+[#1178](https://github.com/redis/redisctl/pull/1178) remain separate open PRs at this
+update; neither is included in the audited snapshot. The pilot's public immutable
+source resolves its former source-access gate; it does not change the legacy
+default, publish a registry package or complete the broader migration. Library
+[setup #128](https://github.com/redis-developer/redis-database-mcp-rs/pull/128) and
+[lifecycle #125](https://github.com/redis-developer/redis-database-mcp-rs/issues/125)
+remain open, separate gates. No pin/default/credential/release decision is made
+by this record.
 
 This baseline came from a read-only October 6 inventory, then was reconciled with
 the source and APIs listed above. Editorial review, reviewed head and disposition

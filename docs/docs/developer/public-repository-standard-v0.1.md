@@ -2,6 +2,8 @@
 
 **Status:** Candidate for discussion, October 6, 2026. This is not approved
 organization policy or a statement that any repository is compliant.
+Josh Rotenberg accepted the two policy targets below on October 6; the complete
+checklist and actual repository adoption remain separate.
 
 This checklist proposes a common, evidence-based baseline for public repositories.
 The initial cohort is [redisctl](https://github.com/redis/redisctl),
@@ -89,13 +91,19 @@ not establish the absence of protection. Effective inherited guidance must be
 checked rather than inferred from a missing local file. See GitHub's
 [community-file guidance](https://docs.github.com/en/communities/setting-up-your-project-for-healthy-contributions/creating-a-default-community-health-file).
 
-## Decisions pending human approval
+## Accepted targets and pending adoption details
 
-| Decision | Proposed starting point | Still required |
+| Decision | Accepted target or pending choice | Still required |
 | --- | --- | --- |
-| Review model | Meaningful CI and independent agent review, with the maintainer making the merge decision. | Choose solo-maintainer enforcement or an eligible second human approval; reconcile current repository requirements. |
-| Security reporting | GitHub private vulnerability reporting where permitted, or an existing company private channel. | Confirm the destination, name a triage owner and agree realistic response expectations before advertising it. |
-| Shared ownership/home | Keep this versioned redisctl reference during evaluation. | Name the shared standard's human owner and permanent home, and designate each repository's adoption owner. |
+| Review model | **Accepted:** required meaningful CI, independent agent review and Josh Rotenberg's merge decision for this rollout. | Propose and authorize exact settings separately; reconcile the existing required human approval without silently weakening rules or using a bypass. |
+| Security reporting | **Accepted:** GitHub private vulnerability reporting with a named human triage owner. | Name the owner, authorize and verify settings adoption, and agree realistic response expectations before advertising a maintained route. No owner is assigned here. |
+| Shared ownership/home | **Pending:** this versioned redisctl reference is the initial home during evaluation. | Name the shared standard's human owner and permanent home, and designate each repository's adoption owner. |
+
+Acceptance of a target is not adoption of settings, approval of the entire
+candidate, compliance evidence or merge/release authorization. Existing repository
+requirements remain in force until an exact settings change is separately approved
+and verified. The security target does not enable reporting or establish a response
+promise before ownership and adoption are resolved.
 
 Agent review is evidence, not automatically an eligible GitHub approval. Review
 requirements follow the configured policy and reviewer permissions; see
@@ -109,7 +117,8 @@ it does not assign a triage owner. See
 1. Review this candidate and an honest per-repository record.
 2. Prepare narrowly scoped source fixes for demonstrated gaps. Correct aggregate
    behavior before proposing new ruleset enforcement. Preserve advisory platforms.
-3. Obtain human decisions for review/security/ownership and exact settings changes.
+3. Resolve the named security owner and standard ownership/home; obtain approval
+   for the exact settings changes needed to adopt the accepted targets.
 4. Apply authorized changes, verify their effect and record adopted revisions and
    outstanding gaps or approved exceptions.
 5. Plan merges and releases using their own acceptance criteria and authorization.
