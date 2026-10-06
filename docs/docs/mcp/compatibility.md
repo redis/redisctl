@@ -21,7 +21,7 @@ visibility presets, and policy tiers can expose a supported subset of this catal
 
 ## Rust embedding API
 
-For the proposed external database backend, see the
+For the experimental external database backend, see the
 [Database MCP Migration Contract](database-migration.md). It defines fixed startup
 target selection and the opt-in pilot's compatibility/parity gates; it does not
 change the currently released legacy backend or its catalog.

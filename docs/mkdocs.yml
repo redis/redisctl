@@ -175,6 +175,7 @@ nav:
       - Embedded Skills and Setup: mcp/skills.md
       - Compatibility and Catalog: mcp/compatibility.md
       - Database Migration Design: mcp/database-migration.md
+      - Experimental Database Pilot: mcp/database-pilot.md
       - Database Quickstart: mcp/database-quickstart.md
       - Cloud Quickstart: mcp/cloud-quickstart.md
       - Enterprise Quickstart: mcp/enterprise-quickstart.md

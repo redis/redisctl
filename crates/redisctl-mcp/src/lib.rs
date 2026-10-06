@@ -43,6 +43,8 @@
 //! ```
 
 mod audit;
+#[cfg(feature = "database-mcp-pilot")]
+mod database_pilot;
 mod policy;
 mod presets;
 mod prompts;
@@ -65,7 +67,7 @@ pub mod tools;
 pub use audit::{AuditConfig, AuditLayer, AuditLevel, AuditService};
 pub use policy::{Policy, PolicyConfig, SafetyTier, ToolsetKind, ToolsetPolicy};
 pub use presets::ToolsConfig;
-pub use server::{McpServer, McpServerBuilder};
+pub use server::{DatabaseBackend, McpServer, McpServerBuilder};
 pub use state::{AppState, CredentialSource};
 
 #[cfg(test)]

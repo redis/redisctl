@@ -15,6 +15,18 @@ use crate::presets::{self, ToolVisibility, ToolsConfig};
 use crate::state::{AppState, CredentialSource};
 use crate::{prompts, tools};
 
+/// Database tool implementation selected for this process.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
+#[non_exhaustive]
+pub enum DatabaseBackend {
+    /// The stable, existing database catalog (the default).
+    #[default]
+    Legacy,
+    /// Experimental fixed-target, read-only Keyspace/Strings library pilot.
+    /// Requires the additive `database-mcp-pilot` Cargo feature.
+    RedisMcp,
+}
+
 /// Builder for the supported redisctl MCP embedding surface.
 ///
 /// The builder creates the tool-to-toolset mapping before it resolves the
@@ -30,6 +42,9 @@ pub struct McpServerBuilder {
     cluster: bool,
     client_name: Option<String>,
     skills_dir: Option<PathBuf>,
+    database_backend: DatabaseBackend,
+    #[cfg(feature = "database-mcp-pilot")]
+    pilot_options: crate::database_pilot::Options,
 }
 
 impl McpServerBuilder {
@@ -51,6 +66,9 @@ impl McpServerBuilder {
             cluster: false,
             client_name: None,
             skills_dir: None,
+            database_backend: DatabaseBackend::Legacy,
+            #[cfg(feature = "database-mcp-pilot")]
+            pilot_options: crate::database_pilot::Options::default(),
         }
     }
 
@@ -85,6 +103,26 @@ impl McpServerBuilder {
         self
     }
 
+    /// Explicitly opt in to a database backend; compiling the pilot does not select it.
+    pub fn with_database_backend(mut self, backend: DatabaseBackend) -> Self {
+        self.database_backend = backend;
+        self
+    }
+
+    /// Set the experimental pilot's deadline, including lazy connection setup.
+    #[cfg(feature = "database-mcp-pilot")]
+    pub fn with_database_pilot_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.pilot_options.timeout = timeout;
+        self
+    }
+
+    /// Set the experimental pilot's encoded-result and collection-entry limits.
+    #[cfg(feature = "database-mcp-pilot")]
+    pub fn with_database_pilot_output_limits(mut self, bytes: usize, entries: usize) -> Self {
+        self.pilot_options.budget = redis_mcp::OutputBudget::new(bytes, entries);
+        self
+    }
+
     /// Enable or disable Redis Cluster redirection handling.
     pub fn with_cluster_mode(mut self, cluster: bool) -> Self {
         self.cluster = cluster;
@@ -109,17 +147,62 @@ impl McpServerBuilder {
 
     /// Build the router, shared application state, and audit metadata.
     pub fn build(mut self) -> Result<McpServer> {
+        #[cfg(not(feature = "database-mcp-pilot"))]
+        if self.database_backend == DatabaseBackend::RedisMcp {
+            bail!("The redis-mcp backend requires the database-mcp-pilot Cargo feature");
+        }
         let disabled = self.policy_config.disabled_toolsets();
         self.enabled
             .retain(|toolset| !disabled.contains(&toolset.kind()));
 
-        let tool_toolset = build_tool_toolset_mapping(&self.enabled);
+        #[cfg(feature = "database-mcp-pilot")]
+        let pilot_target = if self.database_backend == DatabaseBackend::RedisMcp
+            && let Some(selection) = self.enabled.selections.get(&Toolset::Database)
+        {
+            if !matches!(selection, SubModuleSelection::All) {
+                bail!(
+                    "The redis-mcp pilot requires the bare database toolset; legacy database submodules are not supported"
+                );
+            }
+            Some(crate::database_pilot::resolve_target(
+                &self.credential_source,
+                self.database_url.as_deref(),
+                self.cluster,
+            )?)
+        } else {
+            None
+        };
+        #[cfg(feature = "database-mcp-pilot")]
+        if pilot_target.is_some() && self.client_name.is_some() {
+            tracing::warn!(
+                "The experimental redis-mcp pilot does not yet provide reconnect/Cluster-safe client naming; use the legacy backend for production naming guarantees"
+            );
+        }
+
+        #[allow(unused_mut)]
+        let mut tool_toolset = build_tool_toolset_mapping(&self.enabled);
+        #[cfg(feature = "database-mcp-pilot")]
+        if pilot_target.is_some() {
+            tool_toolset.retain(|_, kind| *kind != ToolsetKind::Database);
+            for name in crate::database_pilot::tool_names() {
+                tool_toolset.insert(name.to_string(), ToolsetKind::Database);
+            }
+        }
         let tools_config = self.policy_config.tools.clone();
         let policy = Arc::new(Policy::new(
             self.policy_config,
             tool_toolset.clone(),
             self.policy_source,
         ));
+        #[cfg(feature = "database-mcp-pilot")]
+        let pilot_router = pilot_target
+            .map(|target| {
+                let all_tools = tool_toolset.keys().cloned().collect();
+                let visible =
+                    presets::resolve_visible_tools(&tools_config, &all_tools, &tool_toolset);
+                crate::database_pilot::router(target, self.pilot_options, policy.clone(), visible)
+            })
+            .transpose()?;
         let state = Arc::new(AppState::new(
             self.credential_source,
             policy.clone(),
@@ -134,6 +217,8 @@ impl McpServerBuilder {
             tools_config,
             &tool_toolset,
             self.skills_dir.as_deref(),
+            #[cfg(feature = "database-mcp-pilot")]
+            pilot_router,
         )?;
 
         let mut enabled_toolsets = self
@@ -502,11 +587,19 @@ fn build_router(
     tools_config: ToolsConfig,
     tool_toolset: &HashMap<String, ToolsetKind>,
     skills_dir: Option<&Path>,
+    #[cfg(feature = "database-mcp-pilot")] mut pilot_router: Option<McpRouter>,
 ) -> Result<McpRouter> {
     let router = McpRouter::new().server_info("redisctl-mcp", env!("CARGO_PKG_VERSION"));
     let (mut router, prompt_registry) = router.with_dynamic_prompts();
 
     for (toolset, selection) in &enabled.selections {
+        #[cfg(feature = "database-mcp-pilot")]
+        if *toolset == Toolset::Database
+            && let Some(pilot) = pilot_router.take()
+        {
+            router = router.merge(pilot);
+            continue;
+        }
         router = merge_toolset_router(router, *toolset, selection, state.clone());
     }
 
@@ -849,5 +942,20 @@ mod tests {
         assert_eq!(skill.name, "my-skill");
         assert_eq!(skill.description, "quoted desc");
         assert_eq!(skill.body, "Body with --- dashes.");
+    }
+
+    #[cfg(not(feature = "database-mcp-pilot"))]
+    #[test]
+    fn selecting_uncompiled_pilot_fails_without_silent_legacy_fallback() {
+        let error = McpServerBuilder::new(
+            CredentialSource::Profiles(Vec::new()),
+            PolicyConfig::default(),
+            "uncompiled-pilot-test",
+        )
+        .with_database_backend(DatabaseBackend::RedisMcp)
+        .build()
+        .err()
+        .unwrap();
+        assert!(error.to_string().contains("database-mcp-pilot"));
     }
 }

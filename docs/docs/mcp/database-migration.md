@@ -1,7 +1,7 @@
 # Database MCP Migration Contract
 
 !!! warning "Design for an opt-in pilot, not current runtime behavior"
-    This document proposes the host contract for
+    This document records the accepted opt-in pilot host contract for
     [#1171](https://github.com/redis/redisctl/issues/1171) and the validation plan for
     [#1172](https://github.com/redis/redisctl/issues/1172), under migration epic
     [#1170](https://github.com/redis/redisctl/issues/1170). The released 0.12.1
@@ -107,7 +107,7 @@ Tests use unique fake secrets to prove this boundary on failure paths.
 ## Multiple-target deployment
 
 Use clearly named configurations in the MCP client, each launching its own
-process. For example, these existing launch options illustrate the proposed
+process. For example, these existing launch options illustrate the fixed-target
 selection pattern without introducing a future backend-selector flag:
 
 ```json
@@ -171,14 +171,15 @@ is a plan, not a claim that migration tests already exist or pass.
 | Audit/secrets | Representative success, denial, timeout and parser/auth/TLS failures preserve host auditing without fake secret/URL leakage |
 | Budgets/timeouts | Connect and command failure paths terminate within documented limits; large replies respect library output budgets |
 | Lifecycle/rollback | Exercise process stop and disposal; record unresolved upstream lifecycle limitations; deselection restores the legacy backend |
-| Build/release | fmt, all-target/all-feature Clippy, workspace/integration tests, minimal-feature builds, strict rustdoc and clean-consumer checks against the pinned Git revision; registry packaging before release |
+| Build/release | fmt, all-target/all-feature Clippy, workspace/integration tests, minimal-feature builds, strict rustdoc and clean-consumer checks against the pinned Git revision; registry packaging before crates.io publication; binary release packaging remains separate |
 
 ## Development checkpoint and dependency gates
 
-The target contract remains proposed until human review of
-[#1175](https://github.com/redis/redisctl/pull/1175). The isolated opt-in
+The target contract was accepted for the opt-in pilot by merging
+[#1175](https://github.com/redis/redisctl/pull/1175) on 2026-10-05. The isolated
 [pilot #1176](https://github.com/redis/redisctl/pull/1176) implements it for
-validation, not as an accepted default compatibility change.
+validation. That acceptance does not approve a release or a default
+compatibility change. The later public-source decision is separate.
 
 The library's
 [published redis-tower dependency update #124](https://github.com/redis-developer/redis-database-mcp-rs/pull/124)
@@ -194,13 +195,14 @@ host-owned; the pilot's `redisctl://skills` index must describe the actual
 composed, policy-visible catalog. Missing library families must not be advertised
 as available merely because a bundled workflow refers to them.
 
-### Source-access prerequisite
+### Public source validation
 
-The pinned library repository is INTERNAL. Public CI cannot currently fetch it.
-An approved read-access mechanism, owner and reference are required; this work
-does not provision credentials, change visibility, reuse release tokens or
-expose secrets to untrusted forks. Verify uncached resolution before every
-affected Cargo entry point, not only compile jobs:
+The repository owner made the pinned library public on October 6, 2026. The
+former internal-source fetch blocker is resolved. Anonymous Git checkout and
+uncached Cargo resolution for default and pilot features have been verified;
+see the [pilot guide](database-pilot.md) and #1176 for current-head evidence.
+No dependency-access credentials are required. Source resolution still matters
+in every affected Cargo entry point, not only compile jobs:
 
 - `ci.yml`: Clippy/core checks, unit/integration/live tests, platform builds and
   coverage.
@@ -210,14 +212,15 @@ affected Cargo entry point, not only compile jobs:
   resolution; `release-plz.yml`: version/package/publish resolution.
 
 The lockfile-based `cargo audit` in `security.yml` is distinct from these graph
-checks. A trusted-CI read mechanism would not solve anonymous default-feature or
-public-fork builds: Cargo still resolves optional Git dependencies when their
-feature is disabled. Public source consumption requires a separate agreed
-distribution/access path. A warm cache is not clean-consumer evidence.
+checks. Cargo still resolves optional Git dependencies when their feature is
+disabled. A warm cache is not clean-consumer evidence, and public source
+availability is not compilation/test evidence. Release build, host and publish
+steps remain separately gated; do not run them merely to validate the pilot.
 
-Publication is not a pilot implementation gate. Before shipping a release that
-includes this dependency, discuss publication, switch to the agreed published
-crate version, and verify registry packaging and clean-consumer resolution. The
+Publication is not a pilot implementation gate. Before publishing dependent
+redisctl crates to crates.io, switch to an actual registry dependency and verify
+registry packaging and clean-consumer resolution. Binary release packaging and
+supported distribution remain separate decisions, not pilot prerequisites. The
 library server has its own library-first release ordering; its binary is not a
 redisctl dependency.
 
@@ -236,8 +239,9 @@ Before making the new backend default:
   evidence. Do not equate a passing compile or initial library release with
   production readiness.
 
-The design document alone leaves #1171 open: implementation contract tests and
-the library-side consumer tracker
-[#76](https://github.com/redis-developer/redis-database-mcp-rs/issues/76) still need
-the accepted host contract and evidence. The pilot and parent epic also remain
-open until their respective acceptance criteria are met.
+The accepted design leaves #1171 open for remaining implementation/validation
+acceptance, including current-head CI and independent review. The
+library-side consumer tracker
+[#76](https://github.com/redis-developer/redis-database-mcp-rs/issues/76) records
+the host contract and evidence. The pilot and parent epic also remain open until
+their respective acceptance criteria are met.

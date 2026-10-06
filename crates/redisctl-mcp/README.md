@@ -91,6 +91,18 @@ redisctl-mcp --transport http --port 8080 \
 
 ## Available Tools
 
+### Experimental database library pilot
+
+The production database backend remains unchanged. For the opt-in, read-only
+Keyspace/Strings pilot, build with `--features database-mcp-pilot` and select
+`--database-backend redis-mcp --tools database` plus an explicit
+`--database-url` or one database `--profile`. These two target sources cannot
+be combined. Compiling the feature alone does not select the pilot.
+
+The pilot has different schemas/results and is not a drop-in replacement:
+see the [pilot contract and validation report](../../docs/docs/mcp/database-pilot.md).
+Use the legacy backend for production client naming and full database tool coverage.
+
 ### Redis Cloud
 
 | Tool | Description |
