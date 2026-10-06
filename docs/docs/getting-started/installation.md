@@ -69,8 +69,8 @@ a temporary directory before installing the binary.
 === "Linux (ARM64)"
 
     Version 0.12.1 does not provide a pre-built Linux ARM64 archive. Build from
-    source with [Cargo](#cargo-from-source), or use the Linux ARM64 image described
-    in the [Docker guide](docker.md).
+    source with [Cargo](#cargo-from-source), or see the [Docker guide](docker.md)
+    for container-based installation.
 
 === "macOS (Intel)"
 
