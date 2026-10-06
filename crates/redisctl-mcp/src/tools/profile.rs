@@ -173,7 +173,7 @@ struct MaskedDatabaseCredentials {
     database: u8,
 }
 
-/// Mask a credential value, showing only first/last chars
+/// Mask a credential value, showing only the first/last two Unicode scalar values.
 fn mask_credential(value: &str) -> String {
     if value.is_empty() {
         return "(not set)".to_string();
@@ -185,10 +185,19 @@ fn mask_credential(value: &str) -> String {
         }
         return "(env var)".to_string();
     }
-    if value.len() <= 8 {
+    if value.chars().count() <= 8 {
         return "****".to_string();
     }
-    format!("{}...{}", &value[..2], &value[value.len() - 2..])
+    let prefix: String = value.chars().take(2).collect();
+    let suffix: String = value
+        .chars()
+        .rev()
+        .take(2)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{prefix}...{suffix}")
 }
 
 /// Build the profile_show tool
@@ -970,4 +979,52 @@ pub fn router(state: Arc<AppState>) -> McpRouter {
         ))
         .resource(crate::resources::profiles_resource_at("redis://profiles"))
         .resource(crate::resources::help_resource_at("redis://help"))
+}
+
+#[cfg(test)]
+mod credential_mask_tests {
+    use super::mask_credential;
+
+    #[test]
+    fn preserves_ascii_empty_and_reference_masks() {
+        for (value, expected) in [
+            ("", "(not set)"),
+            ("a", "****"),
+            ("abcdefgh", "****"),
+            ("abcdefghi", "ab...hi"),
+            ("abcdefghij", "ab...ij"),
+            ("keyring:🔒private-entry", "(keyring)"),
+            ("${PRIVATE_SECRET}", "(env var)"),
+        ] {
+            assert_eq!(mask_credential(value), expected);
+        }
+    }
+
+    #[test]
+    fn masks_multibyte_prefixes_and_suffixes_without_panicking() {
+        for (value, expected) in [
+            ("🔒password", "🔒p...rd"),
+            ("password🔒", "pa...d🔒"),
+            ("épassword", "ép...rd"),
+            ("passwordé", "pa...dé"),
+            ("密碼abcdefgh密碼", "密碼...密碼"),
+        ] {
+            assert_eq!(mask_credential(value), expected);
+            assert!(!mask_credential(value).contains(value));
+        }
+    }
+
+    #[test]
+    fn fully_masks_short_unicode_values_regardless_of_byte_length() {
+        for value in [
+            "🔒",
+            "🔒🔑🔒",
+            "密码短",
+            "éabcdefg",
+            "🔒abcdefg",
+            "e\u{301}abcdef",
+        ] {
+            assert_eq!(mask_credential(value), "****");
+        }
+    }
 }
