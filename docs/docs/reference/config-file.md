@@ -150,14 +150,18 @@ literal; numeric and boolean fields must use TOML values, not unquoted placehold
 Replacement text is used exactly as supplied by the environment, without interpreting its
 quotes, backslashes, or newlines as TOML syntax. Both `$VAR` and `${VAR}` are supported.
 
-Variables are resolved at runtime, and references survive a save. Commands that rewrite this file
-— `cloud auth login`, `profile set`, `logout` — write `${REDIS_CLOUD_API_KEY}` back rather than the
-value it resolved to, so a command acting on one profile cannot inline another profile's secret as
-a literal. `${VAR:-default}` is kept whole, and each reference is restored on the field that held
-it — two profiles whose variables happen to resolve to the same value keep their own, so they
-still differ when the values do. A field you changed since the file was read is written literally,
-and a variable that is unset stays unexpanded, so a profile whose variables are absent does not
-stop the file loading.
+Variables are resolved when the configuration is loaded. CLI commands and MCP profile tools
+retain that document's references when saving unrelated edits, even if the environment changes
+after loading. `${VAR:-default}` is kept whole, and each reference stays on its original field;
+two profiles whose variables resolve to the same value retain their own references. A command
+that intentionally replaces a field, such as the credentials supplied to `profile set`, writes
+that replacement literally. Untouched credentials, tags, Files API keys and login endpoints
+keep their references. An unset variable stays unexpanded and does not stop the file loading.
+
+Writes refuse a source that has changed since loading rather than adopting another writer's
+configuration. Reload and retry the command after resolving the conflicting edit. These checks
+are not an atomic filesystem transaction. Rust embedders should use `ConfigDocument` for
+provenance-aware load/edit/save operations; bare `Config` values do not retain load history.
 
 ### OS Keyring
 
