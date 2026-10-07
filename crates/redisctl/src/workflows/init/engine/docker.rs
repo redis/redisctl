@@ -83,9 +83,9 @@ impl DatabaseAction {
             DatabaseAction::StartExisting { .. } | DatabaseAction::AlreadyRunning { .. } => {
                 "existing Docker container"
             }
-            DatabaseAction::DockerDown { .. } => "Docker (not running)",
+            DatabaseAction::DockerDown { .. } => "Docker - not running",
             DatabaseAction::RunNew { .. } if applied => "new Docker container",
-            DatabaseAction::RunNew { .. } => "Docker (planned)",
+            DatabaseAction::RunNew { .. } => "planned Docker container",
         }
     }
 
@@ -611,6 +611,50 @@ mod tests {
         let action = plan_local_database(dir.path(), false).unwrap();
         assert!(matches!(action, DatabaseAction::Placeholder));
         assert_eq!(action.source(true), "placeholder - fill .env");
+    }
+
+    #[test]
+    fn no_source_label_nests_brackets_in_the_summary() {
+        let (name, url) = (|| "c".to_string(), || "redis://localhost:1".to_string());
+        let actions = [
+            DatabaseAction::Provided { url: url() },
+            DatabaseAction::Provided {
+                url: "redis://h.example:1".into(),
+            },
+            DatabaseAction::ExistingEnv {
+                url: url(),
+                container: None,
+                restart: false,
+            },
+            DatabaseAction::StartExisting {
+                name: name(),
+                url: url(),
+            },
+            DatabaseAction::AlreadyRunning {
+                name: name(),
+                port: 1,
+                url: url(),
+            },
+            DatabaseAction::Placeholder,
+            DatabaseAction::DockerDown {
+                name: name(),
+                port: 1,
+                url: url(),
+            },
+            DatabaseAction::RunNew {
+                name: name(),
+                image: "redis".into(),
+                image_local: true,
+                port: 1,
+                url: url(),
+            },
+        ];
+        for action in &actions {
+            for applied in [true, false] {
+                let label = action.source(applied);
+                assert!(!label.contains(['(', ')']), "{label}");
+            }
+        }
     }
 
     #[test]

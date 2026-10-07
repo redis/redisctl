@@ -219,14 +219,14 @@ impl Plan {
         matches!(self.database, Some(docker::DatabaseAction::Placeholder))
     }
 
-    /// The database's provenance for the summary line. `applied` picks the wording
-    /// for a real run over the planned one ("new Docker container" vs
-    /// "Docker (planned)").
+    /// The database's provenance for the summary line, which wraps it in
+    /// parentheses. `applied` picks the wording for a real run over the planned
+    /// one ("new Docker container" vs "planned Docker container").
     pub fn database_source(&self, applied: bool) -> Option<&'static str> {
         match (&self.cloud, &self.database) {
-            (Some(cloud), _) if cloud.created && applied => Some("Redis Cloud (new database)"),
-            (Some(cloud), _) if cloud.created => Some("Redis Cloud (planned)"),
-            (Some(_), _) => Some("Redis Cloud (existing database)"),
+            (Some(cloud), _) if cloud.created && applied => Some("new Redis Cloud database"),
+            (Some(cloud), _) if cloud.created => Some("planned Redis Cloud database"),
+            (Some(_), _) => Some("existing Redis Cloud database"),
             (None, Some(database)) => Some(database.source(applied)),
             (None, None) => None,
         }

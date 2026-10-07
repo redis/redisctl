@@ -268,7 +268,16 @@ async fn reuse_by_name_connects_validates_and_creates_nothing() {
     .stdout(predicates::str::contains(MOCK_PASSWORD).not())
     .get_output()
     .clone();
-    assert!(String::from_utf8_lossy(&output.stdout).contains("Redis Cloud (existing database)"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let changes = stdout
+        .lines()
+        .find(|l| l.starts_with("Changes"))
+        .unwrap_or_else(|| panic!("no Changes line: {stdout}"));
+    assert!(
+        changes.ends_with(" via existing Redis Cloud database)"),
+        "{changes}"
+    );
+    assert!(!changes.contains("))"), "{changes}");
 
     let env = std::fs::read_to_string(project.path().join(".env")).unwrap();
     assert!(
@@ -461,7 +470,7 @@ async fn dry_run_reports_the_choice_it_would_offer() {
     let props =
         requests[0].body_json::<serde_json::Value>().unwrap()["events"][0]["event_properties"]
             .clone();
-    assert_eq!(props["database_source"], "Redis Cloud (planned)");
+    assert_eq!(props["database_source"], "planned Redis Cloud database");
     assert_eq!(props["dry_run"], true);
 }
 
@@ -584,7 +593,7 @@ async fn empty_account_creates_a_free_subscription_and_database() {
     .stdout(predicates::str::contains(
         "database 9001 in Essentials subscription 501",
     ))
-    .stdout(predicates::str::contains("Redis Cloud (new database)"))
+    .stdout(predicates::str::contains("via new Redis Cloud database)"))
     .stdout(predicates::str::contains(MOCK_PASSWORD).not());
     let env = std::fs::read_to_string(project.path().join(".env")).unwrap();
     assert!(env.contains("REDIS_URL=\""), "{env}");
