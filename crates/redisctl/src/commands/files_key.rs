@@ -4,11 +4,12 @@
 //! support package uploads. Keys can be stored in the system keyring (secure)
 //! or in the config file (plaintext).
 
+use crate::connection::ConnectionManager;
 use anyhow::{Context, Result};
-use redisctl_core::Config;
 
 /// Handle the files-key set command
 pub async fn handle_set(
+    conn_mgr: &ConnectionManager,
     api_key: String,
     #[cfg(feature = "secure-storage")] use_keyring: bool,
     global: bool,
@@ -31,13 +32,21 @@ pub async fn handle_set(
     }
 
     // Store in config file
-    let mut config = Config::load().unwrap_or_default();
+    let mut config = conn_mgr.config.clone();
 
     if let Some(profile_name) = profile {
         // Store in specific profile
         if let Some(prof) = config.profiles.get_mut(&profile_name) {
             prof.files_api_key = Some(api_key);
-            config.save()?;
+            conn_mgr.save_config(
+                &config,
+                &[ConnectionManager::key_path(&[
+                    "profiles",
+                    &profile_name,
+                    "files_api_key",
+                ])],
+                false,
+            )?;
             println!("✓ Files.com API key stored in profile '{}'", profile_name);
             println!("\n⚠️  Warning: Key is stored in plaintext in config file");
             #[cfg(feature = "secure-storage")]
@@ -48,7 +57,11 @@ pub async fn handle_set(
     } else if global {
         // Store globally
         config.files_api_key = Some(api_key);
-        config.save()?;
+        conn_mgr.save_config(
+            &config,
+            &[ConnectionManager::key_path(&["files_api_key"])],
+            false,
+        )?;
         println!("✓ Files.com API key stored globally in config");
         println!("\n⚠️  Warning: Key is stored in plaintext in config file");
         #[cfg(feature = "secure-storage")]
@@ -68,7 +81,11 @@ pub async fn handle_set(
         {
             // Without secure-storage, default to global
             config.files_api_key = Some(api_key);
-            config.save()?;
+            conn_mgr.save_config(
+                &config,
+                &[ConnectionManager::key_path(&["files_api_key"])],
+                false,
+            )?;
             println!("✓ Files.com API key stored globally in config");
         }
     }
@@ -77,8 +94,8 @@ pub async fn handle_set(
 }
 
 /// Handle the files-key get command
-pub async fn handle_get(profile: Option<String>) -> Result<()> {
-    let config = Config::load().context("Failed to load config")?;
+pub async fn handle_get(conn_mgr: &ConnectionManager, profile: Option<String>) -> Result<()> {
+    let config = &conn_mgr.config;
 
     // Check profile-specific key
     if let Some(profile_name) = &profile {
@@ -197,6 +214,7 @@ pub async fn handle_get(profile: Option<String>) -> Result<()> {
 
 /// Handle the files-key remove command
 pub async fn handle_remove(
+    conn_mgr: &ConnectionManager,
     #[cfg(feature = "secure-storage")] keyring: bool,
     global: bool,
     profile: Option<String>,
@@ -214,7 +232,7 @@ pub async fn handle_remove(
         return Ok(());
     }
 
-    let mut config = Config::load().context("Failed to load config")?;
+    let mut config = conn_mgr.config.clone();
     let mut modified = false;
 
     if let Some(profile_name) = profile {
@@ -252,7 +270,7 @@ pub async fn handle_remove(
     }
 
     if modified {
-        config.save()?;
+        conn_mgr.save_config(&config, &[], false)?;
     }
 
     Ok(())

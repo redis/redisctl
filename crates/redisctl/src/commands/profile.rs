@@ -6,7 +6,7 @@ use crate::error::RedisCtlError;
 use crate::output;
 use anyhow::Context;
 use colored::Colorize;
-use redisctl_core::Config;
+use redisctl_core::{Config, ConfigPathSegment};
 use serde::Serialize;
 use std::time::{Duration, Instant};
 use tracing::{debug, info, trace};
@@ -717,14 +717,17 @@ async fn handle_set(
     config.profiles.insert(name.to_string(), profile);
 
     // Save the configuration to the appropriate location
+    let mut replacements = ConnectionManager::credential_replacements(name);
+    if !tags.is_empty() {
+        replacements.extend(tag_replacements(conn_mgr, &config, name));
+    }
+    conn_mgr
+        .save_config(&config, &replacements, false)
+        .context("Failed to save configuration")?;
     if let Some(ref path) = conn_mgr.config_path {
-        config
-            .save_to_path(path)
-            .context("Failed to save configuration")?;
         println!("Profile '{}' saved successfully to:", name);
         println!("  {}", path.display());
     } else {
-        config.save().context("Failed to save configuration")?;
         if let Ok(config_path) = Config::config_path() {
             println!("Profile '{}' saved successfully to:", name);
             println!("  {}", config_path.display());
@@ -1029,14 +1032,11 @@ async fn handle_init(conn_mgr: &ConnectionManager) -> Result<(), RedisCtlError> 
         }
     }
 
+    save_wizard_profile(conn_mgr, &config, &name, deployment_type, is_first)?;
     if let Some(ref path) = conn_mgr.config_path {
-        config
-            .save_to_path(path)
-            .context("Failed to save configuration")?;
         println!();
         println!("Profile '{}' saved to: {}", name, path.display());
     } else {
-        config.save().context("Failed to save configuration")?;
         if let Ok(config_path) = Config::config_path() {
             println!();
             println!("Profile '{}' saved to: {}", name, config_path.display());
@@ -1113,14 +1113,9 @@ async fn handle_remove(conn_mgr: &ConnectionManager, name: &str) -> Result<(), R
         println!("Default cloud profile cleared.");
     }
 
-    // Save the configuration to the appropriate location
-    if let Some(ref path) = conn_mgr.config_path {
-        config
-            .save_to_path(path)
-            .context("Failed to save configuration")?;
-    } else {
-        config.save().context("Failed to save configuration")?;
-    }
+    conn_mgr
+        .save_config(&config, &[], false)
+        .context("Failed to save configuration")?;
 
     println!("Profile '{}' removed successfully.", name);
     Ok(())
@@ -1150,14 +1145,15 @@ async fn handle_default_enterprise(
     let mut config = conn_mgr.config.clone();
     config.default_enterprise = Some(name.to_string());
 
-    // Save the configuration to the appropriate location
-    if let Some(ref path) = conn_mgr.config_path {
-        config
-            .save_to_path(path)
-            .context("Failed to save configuration")?;
-    } else {
-        config.save().context("Failed to save configuration")?;
-    }
+    conn_mgr
+        .save_config(
+            &config,
+            &[default_replacement(
+                redisctl_core::DeploymentType::Enterprise,
+            )],
+            false,
+        )
+        .context("Failed to save configuration")?;
 
     println!("Default enterprise profile set to '{}'.", name);
     Ok(())
@@ -1187,14 +1183,13 @@ async fn handle_default_cloud(
     let mut config = conn_mgr.config.clone();
     config.default_cloud = Some(name.to_string());
 
-    // Save the configuration to the appropriate location
-    if let Some(ref path) = conn_mgr.config_path {
-        config
-            .save_to_path(path)
-            .context("Failed to save configuration")?;
-    } else {
-        config.save().context("Failed to save configuration")?;
-    }
+    conn_mgr
+        .save_config(
+            &config,
+            &[default_replacement(redisctl_core::DeploymentType::Cloud)],
+            false,
+        )
+        .context("Failed to save configuration")?;
 
     println!("Default cloud profile set to '{}'.", name);
     Ok(())
@@ -1220,17 +1215,64 @@ async fn handle_default_database(
     let mut config = conn_mgr.config.clone();
     config.default_database = Some(name.to_string());
 
-    // Save the configuration to the appropriate location
-    if let Some(ref path) = conn_mgr.config_path {
-        config
-            .save_to_path(path)
-            .context("Failed to save configuration")?;
-    } else {
-        config.save().context("Failed to save configuration")?;
-    }
+    conn_mgr
+        .save_config(
+            &config,
+            &[default_replacement(redisctl_core::DeploymentType::Database)],
+            false,
+        )
+        .context("Failed to save configuration")?;
 
     println!("Default database profile set to '{}'.", name);
     Ok(())
+}
+
+fn default_replacement(deployment_type: redisctl_core::DeploymentType) -> Vec<ConfigPathSegment> {
+    let field = match deployment_type {
+        redisctl_core::DeploymentType::Cloud => "default_cloud",
+        redisctl_core::DeploymentType::Enterprise => "default_enterprise",
+        redisctl_core::DeploymentType::Database => "default_database",
+    };
+    ConnectionManager::key_path(&[field])
+}
+
+fn save_wizard_profile(
+    conn_mgr: &ConnectionManager,
+    config: &Config,
+    name: &str,
+    deployment_type: redisctl_core::DeploymentType,
+    is_first: bool,
+) -> Result<(), RedisCtlError> {
+    let mut replacements = ConnectionManager::credential_replacements(name);
+    // The wizard constructs a new profile, including its tags.
+    replacements.extend(tag_replacements(conn_mgr, config, name));
+    if is_first {
+        replacements.push(default_replacement(deployment_type));
+    }
+    conn_mgr
+        .save_config(config, &replacements, false)
+        .context("Failed to save configuration")?;
+    Ok(())
+}
+
+fn tag_replacements(
+    conn_mgr: &ConnectionManager,
+    updated: &Config,
+    name: &str,
+) -> Vec<Vec<ConfigPathSegment>> {
+    let previous = conn_mgr
+        .config
+        .profiles
+        .get(name)
+        .map_or(0, |p| p.tags.len());
+    let current = updated.profiles.get(name).map_or(0, |p| p.tags.len());
+    (0..previous.max(current))
+        .map(|index| {
+            let mut path = ConnectionManager::key_path(&["profiles", name, "tags"]);
+            path.push(ConfigPathSegment::Index(index));
+            path
+        })
+        .collect()
 }
 
 /// Result of a connectivity test for a single profile
@@ -1890,5 +1932,92 @@ fn print_validation_human(result: &ValidationOutput) {
         );
     } else {
         println!("{} Configuration is valid", "ok".green());
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+    use redisctl_core::{ConfigDocument, DeploymentType, Profile, ProfileCredentials};
+
+    fn fixture() -> (tempfile::TempDir, std::path::PathBuf, ConnectionManager) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+default_cloud = '${REDISCTL_WIZARD_DOCUMENT_ABSENT:-original}'
+files_api_key = '${REDISCTL_WIZARD_DOCUMENT_ABSENT:-global-files}'
+[profiles.original]
+deployment_type = 'cloud'
+api_key = '${REDISCTL_WIZARD_DOCUMENT_ABSENT:-old-key}'
+api_secret = '${REDISCTL_WIZARD_DOCUMENT_ABSENT:-old-secret}'
+tags = ['${REDISCTL_WIZARD_DOCUMENT_ABSENT:-old-tag}', 'second']
+[profiles.other]
+deployment_type = 'cloud'
+api_key = '${REDISCTL_WIZARD_DOCUMENT_ABSENT:-other-key}'
+api_secret = '${REDISCTL_WIZARD_DOCUMENT_ABSENT:-other-secret}'
+"#,
+        )
+        .unwrap();
+        let document = ConfigDocument::load_from_path(&path).unwrap();
+        let manager = ConnectionManager::with_document(document, Some(path.clone()));
+        (directory, path, manager)
+    }
+
+    #[test]
+    fn wizard_save_replaces_owned_profile_but_not_other_profiles_or_defaults() {
+        let (_directory, path, manager) = fixture();
+        let mut updated = manager.config.clone();
+        updated.profiles.insert(
+            "original".into(),
+            Profile {
+                deployment_type: DeploymentType::Cloud,
+                credentials: ProfileCredentials::Cloud {
+                    api_key: "explicit-key".into(),
+                    api_secret: "explicit-secret".into(),
+                    api_url: "https://api.example.com/v1".into(),
+                },
+                files_api_key: None,
+                tags: vec!["explicit-tag".into()],
+            },
+        );
+        save_wizard_profile(&manager, &updated, "original", DeploymentType::Cloud, false).unwrap();
+        let text = std::fs::read_to_string(path).unwrap();
+        for retained in ["original", "global-files", "other-key", "other-secret"] {
+            assert!(text.contains(&format!("${{REDISCTL_WIZARD_DOCUMENT_ABSENT:-{retained}}}")));
+        }
+        for replaced in ["old-key", "old-secret", "old-tag"] {
+            assert!(!text.contains(&format!("${{REDISCTL_WIZARD_DOCUMENT_ABSENT:-{replaced}}}")));
+        }
+    }
+
+    #[test]
+    fn wizard_first_profile_default_is_an_explicit_replacement() {
+        let (_directory, path, manager) = fixture();
+        let mut updated = manager.config.clone();
+        updated.default_cloud = Some("other".into());
+        save_wizard_profile(&manager, &updated, "other", DeploymentType::Cloud, true).unwrap();
+        let text = std::fs::read_to_string(path).unwrap();
+        assert!(!text.contains("${REDISCTL_WIZARD_DOCUMENT_ABSENT:-original}"));
+        assert!(text.contains("${REDISCTL_WIZARD_DOCUMENT_ABSENT:-old-secret}"));
+    }
+
+    #[test]
+    fn wizard_save_refuses_a_source_changed_during_interaction() {
+        let (_directory, path, manager) = fixture();
+        let intervening = "files_api_key = 'synthetic-intervening-wizard-marker'";
+        std::fs::write(&path, intervening).unwrap();
+        let error = save_wizard_profile(
+            &manager,
+            &manager.config,
+            "original",
+            DeploymentType::Cloud,
+            false,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("source changed"));
+        assert!(!format!("{error:?}").contains("synthetic-intervening-wizard-marker"));
+        assert_eq!(std::fs::read_to_string(path).unwrap(), intervening);
     }
 }

@@ -770,14 +770,16 @@ async fn complete_and_persist(
                 ))))
             }
         })?;
-    save_config_for_store(conn_mgr, &config, &store).map_err(|e| match e {
-        RedisCtlError::Structured(_) => e,
-        other => RedisCtlError::Configuration(format!(
-            "{other}. The key {} was created but not stored; revoke it in the Redis Cloud \
+    save_config_for_store(conn_mgr, &config, &store, profile_name, run.make_default).map_err(
+        |e| match e {
+            RedisCtlError::Structured(_) => e,
+            other => RedisCtlError::Configuration(format!(
+                "{other}. The key {} was created but not stored; revoke it in the Redis Cloud \
              console (Access Management > API Keys).",
-            creds.capi_key_name
-        )),
-    })?;
+                creds.capi_key_name
+            )),
+        },
+    )?;
 
     // Only now: the replacement is stored, so revoking what it replaced cannot leave this
     // profile without a working key.
@@ -1357,11 +1359,7 @@ fn parse_endpoint(value: &str, field: &str, trust_disabled: bool) -> CliResult<U
 }
 
 fn save_config(conn_mgr: &ConnectionManager, config: &Config) -> CliResult<()> {
-    match &conn_mgr.config_path {
-        Some(path) => config.save_to_path(path)?,
-        None => config.save()?,
-    }
-    Ok(())
+    conn_mgr.save_config(config, &[], false)
 }
 
 /// Save after a login. A plaintext store has just put the CAPI secret in this file, so it is
@@ -1370,16 +1368,69 @@ fn save_config_for_store(
     conn_mgr: &ConnectionManager,
     config: &Config,
     store: &CredentialStore,
+    profile_name: &str,
+    make_default: bool,
 ) -> CliResult<()> {
-    if store.storage_backend() == "keyring" {
-        return save_config(conn_mgr, config);
+    let mut replacements = ConnectionManager::credential_replacements(profile_name);
+    let previous_url = conn_mgr
+        .config
+        .profiles
+        .get(profile_name)
+        .and_then(|profile| profile.cloud_credentials())
+        .map(|credentials| credentials.2);
+    let updated_url = config
+        .profiles
+        .get(profile_name)
+        .and_then(|profile| profile.cloud_credentials())
+        .map(|credentials| credentials.2);
+    if previous_url == updated_url {
+        // Login/switch carries the endpoint through from the loaded auth configuration;
+        // it is not a newly minted credential when the profile endpoint is unchanged.
+        replacements.retain(|path| {
+            path != &ConnectionManager::key_path(&["profiles", profile_name, "api_url"])
+        });
     }
-    let path = match &conn_mgr.config_path {
-        Some(path) => path.clone(),
-        None => Config::config_path()?,
-    };
-    config.save_to_path_owner_only(&path)?;
-    Ok(())
+    if make_default {
+        replacements.push(ConnectionManager::key_path(&["default_cloud"]));
+    }
+    if let Some(auth) = config.cloud_auth.get(profile_name) {
+        let previous = conn_mgr.config.cloud_auth.get(profile_name);
+        for (field, value, old) in [
+            (
+                "okta_issuer",
+                &auth.okta_issuer,
+                previous.map(|a| &a.okta_issuer),
+            ),
+            (
+                "okta_client_id",
+                &auth.okta_client_id,
+                previous.map(|a| &a.okta_client_id),
+            ),
+            (
+                "sm_api_url",
+                &auth.sm_api_url,
+                previous.map(|a| &a.sm_api_url),
+            ),
+            ("capi_url", &auth.capi_url, previous.map(|a| &a.capi_url)),
+        ] {
+            // Existing resolved endpoint values are metadata carried through login, not
+            // literal replacements. Only a new/changed endpoint belongs to this command.
+            if old != Some(value) {
+                replacements.push(ConnectionManager::key_path(&[
+                    "cloud_auth",
+                    profile_name,
+                    field,
+                ]));
+            }
+        }
+        // The key name is newly minted, even when coincidentally equal to the old value.
+        replacements.push(ConnectionManager::key_path(&[
+            "cloud_auth",
+            profile_name,
+            "capi_key_name",
+        ]));
+    }
+    conn_mgr.save_config(config, &replacements, store.storage_backend() != "keyring")
 }
 
 /// A recognizable, unique-per-login CAPI key name (visible/revocable in the console).
@@ -1450,6 +1501,184 @@ mod tests {
     }
 
     use super::*;
+
+    fn persistence_fixture() -> (tempfile::TempDir, ConnectionManager) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+default_cloud = '${REDISCTL_AUTH_DOCUMENT_ABSENT:-qa}'
+files_api_key = '${REDISCTL_AUTH_DOCUMENT_ABSENT:-files-marker}'
+[profiles.qa]
+deployment_type = 'cloud'
+api_key = '${REDISCTL_AUTH_DOCUMENT_ABSENT:-old-key}'
+api_secret = '${REDISCTL_AUTH_DOCUMENT_ABSENT:-old-secret}'
+api_url = '${REDISCTL_AUTH_DOCUMENT_ABSENT:-https://api.redislabs.com/v1}'
+files_api_key = '${REDISCTL_AUTH_DOCUMENT_ABSENT:-profile-files}'
+tags = ['${REDISCTL_AUTH_DOCUMENT_ABSENT:-production}']
+[profiles.db]
+deployment_type = 'database'
+host = 'localhost'
+port = 6379
+password = '${REDISCTL_AUTH_DOCUMENT_ABSENT:-db-marker}'
+[cloud_auth.qa]
+okta_issuer = '${REDISCTL_AUTH_DOCUMENT_ABSENT:-https://auth.example.com/oauth2/default}'
+okta_client_id = '${REDISCTL_AUTH_DOCUMENT_ABSENT:-client-id}'
+sm_api_url = '${REDISCTL_AUTH_DOCUMENT_ABSENT:-https://sm.example.com/api/v1}'
+capi_url = '${REDISCTL_AUTH_DOCUMENT_ABSENT:-https://api.redislabs.com/v1}'
+capi_key_name = '${REDISCTL_AUTH_DOCUMENT_ABSENT:-old-key-name}'
+"#,
+        )
+        .unwrap();
+        let document = redisctl_core::ConfigDocument::load_from_path(&path).unwrap();
+        (
+            directory,
+            ConnectionManager::with_document(document, Some(path)),
+        )
+    }
+
+    #[test]
+    fn plaintext_login_replaces_only_owned_fields_and_keeps_reference_metadata() {
+        let (_directory, manager) = persistence_fixture();
+        let store = CredentialStore::plaintext();
+        let mut updated = manager.config.clone();
+        let endpoints = updated.resolve_cloud_auth("qa");
+        updated
+            .apply_cloud_login(&store, "qa", &minted(None), Some(endpoints), true)
+            .unwrap();
+        save_config_for_store(&manager, &updated, &store, "qa", true).unwrap();
+        let path = manager.config_path.as_ref().unwrap();
+        let text = std::fs::read_to_string(path).unwrap();
+        for retained in [
+            "files-marker",
+            "profile-files",
+            "production",
+            "db-marker",
+            "https://auth.example.com/oauth2/default",
+            "client-id",
+            "https://sm.example.com/api/v1",
+            "https://api.redislabs.com/v1",
+        ] {
+            assert!(
+                text.contains(&format!("${{REDISCTL_AUTH_DOCUMENT_ABSENT:-{retained}}}")),
+                "missing reference {retained}"
+            );
+        }
+        for replaced in ["old-key", "old-secret", "old-key-name", "qa"] {
+            assert!(!text.contains(&format!("${{REDISCTL_AUTH_DOCUMENT_ABSENT:-{replaced}}}")));
+        }
+        let saved = Config::load_from_path(path).unwrap();
+        assert_eq!(
+            text.matches("${REDISCTL_AUTH_DOCUMENT_ABSENT:-https://api.redislabs.com/v1}")
+                .count(),
+            2
+        );
+        assert_eq!(saved.profiles["qa"].cloud_credentials().unwrap().1, "s");
+        assert_eq!(
+            saved.cloud_auth["qa"].capi_key_name.as_deref(),
+            Some("redisctl-cli-2")
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[test]
+    fn logout_save_keeps_login_endpoint_references() {
+        let (_directory, manager) = persistence_fixture();
+        let mut updated = manager.config.clone();
+        let mut endpoints = updated.resolve_cloud_auth("qa");
+        updated.remove_profile("qa");
+        endpoints.account_id = None;
+        endpoints.capi_key_name = None;
+        updated.cloud_auth.insert("qa".into(), endpoints);
+        save_config(&manager, &updated).unwrap();
+        let path = manager.config_path.as_ref().unwrap();
+        let text = std::fs::read_to_string(path).unwrap();
+        assert!(
+            text.contains(
+                "${REDISCTL_AUTH_DOCUMENT_ABSENT:-https://auth.example.com/oauth2/default}"
+            )
+        );
+        assert!(text.contains("${REDISCTL_AUTH_DOCUMENT_ABSENT:-db-marker}"));
+        let saved = Config::load_from_path(path).unwrap();
+        assert!(!saved.profiles.contains_key("qa"));
+        assert!(saved.cloud_auth["qa"].capi_key_name.is_none());
+    }
+
+    #[test]
+    fn account_switch_preserves_unchanged_profile_endpoint_and_default_references() {
+        let (_directory, manager) = persistence_fixture();
+        let store = CredentialStore::plaintext();
+        let mut updated = manager.config.clone();
+        let endpoints = updated.resolve_cloud_auth("qa");
+        updated
+            .apply_cloud_login(&store, "qa", &minted(None), Some(endpoints), false)
+            .unwrap();
+        save_config_for_store(&manager, &updated, &store, "qa", false).unwrap();
+        let text = std::fs::read_to_string(manager.config_path.as_ref().unwrap()).unwrap();
+        assert!(text.contains("${REDISCTL_AUTH_DOCUMENT_ABSENT:-qa}"));
+        assert_eq!(
+            text.matches("${REDISCTL_AUTH_DOCUMENT_ABSENT:-https://api.redislabs.com/v1}")
+                .count(),
+            2
+        );
+        assert!(!text.contains("${REDISCTL_AUTH_DOCUMENT_ABSENT:-old-secret}"));
+    }
+
+    #[test]
+    fn intentionally_changed_login_endpoints_are_written_without_touching_others() {
+        let (_directory, manager) = persistence_fixture();
+        let store = CredentialStore::plaintext();
+        let mut updated = manager.config.clone();
+        let mut endpoints = updated.resolve_cloud_auth("qa");
+        endpoints.capi_url = "https://new-api.example.com/v1".into();
+        let mut credentials = minted(None);
+        credentials.api_url = endpoints.capi_url.clone();
+        updated
+            .apply_cloud_login(&store, "qa", &credentials, Some(endpoints), false)
+            .unwrap();
+        save_config_for_store(&manager, &updated, &store, "qa", false).unwrap();
+        let path = manager.config_path.as_ref().unwrap();
+        let text = std::fs::read_to_string(path).unwrap();
+        assert!(!text.contains("${REDISCTL_AUTH_DOCUMENT_ABSENT:-https://api.redislabs.com/v1}"));
+        assert!(
+            text.contains(
+                "${REDISCTL_AUTH_DOCUMENT_ABSENT:-https://auth.example.com/oauth2/default}"
+            )
+        );
+        let saved = Config::load_from_path(path).unwrap();
+        assert_eq!(
+            saved.profiles["qa"].cloud_credentials().unwrap().2,
+            credentials.api_url
+        );
+        assert_eq!(saved.cloud_auth["qa"].capi_url, credentials.api_url);
+    }
+
+    #[test]
+    fn login_does_not_overwrite_a_changed_configuration_source() {
+        let (_directory, manager) = persistence_fixture();
+        let path = manager.config_path.as_ref().unwrap();
+        let intervening = "files_api_key = 'synthetic-intervening-secret'";
+        std::fs::write(path, intervening).unwrap();
+        let error = save_config_for_store(
+            &manager,
+            &manager.config,
+            &CredentialStore::plaintext(),
+            "qa",
+            true,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("source changed"));
+        assert!(!format!("{error:?}").contains("synthetic-intervening-secret"));
+        assert_eq!(std::fs::read_to_string(path).unwrap(), intervening);
+    }
 
     fn minted(superseded_key_name: Option<&str>) -> MintedCredentials {
         MintedCredentials {

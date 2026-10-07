@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use redisctl_core::{Config, DeploymentType, ProfileCredentials};
+use redisctl_core::{
+    Config, ConfigDocument, ConfigPathSegment, DeploymentType, ProfileCredentials,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tower_mcp::extract::{Json, State};
@@ -623,26 +625,8 @@ pub fn set_default_cloud(state: Arc<AppState>) -> Tool {
                     ToolSafety::Write,
                 )?;
 
-                let mut config = Config::load()
-                    .tool_context("Failed to load config")?;
-
-                // Verify profile exists and is a cloud profile
-                let profile = config
-                    .profiles
-                    .get(&input.name)
-                    .ok_or_else(|| ToolError::new(format!("Profile '{}' not found", input.name)))?;
-
-                if !matches!(profile.deployment_type, DeploymentType::Cloud) {
-                    return Err(McpError::tool(format!(
-                        "Profile '{}' is not a cloud profile (type: {:?})",
-                        input.name, profile.deployment_type
-                    )));
-                }
-
-                config.default_cloud = Some(input.name.clone());
-                config
-                    .save()
-                    .tool_context("Failed to save config")?;
+                let document = ConfigDocument::load().tool_context("Failed to load config")?;
+                set_default_in_document(document, &input.name, DeploymentType::Cloud)?;
 
                 Ok(CallToolResult::text(format!(
                     "Default cloud profile set to '{}'",
@@ -675,26 +659,8 @@ pub fn set_default_enterprise(state: Arc<AppState>) -> Tool {
                     ToolSafety::Write,
                 )?;
 
-                let mut config = Config::load()
-                    .tool_context("Failed to load config")?;
-
-                // Verify profile exists and is an enterprise profile
-                let profile = config
-                    .profiles
-                    .get(&input.name)
-                    .ok_or_else(|| ToolError::new(format!("Profile '{}' not found", input.name)))?;
-
-                if !matches!(profile.deployment_type, DeploymentType::Enterprise) {
-                    return Err(McpError::tool(format!(
-                        "Profile '{}' is not an enterprise profile (type: {:?})",
-                        input.name, profile.deployment_type
-                    )));
-                }
-
-                config.default_enterprise = Some(input.name.clone());
-                config
-                    .save()
-                    .tool_context("Failed to save config")?;
+                let document = ConfigDocument::load().tool_context("Failed to load config")?;
+                set_default_in_document(document, &input.name, DeploymentType::Enterprise)?;
 
                 Ok(CallToolResult::text(format!(
                     "Default enterprise profile set to '{}'",
@@ -722,20 +688,8 @@ pub fn delete_profile(state: Arc<AppState>) -> Tool {
             |State(state): State<Arc<AppState>>, Json(input): Json<DeleteProfileInput>| async move {
                 require_tool_allowed(&state, "profile_delete", ToolSafety::Destructive)?;
 
-                let mut config = Config::load().tool_context("Failed to load config")?;
-
-                // Check if profile exists
-                if !config.profiles.contains_key(&input.name) {
-                    return Err(McpError::tool(format!(
-                        "Profile '{}' not found",
-                        input.name
-                    )));
-                }
-
-                // Remove the profile (also clears defaults if this was a default)
-                config.remove_profile(&input.name);
-
-                config.save().tool_context("Failed to save config")?;
+                let document = ConfigDocument::load().tool_context("Failed to load config")?;
+                delete_profile_in_document(document, &input.name)?;
 
                 Ok(CallToolResult::text(format!(
                     "Profile '{}' deleted",
@@ -808,8 +762,157 @@ pub struct CreateProfileInput {
     pub set_default: Option<bool>,
 }
 
+fn create_profile_in_document(
+    mut document: ConfigDocument,
+    input: CreateProfileInput,
+) -> Result<CallToolResult, McpError> {
+    let config = document.config_mut();
+
+    // Check if profile already exists
+    if config.profiles.contains_key(&input.name) {
+        return Err(McpError::tool(format!(
+            "Profile '{}' already exists. Use profile_delete first to replace it.",
+            input.name
+        )));
+    }
+
+    // Parse deployment type
+    let deployment_type = match input.profile_type.to_lowercase().as_str() {
+        "cloud" => DeploymentType::Cloud,
+        "enterprise" => DeploymentType::Enterprise,
+        "database" | "db" => DeploymentType::Database,
+        other => {
+            return Err(McpError::tool(format!(
+                "Invalid profile type '{}'. Must be 'cloud', 'enterprise', or 'database'.",
+                other
+            )));
+        }
+    };
+
+    // Build credentials based on type
+    let credentials = match deployment_type {
+        DeploymentType::Cloud => {
+            let api_key = input
+                .api_key
+                .ok_or_else(|| McpError::tool("Cloud profiles require 'api_key'"))?;
+            let api_secret = input
+                .api_secret
+                .ok_or_else(|| McpError::tool("Cloud profiles require 'api_secret'"))?;
+            ProfileCredentials::Cloud {
+                api_key,
+                api_secret,
+                api_url: input
+                    .api_url
+                    .unwrap_or_else(|| "https://api.redislabs.com/v1".to_string()),
+            }
+        }
+        DeploymentType::Enterprise => {
+            let url = input
+                .url
+                .ok_or_else(|| McpError::tool("Enterprise profiles require 'url'"))?;
+            let username = input
+                .username
+                .ok_or_else(|| McpError::tool("Enterprise profiles require 'username'"))?;
+            ProfileCredentials::Enterprise {
+                url,
+                username,
+                password: input.password,
+                insecure: input.insecure.unwrap_or(false),
+                ca_cert: input.ca_cert,
+            }
+        }
+        DeploymentType::Database => {
+            let host = input
+                .host
+                .ok_or_else(|| McpError::tool("Database profiles require 'host'"))?;
+            ProfileCredentials::Database {
+                host,
+                port: input.port.unwrap_or(6379),
+                password: input.db_password,
+                tls: input.tls.unwrap_or(true),
+                username: input.db_username.unwrap_or_else(|| "default".to_string()),
+                database: input.database.unwrap_or(0),
+            }
+        }
+    };
+
+    let profile = redisctl_core::Profile {
+        deployment_type,
+        credentials,
+        files_api_key: None,
+        tags: vec![],
+    };
+
+    // Check if this is the first profile of its type
+    let is_first_of_type = config.get_profiles_of_type(deployment_type).is_empty();
+
+    // Determine whether to set as default
+    let should_set_default = input.set_default.unwrap_or(is_first_of_type);
+
+    config.set_profile(input.name.clone(), profile);
+
+    if should_set_default {
+        match deployment_type {
+            DeploymentType::Cloud => {
+                config.default_cloud = Some(input.name.clone());
+            }
+            DeploymentType::Enterprise => {
+                config.default_enterprise = Some(input.name.clone());
+            }
+            DeploymentType::Database => {
+                config.default_database = Some(input.name.clone());
+            }
+        }
+    }
+
+    // These fields came from the explicit create input (or its documented defaults),
+    // not a copy of another profile's resolved values.
+    for field in [
+        "deployment_type",
+        "api_key",
+        "api_secret",
+        "api_url",
+        "url",
+        "username",
+        "password",
+        "ca_cert",
+        "host",
+    ] {
+        document.allow_literal_replacement(&key_path(&["profiles", &input.name, field]));
+    }
+    if should_set_default {
+        document.allow_literal_replacement(&default_path(deployment_type));
+    }
+    document.save().tool_context("Failed to save config")?;
+
+    let mut output = format!(
+        "Profile '{}' created (type: {})",
+        input.name,
+        input.profile_type.to_lowercase()
+    );
+    if should_set_default {
+        output.push_str(&format!(
+            "\nSet as default {} profile",
+            input.profile_type.to_lowercase()
+        ));
+    }
+
+    Ok(CallToolResult::text(output))
+}
+
 /// Build the profile_create tool
 pub fn create_profile(state: Arc<AppState>) -> Tool {
+    create_profile_with_loader(state, ConfigDocument::load)
+}
+
+fn create_profile_with_loader(
+    state: Arc<AppState>,
+    load: impl Fn() -> Result<ConfigDocument, redisctl_core::ConfigDocumentError>
+    + Send
+    + Sync
+    + 'static,
+) -> Tool {
+    let load = Arc::new(load);
     ToolBuilder::new("profile_create")
         .description(
             "Create a new profile with credentials.\n\n\
@@ -819,132 +922,66 @@ pub fn create_profile(state: Arc<AppState>) -> Tool {
         .non_destructive()
         .extractor_handler(
             state,
-            |State(state): State<Arc<AppState>>,
-             Json(input): Json<CreateProfileInput>| async move {
-                require_tool_allowed(&state, "profile_create", ToolSafety::Write)?;
-
-                let mut config = Config::load().unwrap_or_default();
-
-                // Check if profile already exists
-                if config.profiles.contains_key(&input.name) {
-                    return Err(McpError::tool(format!(
-                        "Profile '{}' already exists. Use profile_delete first to replace it.",
-                        input.name
-                    )));
+            move |State(state): State<Arc<AppState>>, Json(input): Json<CreateProfileInput>| {
+                let load = Arc::clone(&load);
+                async move {
+                    require_tool_allowed(&state, "profile_create", ToolSafety::Write)?;
+                    // Only an absent document is empty. Malformed/unreadable sources fail closed.
+                    let document = load().tool_context("Failed to load config")?;
+                    create_profile_in_document(document, input)
                 }
-
-                // Parse deployment type
-                let deployment_type = match input.profile_type.to_lowercase().as_str() {
-                    "cloud" => DeploymentType::Cloud,
-                    "enterprise" => DeploymentType::Enterprise,
-                    "database" | "db" => DeploymentType::Database,
-                    other => {
-                        return Err(McpError::tool(format!(
-                            "Invalid profile type '{}'. Must be 'cloud', 'enterprise', or 'database'.",
-                            other
-                        )));
-                    }
-                };
-
-                // Build credentials based on type
-                let credentials = match deployment_type {
-                    DeploymentType::Cloud => {
-                        let api_key = input.api_key.ok_or_else(|| {
-                            McpError::tool("Cloud profiles require 'api_key'")
-                        })?;
-                        let api_secret = input.api_secret.ok_or_else(|| {
-                            McpError::tool("Cloud profiles require 'api_secret'")
-                        })?;
-                        ProfileCredentials::Cloud {
-                            api_key,
-                            api_secret,
-                            api_url: input
-                                .api_url
-                                .unwrap_or_else(|| "https://api.redislabs.com/v1".to_string()),
-                        }
-                    }
-                    DeploymentType::Enterprise => {
-                        let url = input.url.ok_or_else(|| {
-                            McpError::tool("Enterprise profiles require 'url'")
-                        })?;
-                        let username = input.username.ok_or_else(|| {
-                            McpError::tool("Enterprise profiles require 'username'")
-                        })?;
-                        ProfileCredentials::Enterprise {
-                            url,
-                            username,
-                            password: input.password,
-                            insecure: input.insecure.unwrap_or(false),
-                            ca_cert: input.ca_cert,
-                        }
-                    }
-                    DeploymentType::Database => {
-                        let host = input.host.ok_or_else(|| {
-                            McpError::tool("Database profiles require 'host'")
-                        })?;
-                        ProfileCredentials::Database {
-                            host,
-                            port: input.port.unwrap_or(6379),
-                            password: input.db_password,
-                            tls: input.tls.unwrap_or(true),
-                            username: input
-                                .db_username
-                                .unwrap_or_else(|| "default".to_string()),
-                            database: input.database.unwrap_or(0),
-                        }
-                    }
-                };
-
-                let profile = redisctl_core::Profile {
-                    deployment_type,
-                    credentials,
-                    files_api_key: None,
-                    tags: vec![],
-                };
-
-                // Check if this is the first profile of its type
-                let is_first_of_type =
-                    config.get_profiles_of_type(deployment_type).is_empty();
-
-                // Determine whether to set as default
-                let should_set_default = input.set_default.unwrap_or(is_first_of_type);
-
-                config.set_profile(input.name.clone(), profile);
-
-                if should_set_default {
-                    match deployment_type {
-                        DeploymentType::Cloud => {
-                            config.default_cloud = Some(input.name.clone());
-                        }
-                        DeploymentType::Enterprise => {
-                            config.default_enterprise = Some(input.name.clone());
-                        }
-                        DeploymentType::Database => {
-                            config.default_database = Some(input.name.clone());
-                        }
-                    }
-                }
-
-                config
-                    .save()
-                    .tool_context("Failed to save config")?;
-
-                let mut output = format!(
-                    "Profile '{}' created (type: {})",
-                    input.name,
-                    input.profile_type.to_lowercase()
-                );
-                if should_set_default {
-                    output.push_str(&format!(
-                        "\nSet as default {} profile",
-                        input.profile_type.to_lowercase()
-                    ));
-                }
-
-                Ok(CallToolResult::text(output))
             },
         )
         .build()
+}
+
+fn key_path(keys: &[&str]) -> Vec<ConfigPathSegment> {
+    keys.iter()
+        .map(|key| ConfigPathSegment::Key((*key).into()))
+        .collect()
+}
+
+fn default_path(deployment_type: DeploymentType) -> Vec<ConfigPathSegment> {
+    key_path(&[match deployment_type {
+        DeploymentType::Cloud => "default_cloud",
+        DeploymentType::Enterprise => "default_enterprise",
+        DeploymentType::Database => "default_database",
+    }])
+}
+
+fn set_default_in_document(
+    mut document: ConfigDocument,
+    name: &str,
+    deployment_type: DeploymentType,
+) -> Result<(), McpError> {
+    let profile = document
+        .config()
+        .profiles
+        .get(name)
+        .ok_or_else(|| ToolError::new(format!("Profile '{}' not found", name)))?;
+    if profile.deployment_type != deployment_type {
+        return Err(McpError::tool(format!(
+            "Profile '{}' is not a {} profile (type: {:?})",
+            name, deployment_type, profile.deployment_type
+        )));
+    }
+    document.allow_literal_replacement(&default_path(deployment_type));
+    match deployment_type {
+        DeploymentType::Cloud => document.config_mut().default_cloud = Some(name.into()),
+        DeploymentType::Enterprise => document.config_mut().default_enterprise = Some(name.into()),
+        DeploymentType::Database => document.config_mut().default_database = Some(name.into()),
+    }
+    document.save().tool_context("Failed to save config")?;
+    Ok(())
+}
+
+fn delete_profile_in_document(mut document: ConfigDocument, name: &str) -> Result<(), McpError> {
+    if !document.config().profiles.contains_key(name) {
+        return Err(McpError::tool(format!("Profile '{}' not found", name)));
+    }
+    document.config_mut().remove_profile(name);
+    document.save().tool_context("Failed to save config")?;
+    Ok(())
 }
 
 /// Build an MCP sub-router containing all App-level tools, resources, and prompts
@@ -970,4 +1007,273 @@ pub fn router(state: Arc<AppState>) -> McpRouter {
         ))
         .resource(crate::resources::profiles_resource_at("redis://profiles"))
         .resource(crate::resources::help_resource_at("redis://help"))
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+    use serde_json::json;
+
+    const SOURCE: &str = r#"
+files_api_key = '${REDISCTL_MCP_DOCUMENT_ABSENT:-global-files}'
+default_cloud = '${REDISCTL_MCP_DOCUMENT_ABSENT:-cloud.old}'
+default_enterprise = '${REDISCTL_MCP_DOCUMENT_ABSENT:-enterprise.old}'
+[profiles."db.old"]
+deployment_type = 'database'
+host = 'localhost'
+port = 6379
+password = '${REDISCTL_MCP_DOCUMENT_ABSENT:-synthetic-db-password}'
+tags = ['${REDISCTL_MCP_DOCUMENT_ABSENT:-production}']
+[profiles."cloud.old"]
+deployment_type = 'cloud'
+api_key = '${REDISCTL_MCP_DOCUMENT_ABSENT:-synthetic-cloud-key}'
+api_secret = '${REDISCTL_MCP_DOCUMENT_ABSENT:-synthetic-cloud-secret}'
+[profiles."enterprise.old"]
+deployment_type = 'enterprise'
+url = 'https://enterprise.invalid:9443'
+username = 'admin'
+password = '${REDISCTL_MCP_DOCUMENT_ABSENT:-synthetic-enterprise-password}'
+"#;
+
+    fn fixture() -> (tempfile::TempDir, std::path::PathBuf, ConfigDocument) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        std::fs::write(&path, SOURCE).unwrap();
+        let document = ConfigDocument::load_from_path(&path).unwrap();
+        (directory, path, document)
+    }
+
+    fn input(value: serde_json::Value) -> CreateProfileInput {
+        serde_json::from_value(value).unwrap()
+    }
+
+    fn state(tier: crate::policy::SafetyTier) -> Arc<AppState> {
+        let config = crate::policy::PolicyConfig {
+            tier,
+            ..Default::default()
+        };
+        Arc::new(AppState::without_config_for_tests(Arc::new(
+            crate::policy::Policy::new(
+                config,
+                [(
+                    "profile_create".to_string(),
+                    crate::policy::ToolsetKind::App,
+                )]
+                .into(),
+                "profile-document-tests".into(),
+            ),
+        )))
+    }
+
+    #[tokio::test]
+    async fn create_handler_rejects_invalid_sources_without_overwrite_or_sensitive_output() {
+        for content in [
+            b"files_api_key = 'synthetic-invalid-source-marker'\n[broken".to_vec(),
+            b"synthetic-invalid-source-marker\xff".to_vec(),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("config.toml");
+            std::fs::write(&path, &content).unwrap();
+            let load_path = path.clone();
+            let tool = create_profile_with_loader(
+                state(crate::policy::SafetyTier::ReadWrite),
+                move || ConfigDocument::load_from_path(&load_path),
+            );
+            let result = tool
+                .call(json!({"name":"new", "profile_type":"database", "host":"localhost"}))
+                .await;
+            assert!(result.is_error);
+            let diagnostic = format!("{result:?}");
+            assert!(diagnostic.contains("Failed to load config"));
+            assert!(!diagnostic.contains("synthetic-invalid-source-marker"));
+            assert_eq!(std::fs::read(&path).unwrap(), content);
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        std::fs::create_dir(&path).unwrap();
+        let load_path = path.clone();
+        let tool =
+            create_profile_with_loader(state(crate::policy::SafetyTier::ReadWrite), move || {
+                ConfigDocument::load_from_path(&load_path)
+            });
+        let result = tool
+            .call(json!({"name":"new", "profile_type":"database", "host":"localhost"}))
+            .await;
+        assert!(result.is_error);
+        assert!(path.is_dir());
+    }
+
+    #[tokio::test]
+    async fn create_handler_uses_disposable_document_and_preserves_existing_references() {
+        for existing in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("config.toml");
+            if existing {
+                std::fs::write(&path, SOURCE).unwrap();
+            }
+            let load_path = path.clone();
+            let tool = create_profile_with_loader(
+                state(crate::policy::SafetyTier::ReadWrite),
+                move || ConfigDocument::load_from_path(&load_path),
+            );
+            let result = tool
+                .call(json!({"name":"new", "profile_type":"database", "host":"localhost"}))
+                .await;
+            assert!(!result.is_error, "{result:?}");
+            let config = Config::load_from_path(&path).unwrap();
+            assert!(config.profiles.contains_key("new"));
+            if existing {
+                assert!(
+                    std::fs::read_to_string(&path)
+                        .unwrap()
+                        .contains("${REDISCTL_MCP_DOCUMENT_ABSENT:-synthetic-db-password}")
+                );
+            } else {
+                assert_eq!(config.default_database.as_deref(), Some("new"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn create_handler_checks_policy_before_loading_or_writing() {
+        let tool = create_profile_with_loader(state(crate::policy::SafetyTier::ReadOnly), || {
+            panic!("denied tool must not load a configuration")
+        });
+        let result = tool
+            .call(json!({"name":"new", "profile_type":"database", "host":"localhost"}))
+            .await;
+        assert!(result.is_error);
+        assert!(format!("{result:?}").contains("not allowed"));
+    }
+
+    #[test]
+    fn create_profiles_keeps_existing_references_and_accepts_explicit_input_values() {
+        for value in [
+            json!({"name":"new.cloud", "profile_type":"cloud", "api_key":"explicit-key", "api_secret":"synthetic-cloud-secret", "set_default":true}),
+            json!({"name":"new.enterprise", "profile_type":"enterprise", "url":"https://enterprise.invalid:9443", "username":"admin", "password":"synthetic-enterprise-password", "set_default":true}),
+            json!({"name":"new.database", "profile_type":"database", "host":"localhost", "db_password":"synthetic-db-password", "set_default":true}),
+        ] {
+            let (_directory, path, document) = fixture();
+            let name = value["name"].as_str().unwrap().to_string();
+            create_profile_in_document(document, input(value)).unwrap();
+            let saved = std::fs::read_to_string(&path).unwrap();
+            for reference in [
+                "global-files",
+                "production",
+                "synthetic-db-password",
+                "synthetic-cloud-key",
+                "synthetic-cloud-secret",
+                "synthetic-enterprise-password",
+            ] {
+                assert!(saved.contains(&format!("${{REDISCTL_MCP_DOCUMENT_ABSENT:-{reference}}}")));
+            }
+            assert!(
+                Config::load_from_path(&path)
+                    .unwrap()
+                    .profiles
+                    .contains_key(&name)
+            );
+        }
+    }
+
+    #[test]
+    fn default_mutations_only_replace_the_selected_root_reference() {
+        for (name, deployment_type, replaced, retained) in [
+            (
+                "cloud.old",
+                DeploymentType::Cloud,
+                "cloud.old",
+                "enterprise.old",
+            ),
+            (
+                "enterprise.old",
+                DeploymentType::Enterprise,
+                "enterprise.old",
+                "cloud.old",
+            ),
+        ] {
+            let (_directory, path, document) = fixture();
+            set_default_in_document(document, name, deployment_type).unwrap();
+            let saved = std::fs::read_to_string(path).unwrap();
+            assert!(!saved.contains(&format!("${{REDISCTL_MCP_DOCUMENT_ABSENT:-{replaced}}}")));
+            assert!(saved.contains(&format!("${{REDISCTL_MCP_DOCUMENT_ABSENT:-{retained}}}")));
+            assert!(saved.contains("${REDISCTL_MCP_DOCUMENT_ABSENT:-synthetic-db-password}"));
+        }
+    }
+
+    #[test]
+    fn delete_profile_preserves_unrelated_profiles_and_references() {
+        let (_directory, path, document) = fixture();
+        delete_profile_in_document(document, "cloud.old").unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("${REDISCTL_MCP_DOCUMENT_ABSENT:-synthetic-db-password}"));
+        assert!(saved.contains("${REDISCTL_MCP_DOCUMENT_ABSENT:-enterprise.old}"));
+        let config = Config::load_from_path(&path).unwrap();
+        assert!(!config.profiles.contains_key("cloud.old"));
+        assert!(config.default_cloud.is_none());
+    }
+
+    #[test]
+    fn validation_errors_do_not_change_the_document() {
+        for value in [
+            json!({"name":"cloud.old", "profile_type":"cloud", "api_key":"unused", "api_secret":"unused"}),
+            json!({"name":"new", "profile_type":"invalid"}),
+            json!({"name":"new", "profile_type":"cloud"}),
+        ] {
+            let (_directory, path, document) = fixture();
+            assert!(create_profile_in_document(document, input(value)).is_err());
+            assert_eq!(std::fs::read_to_string(path).unwrap(), SOURCE);
+        }
+        let (_directory, path, document) = fixture();
+        assert!(
+            set_default_in_document(document.clone(), "missing", DeploymentType::Cloud).is_err()
+        );
+        assert!(
+            set_default_in_document(document.clone(), "db.old", DeploymentType::Cloud).is_err()
+        );
+        assert!(delete_profile_in_document(document, "missing").is_err());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), SOURCE);
+    }
+
+    #[test]
+    fn every_mutation_rejects_an_intervening_writer_without_leaking_its_values() {
+        for operation in ["create", "default", "delete"] {
+            let (_directory, path, document) = fixture();
+            let intervening = "files_api_key = 'synthetic-intervening-secret'";
+            std::fs::write(&path, intervening).unwrap();
+            let error = match operation {
+                "create" => create_profile_in_document(
+                    document,
+                    input(json!({"name":"new", "profile_type":"database", "host":"localhost"})),
+                )
+                .map(|_| ())
+                .unwrap_err(),
+                "default" => set_default_in_document(document, "cloud.old", DeploymentType::Cloud)
+                    .unwrap_err(),
+                _ => delete_profile_in_document(document, "cloud.old").unwrap_err(),
+            };
+            assert!(error.to_string().contains("source changed"));
+            assert!(!format!("{error:?}").contains("synthetic-intervening-secret"));
+            assert_eq!(std::fs::read_to_string(path).unwrap(), intervening);
+        }
+    }
+
+    #[test]
+    fn new_configuration_uses_documented_first_profile_default_behavior() {
+        for set_default in [None, Some(false), Some(true)] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("config.toml");
+            let document = ConfigDocument::load_from_path(&path).unwrap();
+            create_profile_in_document(document, input(json!({"name":"db", "profile_type":"database", "host":"localhost", "set_default":set_default}))).unwrap();
+            let saved = Config::load_from_path(&path).unwrap();
+            assert_eq!(
+                saved.default_database.as_deref(),
+                if set_default == Some(false) {
+                    None
+                } else {
+                    Some("db")
+                }
+            );
+        }
+    }
 }

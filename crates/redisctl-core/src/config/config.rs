@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 use super::credential::CredentialStore;
 use super::error::{ConfigError, Result};
 
-/// Main configuration structure
+/// Main serializable runtime configuration structure.
+///
+/// Use [`super::ConfigDocument`] for file editing that retains load-time reference provenance.
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct Config {
     /// Default profile for enterprise commands
@@ -604,12 +606,11 @@ impl Config {
             source: e,
         })?;
 
-        // Expand environment variables in the config content
-        let expanded_content = Self::expand_env_vars(&content);
-
-        let config: Config = toml::from_str(&expanded_content)?;
-
-        Ok(config)
+        // Environment values are data, not TOML source. Parse before expansion so quotes,
+        // backslashes and newlines are not interpreted a second time. Keys remain literal.
+        let mut document: toml::Value = toml::from_str(&content)?;
+        Self::expand_string_values(&mut document);
+        document.try_into().map_err(Into::into)
     }
 
     /// Save configuration to the standard location
@@ -889,6 +890,33 @@ impl Config {
             shellexpand::env_with_context_no_errors(content, |var| std::env::var(var).ok());
         expanded.to_string()
     }
+
+    pub(super) fn expand_string_values(value: &mut toml::Value) {
+        Self::expand_string_values_with_context(value, &mut |var| std::env::var(var).ok());
+    }
+
+    pub(super) fn expand_string_values_with_context(
+        value: &mut toml::Value,
+        context: &mut impl FnMut(&str) -> Option<String>,
+    ) {
+        match value {
+            toml::Value::String(text) => {
+                *text = shellexpand::env_with_context_no_errors(text.as_str(), &mut *context)
+                    .into_owned();
+            }
+            toml::Value::Array(values) => {
+                for value in values {
+                    Self::expand_string_values_with_context(value, context);
+                }
+            }
+            toml::Value::Table(table) => {
+                for (_, value) in table.iter_mut() {
+                    Self::expand_string_values_with_context(value, context);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn default_cloud_url() -> String {
@@ -903,7 +931,7 @@ fn default_cloud_url() -> String {
 /// the new file's mode, so a reader either sees the old contents at the old permissions or the
 /// new contents at `0600`.
 #[cfg(unix)]
-fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(super) fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt;
 
@@ -945,13 +973,31 @@ fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 #[cfg(not(unix))]
-fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(super) fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     fs::write(path, bytes)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn string_expansion_recurses_through_nested_arrays_and_tables() {
+        let mut document: toml::Value = toml::from_str(
+            r#"
+"$VALUE" = [["$VALUE", { "$VALUE" = "${VALUE}" }], [true, 6379]]
+"#,
+        )
+        .unwrap();
+        let literal = "literal\"value\\nwith\nlines";
+        Config::expand_string_values_with_context(&mut document, &mut |name| {
+            (name == "VALUE").then(|| literal.to_string())
+        });
+        assert_eq!(document["$VALUE"][0][0].as_str(), Some(literal));
+        assert_eq!(document["$VALUE"][0][1]["$VALUE"].as_str(), Some(literal));
+        assert_eq!(document["$VALUE"][1][0].as_bool(), Some(true));
+        assert_eq!(document["$VALUE"][1][1].as_integer(), Some(6379));
+    }
 
     #[test]
     fn test_config_serialization() {
