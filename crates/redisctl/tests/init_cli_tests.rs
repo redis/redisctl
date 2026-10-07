@@ -110,13 +110,54 @@ fn an_empty_folder_reads_plainly_in_the_header() {
     assert!(stdout.contains("(no package manifest)"), "{stdout}");
     assert!(!stdout.contains("(unknown)"), "{stdout}");
     assert!(
-        stdout.contains("Agents   Claude Code   existing: none"),
+        stdout.contains("Agents    Claude Code   existing: none"),
         "{stdout}"
     );
     assert!(!stdout.contains('✗'), "{stdout}");
     assert_eq!(
         stdout.matches("no package manifest detected").count(),
         1,
+        "{stdout}"
+    );
+}
+
+#[test]
+fn the_header_rows_line_up_on_the_rail() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = redisctl()
+        .current_dir(dir.path())
+        .args([
+            "init",
+            "--dry-run",
+            "--no-telemetry",
+            "--url",
+            "redis://localhost:6379",
+            "--agent",
+            "claude",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let row = |label: &str| {
+        stdout
+            .lines()
+            .find(|l| l.contains(label))
+            .unwrap_or_else(|| panic!("no {label} row: {stdout}"))
+            .to_string()
+    };
+    let value_column = |line: &str, label: &str| {
+        let end = line.find(label).unwrap() + label.len();
+        let gap = line[end..].len() - line[end..].trim_start().len();
+        line[..end].chars().count() + gap
+    };
+    let (project, agents) = (row("Project"), row("Agents"));
+    assert!(project.starts_with('◇'), "{stdout}");
+    assert!(agents.starts_with('◇'), "{stdout}");
+    assert_eq!(
+        value_column(&project, "Project"),
+        value_column(&agents, "Agents"),
         "{stdout}"
     );
 }
@@ -166,7 +207,7 @@ fn the_header_lists_only_the_agent_files_that_exist() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "Agents   Claude Code, Cursor   existing: CLAUDE.md",
+            "Agents    Claude Code, Cursor   existing: CLAUDE.md",
         ))
         .stdout(predicate::str::contains("✓").not());
 }

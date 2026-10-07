@@ -239,10 +239,13 @@ async fn run_inner(
         descriptor.push_str(&format!(", {framework}"));
     }
     println!(
-        "{}   {} {}",
-        bold("Project"),
-        project.name,
-        dim(&format!("({descriptor})"))
+        "{}",
+        output::rail_line(&format!(
+            "{}   {} {}",
+            bold("Project"),
+            project.name,
+            dim(&format!("({descriptor})"))
+        ))
     );
 
     let pending = wizard::pending_questions(args, options.url_input.is_some());
@@ -255,6 +258,7 @@ async fn run_inner(
     // only the implicit no-flags default keeps it.
     options.replace_env_url = options.url_input.is_some() || wants_cloud;
     if interactive {
+        println!("{}", output::rail_gap());
         telemetry.step("wizard");
         // Probed only when the database question will actually be asked: the
         // wizard offers to reuse a server that is already running locally.
@@ -385,7 +389,7 @@ async fn run_inner(
     println!(
         "{}",
         output::rail_line(&format!(
-            "{}   {}{}   {}",
+            "{}    {}{}   {}",
             bold("Agents"),
             names,
             if args.agents.is_empty() && !asked_agents {
