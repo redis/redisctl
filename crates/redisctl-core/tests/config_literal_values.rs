@@ -1,6 +1,6 @@
 //! Isolated environment fixtures: no process-global environment mutation, keyring or API calls.
 
-use redisctl_core::{Config, ConfigError, ProfileCredentials};
+use redisctl_core::{Config, ConfigDocument, ConfigError, ProfileCredentials};
 use std::error::Error;
 use std::process::Command;
 
@@ -38,6 +38,14 @@ fn environment_values_are_literal_data() {
 #[test]
 fn configuration_diagnostics_do_not_include_rejected_values() {
     run_child("diagnostics", "synthetic-diagnostic-marker");
+}
+
+#[test]
+fn changed_or_removed_environment_does_not_change_save_provenance() {
+    run_child(
+        "changed_environment",
+        "synthetic-loaded\"value\\nwith\nlines",
+    );
 }
 
 #[test]
@@ -129,6 +137,50 @@ tags = ["${REDISCTL_CONFIG_LITERAL_VALUE}", "${REDISCTL_CONFIG_LITERAL_UNSET}", 
                 panic!("expected database profile");
             };
             assert_eq!(password.as_deref(), Some(value.as_str()));
+            // Public document load/save APIs see the real isolated environment, while saves
+            // keep the original references for both normal and owner-only writes.
+            for owner_only in [false, true] {
+                let mut document = ConfigDocument::load_from_path(&path).unwrap();
+                document.config_mut().default_cloud = Some("unrelated-literal".to_string());
+                if owner_only {
+                    document.save_to_path_owner_only(&path).unwrap();
+                } else {
+                    document.save().unwrap();
+                }
+                let saved: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                let profile = &saved["profiles"]["${REDISCTL_CONFIG_LITERAL_VALUE}"];
+                assert_eq!(profile["password"].as_str(), Some("${REDISCTL_CONFIG_LITERAL_VALUE}"));
+                assert_eq!(profile["tags"][0].as_str(), Some("${REDISCTL_CONFIG_LITERAL_VALUE}"));
+                let loaded = Config::load_from_path(&path).unwrap();
+                let ProfileCredentials::Database { password, .. } = &loaded.profiles["${REDISCTL_CONFIG_LITERAL_VALUE}"].credentials else {
+                    panic!("expected database profile");
+                };
+                assert_eq!(password.as_deref(), Some(value.as_str()));
+            }
+        }
+        "changed_environment" => {
+            for owner_only in [false, true] {
+                for unset in [false, true] {
+                    // SAFETY: only this fixture runs in the isolated subprocess; these names
+                    // are not used by background tasks. The parent environment is untouched.
+                    unsafe { std::env::set_var(VALUE, &value); }
+                    std::fs::write(&path, "[profiles.db]\ndeployment_type = 'database'\nhost = 'localhost'\nport = 6379\npassword = '${REDISCTL_CONFIG_LITERAL_VALUE}'").unwrap();
+                    let mut document = ConfigDocument::load_from_path(&path).unwrap();
+                    // Same single-fixture subprocess isolation as the setup above.
+                    unsafe {
+                        if unset { std::env::remove_var(VALUE); }
+                        else { std::env::set_var(VALUE, "synthetic-rotated-value"); }
+                    }
+                    document.config_mut().default_database = Some("db".to_string());
+                    if owner_only { document.save_to_path_owner_only(&path).unwrap(); }
+                    else { document.save().unwrap(); }
+                    let saved: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                    assert_eq!(saved["profiles"]["db"]["password"].as_str(), Some("${REDISCTL_CONFIG_LITERAL_VALUE}"));
+                    assert!(!std::fs::read_to_string(&path).unwrap().contains("synthetic"));
+                    let ProfileCredentials::Database { password, .. } = &document.config().profiles["db"].credentials else { panic!("expected database profile"); };
+                    assert_eq!(password.as_deref(), Some(value.as_str()));
+                }
+            }
         }
         "diagnostics" => {
             for content in [

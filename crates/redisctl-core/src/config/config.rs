@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 use super::credential::CredentialStore;
 use super::error::{ConfigError, Result};
 
-/// Main configuration structure
+/// Main serializable runtime configuration structure.
+///
+/// Use [`super::ConfigDocument`] for file editing that retains load-time reference provenance.
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct Config {
     /// Default profile for enterprise commands
@@ -889,11 +891,11 @@ impl Config {
         expanded.to_string()
     }
 
-    fn expand_string_values(value: &mut toml::Value) {
+    pub(super) fn expand_string_values(value: &mut toml::Value) {
         Self::expand_string_values_with_context(value, &mut |var| std::env::var(var).ok());
     }
 
-    fn expand_string_values_with_context(
+    pub(super) fn expand_string_values_with_context(
         value: &mut toml::Value,
         context: &mut impl FnMut(&str) -> Option<String>,
     ) {
@@ -929,7 +931,7 @@ fn default_cloud_url() -> String {
 /// the new file's mode, so a reader either sees the old contents at the old permissions or the
 /// new contents at `0600`.
 #[cfg(unix)]
-fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(super) fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt;
 
@@ -971,7 +973,7 @@ fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 #[cfg(not(unix))]
-fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(super) fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     fs::write(path, bytes)
 }
 

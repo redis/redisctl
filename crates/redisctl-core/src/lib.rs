@@ -115,8 +115,9 @@ pub use clients::{
     ClientResolutionError, ClientResolver, ResolvedCloudConnection, ResolvedEnterpriseConnection,
 };
 pub use config::{
-    CloudAuthConfig, Config, ConfigError, CredentialStorage, CredentialStore, DeploymentType,
-    EnvironmentOverrides, Profile, ProfileCredentials,
+    CloudAuthConfig, Config, ConfigDocument, ConfigDocumentError, ConfigError, ConfigPathSegment,
+    CredentialStorage, CredentialStore, DeploymentType, EnvironmentOverrides, Profile,
+    ProfileCredentials,
 };
 
 // Re-export Layer 1 for convenience (but consumers can also import directly)
