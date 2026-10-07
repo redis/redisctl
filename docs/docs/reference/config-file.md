@@ -144,6 +144,12 @@ api_key = "${REDIS_CLOUD_API_KEY}"
 api_secret = "${REDIS_CLOUD_SECRET_KEY}"
 ```
 
+Placeholders must be inside quoted TOML string values. TOML is parsed first, then string
+values are expanded, including strings in arrays. Quoted table names and field names remain
+literal; numeric and boolean fields must use TOML values, not unquoted placeholders.
+Replacement text is used exactly as supplied by the environment, without interpreting its
+quotes, backslashes, or newlines as TOML syntax. Both `$VAR` and `${VAR}` are supported.
+
 Variables are resolved at runtime, and references survive a save. Commands that rewrite this file
 — `cloud auth login`, `profile set`, `logout` — write `${REDIS_CLOUD_API_KEY}` back rather than the
 value it resolved to, so a command acting on one profile cannot inline another profile's secret as
