@@ -336,8 +336,6 @@ enum Pick<'a> {
     Create(String),
 }
 
-/// Mirrors `quick_database`'s private `validate_name` (PRD §5.1.1): 3-40 chars of
-/// `[a-z0-9-]`, starting with a lowercase letter, ending alphanumeric, no `--`.
 /// The folder's slug, shaped to pass `valid_db_name`: a leading letter, 3-40 chars.
 fn default_db_name(folder: &str) -> String {
     let mut name = engine::slug(folder);
@@ -351,11 +349,12 @@ fn default_db_name(folder: &str) -> String {
     name.trim_end_matches('-').to_string()
 }
 
+/// Mirrors `quick_database`'s private `validate_name`: 3-40 chars of `[a-z0-9-]`,
+/// starting with a lowercase letter, ending alphanumeric, no `--`.
 fn valid_db_name(name: &str) -> Result<(), String> {
     let bytes = name.as_bytes();
     let ok = (3..=40).contains(&name.len())
         && bytes[0].is_ascii_lowercase()
-        && bytes[0].is_ascii_alphabetic()
         && bytes[bytes.len() - 1].is_ascii_alphanumeric()
         && name
             .chars()

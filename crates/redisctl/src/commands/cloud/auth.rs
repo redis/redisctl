@@ -220,7 +220,8 @@ pub(crate) struct SignedIn {
 }
 
 /// `login`'s browser flow for a command that finds no credentials part-way through
-/// (`init --cloud`); the caller renders the sign-in link and the outcome.
+/// (`init --cloud`); the caller renders the sign-in link and the outcome. Call it on a
+/// terminal only: like `login`, it asks which account when the session leaves it open.
 pub(crate) async fn sign_in(
     conn_mgr: &ConnectionManager,
     profile: Option<&str>,
@@ -237,7 +238,7 @@ pub(crate) async fn sign_in(
         auth_cfg,
         LoginRun {
             flow: LoginFlow::Loopback,
-            account: AccountChoice::Current,
+            account: AccountChoice::Prompt(Box::new(account_for_login)),
             superseded,
             allow_plaintext: false,
             make_default: true,
