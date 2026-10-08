@@ -49,7 +49,8 @@ fn profiles_summary(config: redisctl_core::config::Result<Config>) -> String {
             serde_json::json!({
                 "profiles": profile_names,
                 "default_cloud": config.default_cloud,
-                "default_enterprise": config.default_enterprise
+                "default_enterprise": config.default_enterprise,
+                "default_database": config.default_database
             })
             .to_string()
         }
@@ -170,6 +171,65 @@ mod tests {
         // Should return JSON (either profiles or error)
         let text = result.contents[0].text.as_ref().unwrap();
         assert!(text.starts_with('{'));
+    }
+
+    #[test]
+    fn profile_resource_summary_reports_all_defaults_without_credentials() {
+        // Parse synthetic data directly: never load the operator's config.
+        let config: Config = toml::from_str(
+            r#"
+default_database = "db-selected"
+default_cloud = "cloud"
+default_enterprise = "enterprise"
+files_api_key = "synthetic-global-secret"
+[profiles.db-selected]
+deployment_type = "database"
+host = "127.0.0.1"
+port = 6379
+password = "synthetic-database-secret"
+[profiles.db-other]
+deployment_type = "database"
+host = "127.0.0.1"
+port = 6380
+[profiles.cloud]
+deployment_type = "cloud"
+api_key = "synthetic-cloud-key"
+api_secret = "synthetic-cloud-secret"
+[profiles.enterprise]
+deployment_type = "enterprise"
+url = "https://example.invalid:9443"
+username = "synthetic-user"
+password = "synthetic-enterprise-secret"
+"#,
+        )
+        .unwrap();
+        let summary: serde_json::Value =
+            serde_json::from_str(&profiles_summary(Ok(config))).unwrap();
+        // Exact shape also protects against leaking credential/connection fields.
+        assert_eq!(
+            summary,
+            serde_json::json!({
+                "profiles": ["cloud", "db-other", "db-selected", "enterprise"],
+                "default_cloud": "cloud",
+                "default_enterprise": "enterprise",
+                "default_database": "db-selected"
+            })
+        );
+    }
+
+    #[test]
+    fn profile_resource_summary_reports_unset_defaults_as_null() {
+        let summary: serde_json::Value =
+            serde_json::from_str(&profiles_summary(Ok(Config::default()))).unwrap();
+        assert_eq!(
+            summary,
+            serde_json::json!({
+                "profiles": [],
+                "default_cloud": null,
+                "default_enterprise": null,
+                "default_database": null
+            })
+        );
     }
 
     #[test]
