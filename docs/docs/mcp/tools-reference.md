@@ -4,7 +4,14 @@ The redisctl MCP server exposes **377 tools** across 4 toolsets and 2 system too
 
 Tools are organized into **toolsets** (Cloud, Enterprise, Database, App) and further into **sub-modules** that can be selectively loaded with the [`--tools` flag](configuration.md#the-tools-flag).
 
-Tools that modify state require `--read-only=false` or an appropriate [safety tier](configuration.md#safety-tiers). Database tools require a `--database-url` connection.
+Tools that modify state require `--read-only=false` or an appropriate [safety tier](configuration.md#safety-tiers).
+
+For the default legacy database backend, configure a Redis URL with
+`--database-url` (or `REDIS_URL`), or use a database profile such as
+`--profile mydb`. See [Configuration](configuration.md) for the connection
+options and [Embedded Skills and Setup](skills.md#first-run-setup) for safe
+profile setup. The opt-in [`redis-mcp` pilot](database-pilot.md) has separate
+explicit-target rules; follow that guide when selecting the experimental backend.
 
 !!! tip "Runtime Discovery"
     Use the `list_available_tools` system tool at runtime to see exactly which tools are active in your current configuration, grouped by toolset. This is the most accurate way to discover available tools.
