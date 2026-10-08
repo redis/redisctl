@@ -1069,6 +1069,7 @@ async fn handle_remove(conn_mgr: &ConnectionManager, name: &str) -> Result<(), R
     // Check if it's a default profile
     let is_default_enterprise = conn_mgr.config.default_enterprise.as_deref() == Some(name);
     let is_default_cloud = conn_mgr.config.default_cloud.as_deref() == Some(name);
+    let is_default_database = conn_mgr.config.default_database.as_deref() == Some(name);
     if is_default_enterprise {
         println!(
             "Warning: '{}' is the default profile for enterprise commands.",
@@ -1078,6 +1079,12 @@ async fn handle_remove(conn_mgr: &ConnectionManager, name: &str) -> Result<(), R
     if is_default_cloud {
         println!(
             "Warning: '{}' is the default profile for cloud commands.",
+            name
+        );
+    }
+    if is_default_database {
+        println!(
+            "Warning: '{}' is the default profile for database commands.",
             name
         );
     }
@@ -1104,6 +1111,10 @@ async fn handle_remove(conn_mgr: &ConnectionManager, name: &str) -> Result<(), R
     config.profiles.remove(name);
 
     // Clear defaults if this was a default profile
+    if is_default_database {
+        config.default_database = None;
+        println!("Default database profile cleared.");
+    }
     if is_default_enterprise {
         config.default_enterprise = None;
         println!("Default enterprise profile cleared.");
