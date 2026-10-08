@@ -34,15 +34,21 @@ fn launcher(keys: &[&str], command: &str) -> serde_json::Value {
     })
 }
 
+/// Splits REDIS_URL where `util::mask_url` does (the last `@`, then the userinfo's
+/// first `:`): `url` keeps everything but the password, which goes in REDIS_PWD.
+/// redis-mcp-server (0.5.1) reads REDIS_PWD when its `--url` carries none, so the password
+/// stays off the command line that `ps` shows to every user.
+const SPLIT_PASSWORD: &str = r#"REDIS_PWD=$(printf %s "$REDIS_URL" | sed -n 's~^rediss\{0,1\}://[^:@/]*:\(.*\)@.*~\1~p'); export REDIS_PWD; url=$(printf %s "$REDIS_URL" | sed -e 's~^\(rediss\{0,1\}://[^:@/]*\):.*@~\1@~' -e 's~^\(rediss\{0,1\}://\)@~\1~')"#;
+
 fn server_entry(runner: &Runner) -> serde_json::Value {
     let inner = match runner {
         // Rewrite only the hostname; userinfo and remote hosts stay intact.
         Runner::Docker => {
-            r#"exec docker run --rm -i --add-host=host.docker.internal:host-gateway mcp/redis --url "$(printf %s "$REDIS_URL" | sed -E 's~^(rediss?://([^/]*@)?)(localhost|127\.0\.0\.1)([:/?#]|$)~\1host.docker.internal\4~')""#
+            r#"exec docker run --rm -i -e REDIS_PWD --add-host=host.docker.internal:host-gateway mcp/redis --url "$(printf %s "$url" | sed -E 's~^(rediss?://([^/]*@)?)(localhost|127\.0\.0\.1)([:/?#]|$)~\1host.docker.internal\4~')""#
         }
-        _ => r#"exec uvx --from redis-mcp-server@latest redis-mcp-server --url "$REDIS_URL""#,
+        _ => r#"exec uvx --from redis-mcp-server@latest redis-mcp-server --url "$url""#,
     };
-    launcher(&["REDIS_URL"], inner)
+    launcher(&["REDIS_URL"], &format!("{SPLIT_PASSWORD}; {inner}"))
 }
 
 /// One agent's registration, decided at plan time.

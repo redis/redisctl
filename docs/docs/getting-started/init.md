@@ -69,7 +69,8 @@ untouched.
 `.env` is the only file that ever holds the connection string. The MCP configs and
 the generated skill are credential-free and safe to commit: the MCP launcher reads
 `REDIS_URL` from `.env` when the agent starts the server (without executing the
-file), and passwords are masked in all terminal output. A new `.env` is readable
+file) and hands the server the password through its environment, never on a command
+line other users can see. Passwords are masked in all terminal output. A new `.env` is readable
 only by you, `.gitignore` covers it before it is written, and a `.env` that git
 already tracks is refused rather than handed a secret.
 
