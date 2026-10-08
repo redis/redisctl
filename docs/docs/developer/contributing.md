@@ -160,4 +160,3 @@ async fn test_database_list() {
 ## Questions?
 
 - [GitHub Issues](https://github.com/redis/redisctl/issues)
-- [GitHub Discussions](https://github.com/redis/redisctl/discussions)

@@ -153,11 +153,11 @@ Connect directly to any Redis instance for key inspection, data structure operat
 **[Full Documentation](https://redis-field-engineering.github.io/redisctl-docs/)**
 
 - [Getting Started](https://redis-field-engineering.github.io/redisctl-docs/getting-started/)
-- [Configuration](https://redis-field-engineering.github.io/redisctl-docs/configuration/)
+- [Configuration File](https://redis-field-engineering.github.io/redisctl-docs/reference/config-file/)
 - [MCP Server](https://redis-field-engineering.github.io/redisctl-docs/mcp/)
 - [Command Reference](https://redis-field-engineering.github.io/redisctl-docs/reference/)
 - [Compatibility and Support Policy](https://redis-field-engineering.github.io/redisctl-docs/reference/compatibility/)
-- [Workflows](https://redis-field-engineering.github.io/redisctl-docs/workflows/)
+- Workflows: [Cloud](https://redis-field-engineering.github.io/redisctl-docs/cloud/workflows/) and [Enterprise](https://redis-field-engineering.github.io/redisctl-docs/enterprise/workflows/)
 
 ---
 
@@ -183,7 +183,7 @@ cargo test --workspace
 cargo clippy --all-targets -- -D warnings
 ```
 
-See the [Contributing Guide](https://redis-field-engineering.github.io/redisctl-docs/developer/contributing.html)
+See the [Contributing Guide](https://redis-field-engineering.github.io/redisctl-docs/developer/contributing/)
 and [TESTING.md](TESTING.md) for the test tiers, Docker-gated live suites, and CI gates.
 
 ---
