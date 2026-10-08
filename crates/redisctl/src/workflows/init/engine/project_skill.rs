@@ -141,7 +141,8 @@ fn control_plane_hint(facts: &SkillFacts) -> String {
 
 fn skills_hint(facts: &SkillFacts) -> String {
     if facts.skills.is_empty() {
-        "- The official redis/agent-skills were not available at init time; only this skill is installed.".to_string()
+        "- The official redis/agent-skills are not installed in this project; only this skill is."
+            .to_string()
     } else {
         format!(
             "- Deep-dive skills installed alongside this one: {}. Use them when modeling data, writing queries, tuning connections, or securing the deployment.",
@@ -653,7 +654,7 @@ mod tests {
             text.contains("`my-cloud-db` (external, e.g. Redis Cloud)"),
             "{text}"
         );
-        assert!(text.contains("were not available at init time"), "{text}");
+        assert!(text.contains("are not installed in this project"), "{text}");
         assert!(text.contains("redis-cli is not installed ("), "{text}");
     }
 

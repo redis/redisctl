@@ -269,6 +269,7 @@ pub(crate) struct SkillsAction {
     pub(crate) agents: Vec<Agent>,
     pub(crate) global: bool,
     pub(crate) repo: Option<PathBuf>,
+    pub(crate) skip: bool,
 }
 
 impl SkillsAction {
@@ -305,6 +306,7 @@ impl SkillsAction {
     /// run would.
     fn preview_with(&self, cwd: &Path, has: &dyn Fn(&str) -> bool) -> Vec<Change> {
         match &self.repo {
+            _ if self.skip => vec![self.not_wanted()],
             Some(repo) => match self.copy_steps(cwd, repo) {
                 Ok(steps) => steps.into_iter().map(|step| step.change).collect(),
                 Err(skipped) => vec![skipped],
@@ -327,6 +329,14 @@ impl SkillsAction {
         }
     }
 
+    fn not_wanted(&self) -> Change {
+        Change::new(
+            self.target(),
+            Status::Skipped,
+            "not installed, as asked - add them later with: npx skills add redis/agent-skills",
+        )
+    }
+
     fn npx_missing(&self) -> Change {
         Change::new(
             self.target(),
@@ -339,6 +349,7 @@ impl SkillsAction {
     /// checkout's skills, the ones the lock already tracks, or none without npx.
     pub(crate) fn planned_installed(&self, cwd: &Path) -> Vec<String> {
         match &self.repo {
+            _ if self.skip => Vec::new(),
             Some(repo) => self
                 .copy_steps(cwd, repo)
                 .map(|steps| steps.into_iter().map(|step| step.name).collect())
@@ -353,7 +364,7 @@ impl SkillsAction {
     pub(crate) fn claude_links(&self, cwd: &Path) -> Vec<String> {
         let shared = fallback_dir(cwd, self.global, &self.agents) == cwd.join(SKILLS_DIR);
         match &self.repo {
-            Some(repo) if shared => self
+            Some(repo) if shared && !self.skip => self
                 .copy_steps(cwd, repo)
                 .map(|steps| steps.into_iter().map(|step| step.name).collect())
                 .unwrap_or_default(),
@@ -415,6 +426,9 @@ impl SkillsAction {
         cwd: &Path,
         on_event: &mut dyn FnMut(Event),
     ) -> Result<SkillsOutcome, InitError> {
+        if self.skip {
+            return Ok(SkillsOutcome::skipped(self.not_wanted()));
+        }
         if let Some(repo) = &self.repo {
             return match self.copy_steps(cwd, repo) {
                 Ok(steps) => self.copy_from(cwd, steps),
@@ -658,6 +672,7 @@ mod tests {
             agents: vec![Agent::Claude, Agent::Codex],
             global: false,
             repo: Some(repo.to_path_buf()),
+            skip: false,
         }
     }
 
@@ -667,6 +682,7 @@ mod tests {
             agents: vec![Agent::Claude, Agent::Vscode],
             global: true,
             repo: None,
+            skip: false,
         };
         let [change] = &a.preview_with(Path::new("/p"), &|_| true)[..] else {
             panic!("one npx line");
@@ -684,6 +700,7 @@ mod tests {
             agents: vec![Agent::Claude],
             global: false,
             repo: None,
+            skip: false,
         };
         let [change] = &a.preview_with(Path::new("/p"), &|_| false)[..] else {
             panic!("one skipped line");
@@ -771,6 +788,7 @@ mod tests {
             agents: vec![Agent::Claude],
             global: false,
             repo: Some(repo.path().to_path_buf()),
+            skip: false,
         };
         assert!(solo.claude_links(cwd).is_empty());
         let global = SkillsAction {
@@ -788,6 +806,7 @@ mod tests {
             agents: vec![Agent::Claude],
             global: false,
             repo: Some(repo.path().to_path_buf()),
+            skip: false,
         };
         let changes = solo.perform(project.path(), &mut |_| {}).unwrap().changes;
         assert_eq!(changes[0].subject, ".claude/skills/redis-basics/");
@@ -938,6 +957,7 @@ mod tests {
             agents: vec![Agent::Claude],
             global: false,
             repo: None,
+            skip: false,
         };
         let outcome = a.report_project(project.path(), &before, &collisions);
         assert_eq!(outcome.installed.len(), 3);
@@ -973,6 +993,7 @@ mod tests {
             agents: vec![Agent::Claude],
             global: false,
             repo: None,
+            skip: false,
         };
         let lock_status = |before: BTreeMap<String, String>| {
             a.report_project(project.path(), &before, &BTreeMap::new())

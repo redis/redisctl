@@ -52,6 +52,7 @@ untouched.
 | `--no-install-cli` | skip installing redis-cli when it is missing |
 | `--skills-repo <dir>` | copy skills from a local redis/agent-skills checkout (offline-safe) |
 | `--skills-global` | install the official skills for your user instead of this project |
+| `--no-skills` | skip the official skills; the generated `redis-project-setup` skill is still written. The wizard offers the same as "Skip" |
 | `--defaults` | take the defaults instead of asking: with no database flag that is a local Docker container. With `--cloud` and no Cloud sign-in, a terminal still opens the browser to sign in; piped stdin never prompts |
 | `--dry-run` | print the full plan, write nothing |
 | `--no-telemetry` | do not send the anonymous usage event for this run |

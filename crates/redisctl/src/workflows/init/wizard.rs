@@ -211,7 +211,7 @@ pub fn pending_questions(args: &InitArgs, url_given: bool) -> Vec<Question> {
     if args.agents.is_empty() {
         pending.push(Question::Agents);
     }
-    if !args.skills_global {
+    if !args.skills_global && !args.no_skills {
         pending.push(Question::Skills);
     }
     pending
@@ -232,7 +232,13 @@ pub struct Answers {
     /// "Skip for now": write a placeholder REDIS_URL to fill in later.
     pub placeholder: bool,
     pub agents: Option<Vec<engine::Agent>>,
-    pub skills_global: Option<bool>,
+    pub skills: Option<SkillsScope>,
+}
+
+pub enum SkillsScope {
+    Project,
+    Global,
+    Skip,
 }
 
 fn cancelled(prompt: &str) -> RedisCtlError {
@@ -280,8 +286,7 @@ pub fn run(
             Question::Skills => {
                 let agents =
                     engine::resolve_agents(answers.agents.as_deref().or(requested), detected);
-                answers.skills_global =
-                    Some(ask_skills_scope(engine::project_skills_dir(&agents))?);
+                answers.skills = Some(ask_skills_scope(engine::project_skills_dir(&agents))?);
             }
         }
     }
@@ -431,14 +436,15 @@ fn ask_agents(detected: &[engine::Agent]) -> Result<Vec<engine::Agent>, RedisCtl
     }
 }
 
-fn skills_scope_items(project_dir: &str) -> [String; 2] {
+fn skills_scope_items(project_dir: &str) -> [String; 3] {
     [
         format!("This project only ({project_dir})"),
         "Global (available in every project)".to_string(),
+        "Skip - do not install them".to_string(),
     ]
 }
 
-fn ask_skills_scope(project_dir: &str) -> Result<bool, RedisCtlError> {
+fn ask_skills_scope(project_dir: &str) -> Result<SkillsScope, RedisCtlError> {
     const PROMPT: &str = SKILLS_PROMPT;
     let selection = Select::with_theme(&RedisTheme)
         .with_prompt(PROMPT)
@@ -448,7 +454,9 @@ fn ask_skills_scope(project_dir: &str) -> Result<bool, RedisCtlError> {
         .map_err(prompt_failed)?;
     match selection {
         None => Err(cancelled(PROMPT)),
-        Some(choice) => Ok(choice == 1),
+        Some(0) => Ok(SkillsScope::Project),
+        Some(1) => Ok(SkillsScope::Global),
+        Some(_) => Ok(SkillsScope::Skip),
     }
 }
 
@@ -468,6 +476,7 @@ mod tests {
             no_install_cli: false,
             skills_repo: None,
             skills_global: false,
+            no_skills: false,
             dry_run: false,
             no_telemetry: false,
             agent_memory: None,
@@ -632,6 +641,24 @@ mod tests {
     }
 
     #[test]
+    fn no_skills_answers_the_skills_question() {
+        let mut a = args();
+        a.no_skills = true;
+        assert_eq!(
+            pending_questions(&a, false),
+            vec![Question::Database, Question::Agents]
+        );
+    }
+
+    #[test]
+    fn the_skills_question_offers_to_skip_them() {
+        assert_eq!(
+            skills_scope_items(".claude/skills")[2],
+            "Skip - do not install them"
+        );
+    }
+
+    #[test]
     fn skills_global_answers_the_skills_question() {
         let mut a = args();
         a.skills_global = true;
@@ -652,6 +679,14 @@ mod tests {
                 .suggestions()
                 .iter()
                 .any(|t| t.contains("--defaults"))
+        );
+        assert!(
+            wizard
+                .suggestions()
+                .iter()
+                .any(|t| t.contains("--skills-global or --no-skills")),
+            "{:?}",
+            wizard.suggestions()
         );
 
         let destructive = RedisCtlError::Cancelled {

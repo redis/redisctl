@@ -187,6 +187,34 @@ fn next_steps_name_the_dir_a_skipped_skills_install_targets() {
 }
 
 #[test]
+fn no_skills_skips_the_official_skills_and_keeps_the_project_skill() {
+    let sandbox = Sandbox::new();
+    let init = |dry_run| {
+        let mut cmd = sandbox.command("claude");
+        cmd.arg("--skills-repo")
+            .arg(sandbox.skills.path())
+            .arg("--no-skills");
+        run(cmd, dry_run)
+    };
+    let planned = change_lines(&init(true), "Plan  (");
+    let applied = change_lines(&init(false), "Changes  (");
+    assert_eq!(planned, applied);
+    assert!(
+        applied.contains(&("skipped".to_string(), ".claude/skills/".to_string())),
+        "{applied:?}"
+    );
+    let project = sandbox.project.path();
+    assert!(!project.join(".claude/skills/redis-basics").exists());
+    let skill =
+        std::fs::read_to_string(project.join(".agents/skills/redis-project-setup/SKILL.md"))
+            .unwrap();
+    assert!(
+        skill.contains("The official redis/agent-skills are not installed"),
+        "{skill}"
+    );
+}
+
+#[test]
 fn solo_claude_copies_skills_into_claudes_own_dir() {
     let sandbox = Sandbox::new();
     sandbox.init("claude", false);

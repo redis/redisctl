@@ -116,6 +116,8 @@ pub struct Options {
     pub skills_repo: Option<PathBuf>,
     /// Install the official skills for the user instead of into this project.
     pub skills_global: bool,
+    /// Skip the official skills; the generated project skill is still written.
+    pub skills_skip: bool,
     /// The user explicitly chose a database source (wizard answer or flag), so an
     /// existing REDIS_URL in .env is superseded instead of kept.
     pub replace_env_url: bool,
@@ -142,6 +144,7 @@ impl std::fmt::Debug for Options {
             .field("install_cli", &self.install_cli)
             .field("skills_repo", &self.skills_repo)
             .field("skills_global", &self.skills_global)
+            .field("skills_skip", &self.skills_skip)
             .field("replace_env_url", &self.replace_env_url)
             .field("env_placeholder", &self.env_placeholder)
             .finish()
@@ -424,6 +427,7 @@ pub fn plan(options: &Options) -> Result<Plan, InitError> {
         agents: agents.clone(),
         global: options.skills_global,
         repo: options.skills_repo.clone(),
+        skip: options.skills_skip,
     };
     let mcp = mcp::plan_mcp(
         &options.cwd,
@@ -626,6 +630,7 @@ mod tests {
             install_cli: false,
             skills_repo: None,
             skills_global: false,
+            skills_skip: false,
             replace_env_url: false,
             env_placeholder: false,
         })
@@ -653,6 +658,7 @@ mod tests {
             install_cli: false,
             skills_repo: None,
             skills_global: false,
+            skills_skip: false,
             replace_env_url: false,
             env_placeholder: false,
         })
@@ -691,6 +697,7 @@ mod tests {
             install_cli: false,
             skills_repo: Some(repo.path().to_path_buf()),
             skills_global: false,
+            skills_skip: false,
             replace_env_url: false,
             env_placeholder: false,
         };

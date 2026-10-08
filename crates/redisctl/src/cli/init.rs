@@ -105,6 +105,10 @@ pub struct InitArgs {
     #[arg(long)]
     pub skills_global: bool,
 
+    /// Skip the official Redis skills; the generated project skill is still written
+    #[arg(long = "no-skills", conflicts_with = "skills_global")]
+    pub no_skills: bool,
+
     /// Print the plan without changing anything
     #[arg(long)]
     pub dry_run: bool,
@@ -147,6 +151,7 @@ impl std::fmt::Debug for InitArgs {
             .field("no_install_cli", &self.no_install_cli)
             .field("skills_repo", &self.skills_repo)
             .field("skills_global", &self.skills_global)
+            .field("no_skills", &self.no_skills)
             .field("dry_run", &self.dry_run)
             .field("no_telemetry", &self.no_telemetry)
             .field("pasted", &(!self.pasted.is_empty()).then_some("<redacted>"))
@@ -170,6 +175,7 @@ mod tests {
             no_install_cli: false,
             skills_repo: None,
             skills_global: false,
+            no_skills: false,
             dry_run: false,
             no_telemetry: false,
             agent_memory: Some("https://u:s3cret@memory.example".into()),

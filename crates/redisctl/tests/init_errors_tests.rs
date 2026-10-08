@@ -104,6 +104,20 @@ fn a_stray_word_is_a_usage_error() {
 }
 
 #[test]
+fn no_skills_and_skills_global_cannot_both_be_asked_for() {
+    let project = Project::new();
+    project
+        .init()
+        .args(["--no-skills", "--skills-global", "--dry-run"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "the argument '--no-skills' cannot be used with '--skills-global'",
+        ));
+    assert!(project.entries().is_empty(), "{:?}", project.entries());
+}
+
+#[test]
 fn a_stray_positional_is_never_echoed() {
     let project = Project::new();
     for args in [

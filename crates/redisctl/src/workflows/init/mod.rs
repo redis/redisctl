@@ -207,6 +207,7 @@ async fn run_inner(
         install_cli: !args.no_install_cli,
         skills_repo: args.skills_repo.clone(),
         skills_global: args.skills_global,
+        skills_skip: args.no_skills,
         replace_env_url: false,
         env_placeholder: false,
     };
@@ -285,8 +286,9 @@ async fn run_inner(
             options.agents = Some(agents);
             asked_agents = true;
         }
-        if let Some(global) = answers.skills_global {
-            options.skills_global = global;
+        if let Some(scope) = answers.skills {
+            options.skills_global = matches!(scope, wizard::SkillsScope::Global);
+            options.skills_skip = matches!(scope, wizard::SkillsScope::Skip);
         }
     }
     telemetry.step("database");
