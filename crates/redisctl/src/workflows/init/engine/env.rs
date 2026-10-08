@@ -1,12 +1,13 @@
 //! The `.env` / `.gitignore` contract: mutations are decided read-only at plan time
 //! and performed at apply time, so a dry run renders exactly what a real run does.
 
+use std::io::Write;
 use std::path::Path;
 
 use crate::workflows::init::engine::InitError;
 use crate::workflows::init::engine::change::{Change, Status};
 use crate::workflows::init::engine::products::is_configured;
-use crate::workflows::init::engine::util::{mask_url, read_if};
+use crate::workflows::init::engine::util::{mask_url, read_if, sh_in};
 
 const PROVENANCE: &str = "# Added by redisctl init";
 
@@ -49,10 +50,19 @@ impl FileAction {
                     message: e.to_string(),
                 })?;
             }
-            std::fs::write(&path, content).map_err(|e| InitError::WriteFailed {
-                rel: rel.clone(),
-                message: e.to_string(),
-            })?;
+            let mut file = std::fs::OpenOptions::new();
+            file.write(true).create(true).truncate(true);
+            // Applies only when the file is created; an existing .env keeps its mode.
+            #[cfg(unix)]
+            if rel == ".env" {
+                std::os::unix::fs::OpenOptionsExt::mode(&mut file, 0o600);
+            }
+            file.open(&path)
+                .and_then(|mut file| file.write_all(content.as_bytes()))
+                .map_err(|e| InitError::WriteFailed {
+                    rel: rel.clone(),
+                    message: e.to_string(),
+                })?;
         }
         Ok(self.preview())
     }
@@ -323,6 +333,29 @@ pub(crate) fn plan_gitignore_env(dir: &Path) -> Result<FileAction, InitError> {
         status,
         note: String::new(),
     })
+}
+
+/// Refuse to add a secret to a `.env` that git tracks: the next commit would
+/// publish it. `planned` is the `.env` content this run would leave behind.
+pub(crate) fn refuse_secret_in_tracked_env(
+    dir: &Path,
+    planned: Option<&str>,
+    secrets: &[&str],
+) -> Result<(), InitError> {
+    let Some(planned) = planned else {
+        return Ok(());
+    };
+    let current = read_if(dir, ".env").unwrap_or_default();
+    let adds_secret = secrets
+        .iter()
+        .any(|secret| planned.contains(secret) && !current.contains(secret));
+    if adds_secret && sh_in(dir, "git", &["ls-files", "--error-unmatch", ".env"]).status == 0 {
+        return Err(InitError::WriteFailed {
+            rel: ".env".to_string(),
+            message: ".env is tracked by git, so the secret would be committed. Untrack it first: git rm --cached .env".to_string(),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]

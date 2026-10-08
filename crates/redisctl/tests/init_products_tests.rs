@@ -16,7 +16,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const KEY: &str = "s3cret-product-key";
 
-/// The happy-path product API: same shapes the PoC's fake server pinned.
+/// The happy-path product API.
 async fn product_api() -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -196,6 +196,109 @@ fn commonjs_examples_can_be_loaded() {
         ])
         .assert()
         .success();
+}
+
+#[test]
+fn recall_reads_the_session_id_remember_wrote() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(
+        project.path().join("package.json"),
+        r#"{"type":"commonjs"}"#,
+    )
+    .unwrap();
+    let repo = skills_fixture();
+    let (_shim, path_env) = npm_shim();
+    run_init(
+        project.path(),
+        &repo,
+        &path_env,
+        &[
+            "--agent-memory",
+            "https://memory.example",
+            "--store",
+            "store-123",
+        ],
+    )
+    .assert()
+    .success();
+    let module = project.path().join("node_modules/@redis-iris/agent-memory");
+    std::fs::create_dir_all(&module).unwrap();
+    std::fs::write(
+        module.join("index.js"),
+        "exports.AgentMemory = class {
+          async addSessionEvent(event) { globalThis.written = event.sessionId; }
+          async getSessionMemory(id) { globalThis.read = id; return { events: [] }; }
+        };",
+    )
+    .unwrap();
+    Command::new("node")
+        .current_dir(project.path())
+        .args([
+            "-e",
+            "const m = require('./redis-agent-memory.js');
+            (async () => {
+              await m.rememberTurn({ sessionId: 'chat.1', actorId: 'u', text: 'hi' });
+              await m.recallSession('chat.1');
+              console.log(globalThis.written, globalThis.read);
+            })();",
+        ])
+        .assert()
+        .success()
+        .stdout("chat-1 chat-1\n");
+}
+
+#[test]
+fn typescript_examples_are_typed() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(
+        project.path().join("package.json"),
+        r#"{"name":"k","type":"module"}"#,
+    )
+    .unwrap();
+    std::fs::write(project.path().join("tsconfig.json"), "{}\n").unwrap();
+    let repo = skills_fixture();
+    let (_shim, path_env) = npm_shim();
+    run_init(
+        project.path(),
+        &repo,
+        &path_env,
+        &[
+            "--agent-memory",
+            "https://memory.example",
+            "--store",
+            "store-123",
+            "--langcache",
+            "https://cache.example",
+            "--cache",
+            "cache-123",
+        ],
+    )
+    .assert()
+    .success();
+    // Each of these fails `tsc --strict`: an implicit any, an unknown catch value, or
+    // an optional env value where the SDK requires a string.
+    for name in ["redis-agent-memory.ts", "redis-langcache.ts"] {
+        let source = read(project.path(), name);
+        assert!(!source.is_empty(), "{name} was not generated");
+        for untyped in [
+            "(value) =>",
+            "'USER' })",
+            "recallSession(sessionId)",
+            "(prompt) =>",
+            "(prompt, response) =>",
+            "(prompt, generate,",
+            "err?.",
+            "process.env.AGENT_MEMORY_URL,",
+            "process.env.LANGCACHE_URL,",
+        ] {
+            assert!(!source.contains(untyped), "{name}: {untyped:?}\n{source}");
+        }
+    }
+    let memory = read(project.path(), "redis-agent-memory.ts");
+    assert!(
+        memory.contains("getSessionMemory(safeId(sessionId))"),
+        "{memory}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -721,6 +824,59 @@ async fn api_key_fills_the_placeholder_a_first_run_left_for_every_product() {
         assert_eq!(
             read(project.path(), ".env"),
             first.replace(&placeholder, &format!("{env_key}=\"{KEY}\"")),
+            "{label}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_placeholder_url_copied_from_the_example_yields_to_the_flag() {
+    let api = product_api().await;
+    let uri = api.uri();
+    let products: [(&[&str], &str, &str, &str); 2] = [
+        (
+            &["--agent-memory", &uri, "--store", "store-123"],
+            "Agent Memory",
+            "AGENT_MEMORY_URL",
+            "/v1/stores/store-123/session-memory/events",
+        ),
+        (
+            &["--langcache", &uri, "--cache", "cache-456"],
+            "LangCache",
+            "LANGCACHE_URL",
+            "/v1/caches/cache-456/entries/search",
+        ),
+    ];
+    for (flags, label, env_url, called) in products {
+        let project = tempfile::tempdir().unwrap();
+        let repo = skills_fixture();
+        let (_shim, path_env) = npm_shim();
+        // A teammate's committed .env.example, copied to .env before the first run.
+        run_init(project.path(), &repo, &path_env, flags)
+            .assert()
+            .success();
+        let example = read(project.path(), ".env.example");
+        assert!(example.contains("<region>"), "{example}");
+        std::fs::write(project.path().join(".env"), &example).unwrap();
+
+        run_init(
+            project.path(),
+            &repo,
+            &path_env,
+            &[flags, &["--api-key", KEY]].concat(),
+        )
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!("✓ {label}")));
+        let env = read(project.path(), ".env");
+        assert!(env.contains(&format!("{env_url}=\"{uri}\"")), "{env}");
+        assert!(!env.contains('<'), "{env}");
+        assert!(
+            api.received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .any(|r| r.url.path() == called),
             "{label}"
         );
     }

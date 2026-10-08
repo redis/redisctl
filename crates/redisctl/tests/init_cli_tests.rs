@@ -122,6 +122,33 @@ fn an_empty_folder_reads_plainly_in_the_header() {
 }
 
 #[test]
+fn the_header_says_when_no_agent_was_detected() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let output = redisctl()
+        .current_dir(dir.path())
+        .env("HOME", home.path())
+        .env("PATH", home.path().join("empty-bin"))
+        .args([
+            "init",
+            "--dry-run",
+            "--no-telemetry",
+            "--url",
+            "redis://localhost:6379",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let agents = stdout
+        .lines()
+        .find(|l| l.contains("Agents"))
+        .unwrap_or_else(|| panic!("no Agents row: {stdout}"));
+    assert!(agents.contains("Codex (none detected, so all)"), "{agents}");
+}
+
+#[test]
 fn the_header_rows_line_up_on_the_rail() {
     let dir = tempfile::tempdir().unwrap();
     let output = redisctl()
@@ -250,19 +277,22 @@ fn url_without_a_redis_url_is_a_validation_error() {
 }
 
 #[test]
-fn rejected_url_input_is_credential_masked_on_stderr() {
+fn rejected_url_input_is_not_echoed_on_stderr() {
     let dir = tempfile::tempdir().unwrap();
     redisctl()
         .current_dir(dir.path())
         .args(["init", "--url", "redisx://default:s3cret@host:6379"])
         .assert()
         .code(6)
-        .stderr(predicate::str::contains("redisx://default:****@host:6379"))
+        .stderr(predicate::str::contains(
+            "no redis:// or rediss:// URL found",
+        ))
+        .stderr(predicate::str::contains("redisx://").not())
         .stderr(predicate::str::contains("s3cret").not());
 }
 
 #[test]
-fn rejected_url_input_is_credential_masked_in_the_json_envelope() {
+fn rejected_url_input_is_not_echoed_in_the_json_envelope() {
     let dir = tempfile::tempdir().unwrap();
     redisctl()
         .current_dir(dir.path())
@@ -275,7 +305,9 @@ fn rejected_url_input_is_credential_masked_in_the_json_envelope() {
         ])
         .assert()
         .code(6)
-        .stderr(predicate::str::contains("****"))
+        .stderr(predicate::str::contains(
+            "no redis:// or rediss:// URL found",
+        ))
         .stderr(predicate::str::contains("s3cret").not());
 }
 
@@ -400,8 +432,8 @@ fn an_explicit_url_replaces_a_different_existing_redis_url() {
         .stdout(predicate::str::contains(
             "REDIS_URL replaced (was redis://default:****@keep-me:1)",
         ))
-        // A short token here once collided with a random tempdir name printed in the
-        // Project line; whole-output negative assertions need collision-proof tokens.
+        // Whole-output negative assertions need tokens no random tempdir name in the
+        // Project line can contain.
         .stdout(predicate::str::contains("s3cret").not())
         .stdout(predicate::str::contains("0ldpw").not());
     // Dry run: nothing written yet.

@@ -28,15 +28,16 @@ pub struct InitArgs {
     /// Take the database from Redis Cloud: reuse the database named by --name, pick
     /// one on a terminal, or create one on the free Essentials plan. Signs in first
     /// on a terminal when no Cloud profile exists
-    #[arg(long, conflicts_with = "url")]
+    #[arg(long, conflicts_with_all = ["url", "pasted"])]
     pub cloud: bool,
 
     /// Create in this Essentials subscription instead of the free plan
     #[arg(long, value_name = "ID", requires = "cloud")]
     pub cloud_subscription: Option<i32>,
 
-    /// Database name, recorded in the generated project skill; with --cloud it is
-    /// also the reuse key: a database already carrying it is connected, not created
+    /// Database name: with --cloud it is the reuse key (a database already carrying
+    /// it is connected, not created) and the name of a new one; a database outside
+    /// Docker is named by it in the generated project skill
     #[arg(long, value_name = "LABEL")]
     pub name: Option<String>,
 
@@ -65,8 +66,9 @@ pub struct InitArgs {
     #[arg(long)]
     pub iris: bool,
 
-    /// API key for the one product being wired; the product's own env var or an
-    /// existing .env value wins over it, keeping keys out of shell history
+    /// API key for the one product being wired. A real key already in .env wins over
+    /// it, and so does the product's own env var when .env has none, keeping keys
+    /// out of shell history; a placeholder in .env gives way to it
     #[arg(long, value_name = "KEY")]
     pub api_key: Option<String>,
 
@@ -85,8 +87,8 @@ pub struct InitArgs {
     pub agents: Vec<AgentArg>,
 
     /// Take the defaults instead of asking: with no database flag that is a local
-    /// Docker container, since an unattended run cannot sign in to Redis Cloud.
-    /// Piped stdin never prompts either
+    /// Docker container. With --cloud and no Cloud sign-in, a terminal still opens
+    /// the browser to sign in. Piped stdin never prompts
     #[arg(long)]
     pub defaults: bool,
 
@@ -115,7 +117,7 @@ pub struct InitArgs {
     /// A pasted connect command, same as --url (the Cloud console's Copy button
     /// output works verbatim): `redis-cli` lands here and its `-u` is the hidden
     /// alias of --url, so flags before or after the paste keep parsing as flags
-    #[arg(value_name = "PASTED", hide = true, num_args = 0..)]
+    #[arg(value_name = "REDIS_URL", hide = true, num_args = 0..)]
     pub pasted: Vec<String>,
 }
 

@@ -17,7 +17,11 @@ pub fn skills_fixture() -> TempDir {
 /// Just enough RESP to pass init's validation (AUTH, PING, SET, GET, DEL).
 /// Returns the loopback port it serves on.
 pub fn fake_redis() -> u16 {
-    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    fake_redis_on(std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap())
+}
+
+/// [`fake_redis`] on a listener the caller bound.
+pub fn fake_redis_on(listener: std::net::TcpListener) -> u16 {
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
         use std::io::{BufRead, BufReader, Write};

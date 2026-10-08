@@ -7,6 +7,8 @@
 //! cargo test --test init_docker_tests -- --ignored --nocapture
 //! ```
 
+mod init_common;
+
 use assert_cmd::Command;
 use predicates::prelude::*;
 use serial_test::serial;
@@ -200,6 +202,61 @@ fn restart_that_never_serves_redis_fails_instead_of_reporting_updated() {
         .stderr(predicate::str::contains("did not become ready"));
     // The start itself succeeded; the failure is Redis never answering.
     assert_eq!(container_running(&container), Some(true));
+}
+
+#[test]
+#[ignore = "requires Docker"]
+#[serial]
+fn a_restart_that_fails_is_an_error_not_a_pass_against_another_server() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (dir, container, _cleanup) = project_dir(tmp.path(), "taken");
+
+    let repo = skills_fixture();
+    let init = || {
+        let mut cmd = redisctl();
+        cmd.current_dir(&dir)
+            .env("REDISCTL_INIT_SKILLS_REPO", repo.path())
+            .args([
+                "init",
+                "--no-install-cli",
+                "--no-telemetry",
+                "--agent",
+                "claude",
+            ]);
+        cmd
+    };
+    init().assert().success();
+    let env = std::fs::read_to_string(dir.join(".env")).unwrap();
+    let port: u16 = env
+        .split("redis://localhost:")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .and_then(|port| port.parse().ok())
+        .unwrap_or_else(|| panic!("no local port in {env}"));
+    let out = std::process::Command::new("docker")
+        .args(["stop", &container])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+
+    // Another server takes the port while the container is down. Docker frees it
+    // a moment after the stop returns.
+    let listener = (0..50)
+        .find_map(|_| {
+            std::net::TcpListener::bind(("127.0.0.1", port))
+                .inspect_err(|_| std::thread::sleep(std::time::Duration::from_millis(100)))
+                .ok()
+        })
+        .expect("port free after docker stop");
+    init_common::fake_redis_on(listener);
+
+    init()
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("✓ PING").not())
+        .stderr(predicate::str::contains(format!(
+            "docker start {container}"
+        )));
 }
 
 #[test]

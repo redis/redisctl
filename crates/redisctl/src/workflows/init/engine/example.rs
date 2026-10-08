@@ -76,10 +76,52 @@ __EXP__ rememberTurn({ sessionId, actorId, text, role = 'USER' }) {
 
 __EXP__ recallSession(sessionId) {
   try {
-    return await memory.getSessionMemory(sessionId);
+    return await memory.getSessionMemory(safeId(sessionId));
   } catch (err) {
     // A session nobody has written to yet is a 404: that is an empty history, not a fault.
     if (err?.name === 'NotFoundErrorResponseContent' || err?.statusCode === 404) return { events: [] };
+    throw err;
+  }
+}
+"#;
+
+const SAFE_ID_TS: &str = r#"// Session and actor ids accept only letters, digits and hyphens - the API rejects a dot
+// or an underscore with a 400, so anything derived from a username needs this.
+const safeId = (value: string) => value.replace(/[^A-Za-z0-9-]+/g, '-');
+"#;
+
+const AGENT_MEMORY_NODE_SDK_TS: &str = r#"__IMPORT__
+
+// The SDK reads __KEY__ from the environment; the store id is passed in.
+const memory = new AgentMemory({
+  serverURL: process.env.__URL__!,
+  storeId: process.env.__ID__,
+});
+
+type Turn = {
+  sessionId: string;
+  actorId: string;
+  text: string;
+  role?: 'USER' | 'ASSISTANT' | 'SYSTEM';
+};
+
+__EXP__ rememberTurn({ sessionId, actorId, text, role = 'USER' }: Turn) {
+  return memory.addSessionEvent({
+    sessionId: safeId(sessionId),
+    actorId: safeId(actorId),
+    role,
+    content: [{ text }],
+    createdAt: new Date(),
+  });
+}
+
+__EXP__ recallSession(sessionId: string) {
+  try {
+    return await memory.getSessionMemory(safeId(sessionId));
+  } catch (err) {
+    // A session nobody has written to yet is a 404: that is an empty history, not a fault.
+    const failure = err as { name?: string; statusCode?: number } | undefined;
+    if (failure?.name === 'NotFoundErrorResponseContent' || failure?.statusCode === 404) return { events: [] };
     throw err;
   }
 }
@@ -155,10 +197,40 @@ const search = (prompt) => cache.search({ prompt, maxResults: 1 });
 const store = (prompt, response) => cache.set({ prompt, response });
 "#;
 
+const LANGCACHE_NODE_SDK_TS: &str = r#"__IMPORT__
+
+const cache = new LangCache({
+  serverURL: process.env.__URL__!,
+  cacheId: process.env.__ID__,
+  apiKey: process.env.__KEY__,
+});
+
+const search = (prompt: string) => cache.search({ prompt, maxResults: 1 });
+const store = (prompt: string, response: string) => cache.set({ prompt, response });
+"#;
+
 const LANGCACHE_NODE_BODY: &str = r#"
 // Search before generating: a semantic hit skips the model call entirely. Raise the
 // threshold if answers feel too loosely matched, lower it for a higher hit rate.
 __EXP__ cachedCompletion(prompt, generate, { similarityThreshold = 0.9 } = {}) {
+  const { data = [] } = await search(prompt);
+  const hit = data.find((entry) => entry.similarity >= similarityThreshold);
+  if (hit) return { response: hit.response, cached: true };
+
+  const response = await generate();
+  await store(prompt, response);
+  return { response, cached: false };
+}
+"#;
+
+const LANGCACHE_NODE_BODY_TS: &str = r#"
+// Search before generating: a semantic hit skips the model call entirely. Raise the
+// threshold if answers feel too loosely matched, lower it for a higher hit rate.
+__EXP__ cachedCompletion(
+  prompt: string,
+  generate: () => Promise<string> | string,
+  { similarityThreshold = 0.9 }: { similarityThreshold?: number } = {},
+) {
   const { data = [] } = await search(prompt);
   const hit = data.find((entry) => entry.similarity >= similarityThreshold);
   if (hit) return { response: hit.response, cached: true };
@@ -232,7 +304,9 @@ fn fill(template: &str, product: &WiredProduct, pkg: &str, esm: bool) -> String 
         )
 }
 
-fn node_source(product: &WiredProduct, esm: bool) -> String {
+fn node_source(product: &WiredProduct, flavour: &Flavour) -> String {
+    let esm = flavour.esm;
+    let ts = flavour.ext == "ts";
     match product.spec.key {
         ProductKey::AgentMemory => {
             let tail = if esm {
@@ -240,14 +314,14 @@ fn node_source(product: &WiredProduct, esm: bool) -> String {
             } else {
                 "\nmodule.exports = { rememberTurn, recallSession };\n"
             };
+            let (safe_id, sdk) = if ts {
+                (SAFE_ID_TS, AGENT_MEMORY_NODE_SDK_TS)
+            } else {
+                (SAFE_ID_JS, AGENT_MEMORY_NODE_SDK)
+            };
             format!(
-                "{SAFE_ID_JS}\n{}{}{tail}",
-                fill(
-                    AGENT_MEMORY_NODE_SDK,
-                    product,
-                    "@redis-iris/agent-memory",
-                    esm
-                ),
+                "{safe_id}\n{}{}{tail}",
+                fill(sdk, product, "@redis-iris/agent-memory", esm),
                 AGENT_MEMORY_TAIL_JS,
             )
         }
@@ -257,10 +331,15 @@ fn node_source(product: &WiredProduct, esm: bool) -> String {
             } else {
                 "\nmodule.exports = { cachedCompletion };\n"
             };
+            let (sdk, body) = if ts {
+                (LANGCACHE_NODE_SDK_TS, LANGCACHE_NODE_BODY_TS)
+            } else {
+                (LANGCACHE_NODE_SDK, LANGCACHE_NODE_BODY)
+            };
             format!(
                 "{}{}{tail}",
-                fill(LANGCACHE_NODE_SDK, product, "@redis-ai/langcache", esm),
-                fill(LANGCACHE_NODE_BODY, product, "", esm),
+                fill(sdk, product, "@redis-ai/langcache", esm),
+                fill(body, product, "", esm),
             )
         }
         ProductKey::ContextRetriever => unreachable!("no template"),
@@ -281,7 +360,7 @@ fn plan_example(cwd: &Path, runtime: Runtime, product: &WiredProduct) -> Option<
             (
                 format!("redis-{stem}.{}", flavour.ext),
                 "//",
-                node_source(product, flavour.esm),
+                node_source(product, &flavour),
             )
         }
         Runtime::Python => {

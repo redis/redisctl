@@ -184,7 +184,7 @@ impl From<crate::workflows::init::engine::InitError> for RedisCtlError {
     fn from(err: crate::workflows::init::engine::InitError) -> Self {
         use crate::workflows::init::engine::InitError;
         let (code, exit_code) = match &err {
-            InitError::NoUrlInInput { .. }
+            InitError::NoUrlInInput
             | InitError::InvalidEnvValue { .. }
             | InitError::ProductIncomplete { .. }
             | InitError::NothingToComplete => ("invalid_input", exit_code::VALIDATION),

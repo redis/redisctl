@@ -23,6 +23,20 @@ impl Sandbox {
     }
 
     fn init(&self, agents: &str, dry_run: bool) -> String {
+        let mut cmd = self.command(agents);
+        cmd.arg("--skills-repo").arg(self.skills.path());
+        run(cmd, dry_run)
+    }
+
+    /// No checkout and no npx on PATH: the skills step has nothing to run.
+    fn init_without_npx(&self, agents: &str, dry_run: bool) -> String {
+        let mut cmd = self.command(agents);
+        cmd.env_remove("REDISCTL_INIT_SKILLS_REPO")
+            .env("PATH", self.home.path().join("empty-bin"));
+        run(cmd, dry_run)
+    }
+
+    fn command(&self, agents: &str) -> Command {
         let mut cmd = Command::cargo_bin("redisctl").unwrap();
         cmd.current_dir(self.project.path())
             .env("HOME", self.home.path())
@@ -37,22 +51,24 @@ impl Sandbox {
                 "redis://127.0.0.1:1",
                 "--agent",
                 agents,
-                "--skills-repo",
-            ])
-            .arg(self.skills.path());
-        if dry_run {
-            cmd.arg("--dry-run");
-        }
-        let output = cmd.output().unwrap();
-        // The refused port fails validation after apply; the dry run succeeds.
-        assert_eq!(
-            output.status.code(),
-            Some(if dry_run { 0 } else { 10 }),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stdout).unwrap()
+            ]);
+        cmd
     }
+}
+
+fn run(mut cmd: Command, dry_run: bool) -> String {
+    if dry_run {
+        cmd.arg("--dry-run");
+    }
+    let output = cmd.output().unwrap();
+    // The refused port fails validation after apply; the dry run succeeds.
+    assert_eq!(
+        output.status.code(),
+        Some(if dry_run { 0 } else { 10 }),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
 }
 
 /// `(status, subject)` for every change line in the section that starts with
@@ -92,20 +108,10 @@ fn assert_parity(agents: &str) {
         "a path is reported twice for {agents}: {applied:?}"
     );
 
-    // A re-run over the applied state plans the same paths it reports.
+    // A re-run over the applied state plans the same lines it reports.
     let replanned = change_lines(&sandbox.init(agents, true), "Plan  (");
     let reapplied = change_lines(&sandbox.init(agents, false), "Changes  (");
-    let subjects = |lines: &[(String, String)]| {
-        lines
-            .iter()
-            .map(|(_, subject)| subject.clone())
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(
-        subjects(&replanned),
-        subjects(&reapplied),
-        "re-run {agents}"
-    );
+    assert_eq!(replanned, reapplied, "re-run {agents}");
     assert!(
         reapplied
             .iter()
@@ -128,6 +134,56 @@ fn claude_and_cursor_dry_run_matches_apply() {
 #[test]
 fn all_agents_dry_run_matches_apply() {
     assert_parity("claude,cursor,vscode,codex");
+}
+
+#[test]
+fn a_missing_npx_is_planned_as_the_skip_a_real_run_reports() {
+    for (agents, dir) in [
+        ("claude", ".claude/skills/"),
+        ("claude,cursor", ".agents/skills/"),
+    ] {
+        let sandbox = Sandbox::new();
+        let planned = change_lines(&sandbox.init_without_npx(agents, true), "Plan  (");
+        let applied = change_lines(&sandbox.init_without_npx(agents, false), "Changes  (");
+        assert_eq!(planned, applied, "dry run vs apply for --agent {agents}");
+        assert!(
+            applied.contains(&("skipped".to_string(), dir.to_string())),
+            "--agent {agents}: {applied:?}"
+        );
+    }
+}
+
+#[test]
+fn next_steps_name_the_dir_a_skipped_skills_install_targets() {
+    let sandbox = Sandbox::new();
+    let port = init_common::fake_redis();
+    let output = Command::cargo_bin("redisctl")
+        .unwrap()
+        .current_dir(sandbox.project.path())
+        .env("HOME", sandbox.home.path())
+        .env("PATH", sandbox.home.path().join("empty-bin"))
+        .env("REDISCTL_INIT_AMPLITUDE_KEY", "")
+        .env_remove("REDISCTL_INIT_SKILLS_REPO")
+        .arg("--config-file")
+        .arg(sandbox.home.path().join("config.toml"))
+        .args([
+            "init",
+            "--no-telemetry",
+            "--no-install-cli",
+            "--agent",
+            "claude",
+        ])
+        .args(["--url", &format!("redis://127.0.0.1:{port}")])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8_lossy(&output);
+    assert!(
+        stdout.contains("the skills in .claude/skills/."),
+        "{stdout}"
+    );
 }
 
 #[test]

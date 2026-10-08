@@ -100,6 +100,40 @@ fn a_password_with_a_raw_at_sign_connects_to_the_host_after_the_last_at() {
         .stdout(predicate::str::contains("S3cretPw").not());
 }
 
+#[cfg(unix)]
+#[test]
+fn a_new_env_is_private_to_the_owner_and_an_existing_one_keeps_its_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |sandbox: &Sandbox| {
+        std::fs::metadata(sandbox.project.path().join(".env"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
+    };
+
+    let fresh = Sandbox::new();
+    fresh
+        .init(&["--url", "redis://default:s3cret@127.0.0.1:9"])
+        .assert()
+        .code(10);
+    assert_eq!(mode(&fresh), 0o600, "{:o}", mode(&fresh));
+
+    let existing = Sandbox::new();
+    existing.write_env("A=1\n");
+    std::fs::set_permissions(
+        existing.project.path().join(".env"),
+        std::fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    existing
+        .init(&["--url", "redis://127.0.0.1:9"])
+        .assert()
+        .code(10);
+    assert!(existing.read_env().contains("REDIS_URL="));
+    assert_eq!(mode(&existing), 0o644, "{:o}", mode(&existing));
+}
+
 #[test]
 fn replacing_redis_url_changes_only_its_own_line() {
     let sandbox = Sandbox::new();

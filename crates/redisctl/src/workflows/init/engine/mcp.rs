@@ -21,9 +21,10 @@ enum Runner {
 }
 
 /// `load KEY` exports KEY from `.env`, parsed like `env::read_env_key`: the first
-/// `[export] KEY = value` line, trimmed, one edge quote stripped. The file is never
-/// run as shell code, so any dotenv-valid content (or CRLF endings) is safe.
-const LOAD_FROM_ENV_FILE: &str = r#"load() { v=$(sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}$1[[:space:]]*=[[:space:]]*//p" .env 2>/dev/null | head -n 1 | sed -e 's/[[:space:]]*$//' -e "s/^[\"']//" -e "s/[\"']\$//"); [ -z "$v" ] || export "$1=$v"; }"#;
+/// `[export] KEY = value` line; a quoted value is the text between its quotes, a
+/// bare one ends at ` #` and is trimmed. The file is never run as shell code, so
+/// any dotenv-valid content (or CRLF endings) is safe.
+const LOAD_FROM_ENV_FILE: &str = r#"load() { v=$(sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}$1[[:space:]]*=[[:space:]]*//p" .env 2>/dev/null | head -n 1 | sed -e "s/^\"\([^\"]*\)\".*/\1/" -e t -e "s/^'\([^']*\)'.*/\1/" -e t -e 's/[[:space:]]#.*//' -e 's/[[:space:]]*$//'); [ -z "$v" ] || export "$1=$v"; }"#;
 
 fn launcher(keys: &[&str], command: &str) -> serde_json::Value {
     let loads: String = keys.iter().map(|key| format!(" load {key};")).collect();

@@ -217,6 +217,8 @@ pub(crate) struct SignedIn {
     pub conn_mgr: ConnectionManager,
     pub profile: String,
     pub email: Option<String>,
+    /// What `login` would print as notes, for the caller to render.
+    pub notices: Vec<String>,
 }
 
 /// `login`'s browser flow for a command that finds no credentials part-way through
@@ -252,6 +254,7 @@ pub(crate) async fn sign_in(
     Ok(SignedIn {
         conn_mgr: ConnectionManager::with_config_path(config, conn_mgr.config_path.clone()),
         profile: profile_name,
+        notices: signed_in_notices(&creds),
         email: creds.email,
     })
 }
@@ -514,13 +517,19 @@ fn superseded_label(creds: &MintedCredentials) -> String {
     }
 }
 
-fn warn_on_key_sprawl(creds: &MintedCredentials) {
+fn key_sprawl_notice(creds: &MintedCredentials) -> Option<String> {
     let key_count = creds.redisctl_key_count;
-    if key_count > STALE_KEY_WARN_THRESHOLD {
-        eprintln!(
-            "  note: this account now has {key_count} redisctl-* API keys. Revoke unused ones \
-             in the Redis Cloud console (Access Management > API Keys)."
-        );
+    (key_count > STALE_KEY_WARN_THRESHOLD).then(|| {
+        format!(
+            "this account now has {key_count} redisctl-* API keys. Revoke unused ones in the \
+             Redis Cloud console (Access Management > API Keys)."
+        )
+    })
+}
+
+fn warn_on_key_sprawl(creds: &MintedCredentials) {
+    if let Some(notice) = key_sprawl_notice(creds) {
+        eprintln!("  note: {notice}");
     }
 }
 
@@ -845,6 +854,27 @@ async fn complete_and_persist(
     Ok(creds)
 }
 
+/// The side effects of a sign-in worth telling the user about, one sentence each.
+fn signed_in_notices(creds: &MintedCredentials) -> Vec<String> {
+    let mut notices = Vec::new();
+    if creds.capi_newly_enabled {
+        notices.push(
+            "programmatic (API) access was switched on for this account — it was off until \
+             now, and this applies account-wide, not just to this key."
+                .to_string(),
+        );
+    }
+    if creds.superseded_revoked == Some(false) {
+        notices.push(format!(
+            "could not revoke {} — revoke it in the Redis Cloud console (Access Management \
+             > API Keys).",
+            superseded_label(creds)
+        ));
+    }
+    notices.extend(key_sprawl_notice(creds));
+    notices
+}
+
 fn emit_signed_in(
     creds: &MintedCredentials,
     profile_name: &str,
@@ -883,20 +913,9 @@ fn emit_signed_in(
         // and an unconfigured profile silently resolves to the *production* endpoints.
         eprintln!("  To use another: redisctl --profile {profile_name} cloud auth switch <id>");
     }
-    if creds.capi_newly_enabled {
-        eprintln!(
-            "  note: programmatic (API) access was switched on for this account — it was off \
-             until now, and this applies account-wide, not just to this key."
-        );
+    for notice in signed_in_notices(creds) {
+        eprintln!("  note: {notice}");
     }
-    if creds.superseded_revoked == Some(false) {
-        eprintln!(
-            "  note: could not revoke {} — revoke it in the Redis Cloud console \
-             (Access Management > API Keys).",
-            superseded_label(creds)
-        );
-    }
-    warn_on_key_sprawl(creds);
     let key_count = creds.redisctl_key_count;
     print_formatted_output(
         serde_json::json!({
@@ -1517,6 +1536,31 @@ mod tests {
             superseded_key_name: superseded_key_name.map(str::to_string),
             accounts: vec![],
         }
+    }
+
+    /// `init` signs in through `sign_in` and shows these itself, so both commands report the
+    /// same account-level side effects in the same words.
+    #[test]
+    fn sign_in_carries_the_notices_login_prints() {
+        let mut creds = minted(Some("redisctl-cli-1"));
+        creds.capi_newly_enabled = true;
+        creds.redisctl_key_count = STALE_KEY_WARN_THRESHOLD + 1;
+        assert_eq!(
+            signed_in_notices(&creds),
+            [
+                "programmatic (API) access was switched on for this account — it was off \
+                 until now, and this applies account-wide, not just to this key.",
+                "could not revoke the key redisctl-cli-1 that this replaced — revoke it in \
+                 the Redis Cloud console (Access Management > API Keys).",
+                "this account now has 4 redisctl-* API keys. Revoke unused ones in the Redis \
+                 Cloud console (Access Management > API Keys).",
+            ]
+        );
+
+        let mut quiet = minted(None);
+        quiet.superseded_revoked = Some(true);
+        quiet.redisctl_key_count = STALE_KEY_WARN_THRESHOLD;
+        assert!(signed_in_notices(&quiet).is_empty());
     }
 
     /// A failed revocation is the one moment the old key's name still exists: the profile now

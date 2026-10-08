@@ -416,17 +416,23 @@ file.
     )
 }
 
-/// The plan-time lines: the content depends on apply outcomes (which skills
-/// landed, whether the client installed), so the preview reports only what happens
-/// to the file, then the same links [`generate`] makes.
-pub(crate) fn preview(cwd: &Path, link_for_claude: bool, also_link: &[String]) -> Vec<Change> {
-    let rel = format!("{SKILLS_DIR}/{NAME}/SKILL.md");
-    let status = if cwd.join(&rel).exists() {
-        Status::Updated
-    } else {
-        Status::Created
+/// The plan-time lines: the file decided the way [`generate`] decides it, from the
+/// plan's prediction of the apply outcomes, then the same links it makes.
+pub(crate) fn preview(
+    cwd: &Path,
+    facts: &SkillFacts,
+    link_for_claude: bool,
+    also_link: &[String],
+) -> Vec<Change> {
+    let file = match plan_file(cwd, facts) {
+        Ok(action) => action.preview(),
+        Err(_) => Change::new(
+            format!("{SKILLS_DIR}/{NAME}/SKILL.md"),
+            Status::Updated,
+            NOTE,
+        ),
     };
-    let mut changes = vec![Change::new(rel, status, NOTE)];
+    let mut changes = vec![file];
     if link_for_claude {
         changes.extend(
             link_names(also_link)
@@ -449,9 +455,19 @@ pub(crate) fn generate(
     link_for_claude: bool,
     also_link: &[String],
 ) -> Result<Vec<Change>, InitError> {
+    let mut changes = vec![plan_file(cwd, facts)?.perform(cwd)?];
+    if link_for_claude {
+        for link in link_names(also_link).filter_map(|name| plan_link(cwd, name)) {
+            changes.push(link.perform()?);
+        }
+    }
+    Ok(changes)
+}
+
+fn plan_file(cwd: &Path, facts: &SkillFacts) -> Result<FileAction, InitError> {
     let rel = format!("{SKILLS_DIR}/{NAME}/SKILL.md");
     let content = content(facts);
-    let action = match read_for_planning(cwd, &rel)? {
+    Ok(match read_for_planning(cwd, &rel)? {
         Some(existing) if existing == content => FileAction::Unchanged { rel },
         existing => FileAction::Write {
             status: if existing.is_none() {
@@ -463,14 +479,7 @@ pub(crate) fn generate(
             content,
             note: NOTE.to_string(),
         },
-    };
-    let mut changes = vec![action.perform(cwd)?];
-    if link_for_claude {
-        for link in link_names(also_link).filter_map(|name| plan_link(cwd, name)) {
-            changes.push(link.perform()?);
-        }
-    }
-    Ok(changes)
+    })
 }
 
 /// One `.claude/skills/<name>` entry, decided the same way for preview and apply.

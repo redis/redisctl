@@ -11,12 +11,12 @@ use std::time::Duration;
 
 use crate::workflows::init::engine::{self as engine, Change, CloudFacts, CloudTier, Status};
 use dialoguer::Select;
-use redis_cloud::CloudClient;
+use redis_cloud::{CloudClient, CloudError};
 use redisctl_core::cloud::quick_database::{self, QuickDatabaseError, QuickDatabaseParams};
 
 use super::output;
 use super::wizard::RedisTheme;
-use crate::error::RedisCtlError;
+use crate::error::{RedisCtlError, exit_code};
 
 /// Nothing real yet: the placeholder a dry run plans .env around, masked like a URL.
 const PLANNED_URL: &str = "redis://default:<generated>@<endpoint-assigned-by-redis-cloud>";
@@ -44,9 +44,20 @@ struct Inventory {
     free_full: Option<(i32, Vec<String>)>,
 }
 
-fn api_err(e: impl std::fmt::Display) -> RedisCtlError {
-    RedisCtlError::ApiError {
-        message: format!("Redis Cloud: {e}"),
+fn api_err(e: CloudError) -> RedisCtlError {
+    match e {
+        CloudError::AuthenticationFailed { .. } | CloudError::Forbidden { .. } => {
+            RedisCtlError::init(
+                "authentication_failed",
+                exit_code::AUTH,
+                format!(
+                    "Redis Cloud: {e}\n  Sign in again: redisctl cloud auth login   (or pass -p <profile> with valid API keys)"
+                ),
+            )
+        }
+        e => RedisCtlError::ApiError {
+            message: format!("Redis Cloud: {e}"),
+        },
     }
 }
 
@@ -79,6 +90,16 @@ pub(crate) async fn resolve(
     {
         return connect(client, cand, profile).await;
     }
+    // Not reused, so an explicit name is one init would create.
+    if let Some(name) = name {
+        valid_db_name(name).map_err(|rule| {
+            RedisCtlError::init(
+                "invalid_input",
+                exit_code::VALIDATION,
+                format!("--name \"{name}\" cannot name a new Redis Cloud database: {rule}"),
+            )
+        })?;
+    }
 
     // No name, databases exist: report the question (dry), ask (tty), refuse (piped).
     if name.is_none() && !inv.candidates.is_empty() {
@@ -89,6 +110,10 @@ pub(crate) async fn resolve(
                 .map(|c| format!("\"{}\"", c.name))
                 .collect::<Vec<_>>()
                 .join(", ");
+            let create = match pin {
+                Some(pin) => format!("a new database \"{db_name}\" in subscription {pin}"),
+                None => format!("a new free database \"{db_name}\""),
+            };
             return Ok(planned(
                 &db_name,
                 inv.target,
@@ -96,7 +121,7 @@ pub(crate) async fn resolve(
                 Change::new(
                     "cloud:choice",
                     Status::Planned,
-                    format!("would offer {offered} or a new free database \"{db_name}\""),
+                    format!("would offer {offered} or {create}"),
                 ),
             ));
         }
@@ -105,7 +130,7 @@ pub(crate) async fn resolve(
         if defaults || !std::io::stdin().is_terminal() {
             return Err(other(listing(&inv)));
         }
-        match pick(&inv, &db_name)? {
+        match pick(&inv, &db_name, pin)? {
             Pick::Existing(cand) => return connect(client, cand, profile).await,
             Pick::Create(name) => db_name = name,
         }
@@ -147,9 +172,13 @@ pub(crate) async fn resolve(
             .collect::<Vec<_>>()
             .join(", ");
         let first = names.first().map(String::as_str).unwrap_or("<name>");
-        return Err(other(format!(
-            "the free Essentials subscription ({id}) is full - it holds {held}, and Redis Cloud allows one free subscription per account.\n  Share that database:  --cloud --name {first}\n  Use a paid one:       --cloud-subscription <id>   (redisctl api cloud get /fixed/subscriptions lists them)\n  Stay local instead:   drop --cloud to provision Docker"
-        )));
+        return Err(RedisCtlError::init(
+            "api_error",
+            exit_code::CONFLICT,
+            format!(
+                "the free Essentials subscription ({id}) is full - it holds {held}, and Redis Cloud allows one free subscription per account.\n  Share that database:  --cloud --name {first}\n  Use a paid one:       --cloud-subscription <id>   (redisctl api cloud get /fixed/subscriptions lists them)\n  Stay local instead:   drop --cloud to provision Docker"
+            ),
+        ));
     }
 
     match inv.target {
@@ -330,7 +359,6 @@ fn listing(inv: &Inventory) -> String {
     lines.join("\n")
 }
 
-/// `Ok(None)` means "create a new one"; Esc means no answer, which has a flag.
 enum Pick<'a> {
     Existing(&'a Candidate),
     Create(String),
@@ -383,11 +411,18 @@ fn ask_db_name(suggested: &str) -> Result<String, RedisCtlError> {
         .map_err(super::wizard::prompt_failed)
 }
 
-fn pick<'a>(inv: &'a Inventory, db_name: &str) -> Result<Pick<'a>, RedisCtlError> {
+fn pick<'a>(
+    inv: &'a Inventory,
+    db_name: &str,
+    pin: Option<i32>,
+) -> Result<Pick<'a>, RedisCtlError> {
     let mut items: Vec<String> = inv.candidates.iter().map(describe).collect();
     // An unavailable create stays on the list carrying the reason (the wizard's
     // pattern); choosing it re-prompts instead of aborting the session.
-    let mut create = "create a new free database".to_string();
+    let mut create = match pin {
+        Some(pin) => format!("create a new database in subscription {pin}"),
+        None => "create a new free database".to_string(),
+    };
     if inv.target.is_none() && inv.free_full.is_some() {
         create.push_str("   (unavailable: the free plan is already used up)");
     }
@@ -489,16 +524,26 @@ async fn database_url(client: &CloudClient, cand: &Candidate) -> Result<String, 
     }
 }
 
-/// The engine writes credentials to a file and never returns them; hand it a
-/// private scratch file and read the URL back.
+/// The engine writes credentials to a file and never returns them; hand it one
+/// and read the URL back. It writes into whatever is already at the path, so the
+/// file goes in a fresh owner-only directory.
 struct TempCredentials(PathBuf);
 
 impl TempCredentials {
-    fn new() -> Self {
-        let path = std::env::temp_dir().join(format!("redisctl-init-{}.env", std::process::id()));
-        // A leftover from a crashed run would fail the engine's create_new open.
-        let _ = std::fs::remove_file(&path);
-        Self(path)
+    fn new() -> Result<Self, RedisCtlError> {
+        let dir = std::env::temp_dir().join(format!("redisctl-init-{}", uuid::Uuid::new_v4()));
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(&dir).map_err(|e| {
+            other(format!(
+                "could not create a private directory for the credentials: {e}"
+            ))
+        })?;
+        Ok(Self(dir.join("credentials.env")))
     }
 
     fn read_url(&self) -> Result<String, RedisCtlError> {
@@ -513,7 +558,9 @@ impl TempCredentials {
 
 impl Drop for TempCredentials {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        if let Some(dir) = self.0.parent() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 }
 
@@ -536,12 +583,17 @@ async fn marker_subscription(
 }
 
 fn quick_err(e: QuickDatabaseError) -> RedisCtlError {
-    match e {
-        QuickDatabaseError::InvalidName(msg) => {
-            RedisCtlError::init("invalid_input", crate::error::exit_code::VALIDATION, msg)
-        }
-        other_err => other(other_err.to_string()),
-    }
+    let (code, exit) = match &e {
+        QuickDatabaseError::InvalidName(_) => ("invalid_input", exit_code::VALIDATION),
+        QuickDatabaseError::NameConflict(_)
+        | QuickDatabaseError::FreeDbExists(_)
+        | QuickDatabaseError::QuotaExceeded(_) => ("api_error", exit_code::CONFLICT),
+        QuickDatabaseError::NotAuthenticated(_) => ("authentication_failed", exit_code::AUTH),
+        QuickDatabaseError::Transient(_) => ("api_error", exit_code::UPSTREAM),
+        QuickDatabaseError::RateLimited(_) => ("api_error", exit_code::RATE_LIMITED),
+        QuickDatabaseError::Other(_) => ("error", exit_code::GENERIC),
+    };
+    RedisCtlError::init(code, exit, e.to_string())
 }
 
 /// Free-plan creation, delegated to the shared engine (idempotent via its
@@ -552,7 +604,7 @@ async fn create_free(
     profile: Option<&str>,
 ) -> Result<CloudOutcome, RedisCtlError> {
     let sub_existed = marker_subscription(client, db_name).await?;
-    let temp = TempCredentials::new();
+    let temp = TempCredentials::new()?;
     let params = QuickDatabaseParams {
         output_credentials: temp.0.clone(),
         ..QuickDatabaseParams::new(db_name)
@@ -682,9 +734,172 @@ async fn create_pinned(
     })
 }
 
+/// `cloud auth login` refuses an unusable keyring by pointing at its own
+/// `--allow-plaintext`, which init does not have; name the command that does.
+pub(crate) fn sign_in_error(e: RedisCtlError, profile: Option<&str>) -> RedisCtlError {
+    if let RedisCtlError::Structured(se) = &e
+        && se.code == "keyring_unavailable"
+    {
+        // Each refusal reads "<reason>. Re-run ... instead.[ <key left behind>]".
+        let (reason, hint) = se
+            .message
+            .split_once(" Re-run")
+            .unwrap_or((&se.message, ""));
+        let left_behind = hint.split_once("instead.").map_or("", |(_, rest)| rest);
+        let login = match profile {
+            Some(p) => format!("redisctl --profile {p} cloud auth login --allow-plaintext"),
+            None => "redisctl cloud auth login --allow-plaintext".to_string(),
+        };
+        return RedisCtlError::init(
+            "keyring_unavailable",
+            exit_code::GENERIC,
+            format!(
+                "{reason}{left_behind}\n  Store the credentials in the config file (0600) instead: {login}\n  Then re-run redisctl init."
+            ),
+        );
+    }
+    e
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{default_db_name, valid_db_name};
+    use super::{
+        QuickDatabaseError, RedisCtlError, TempCredentials, api_err, default_db_name, quick_err,
+        sign_in_error, valid_db_name,
+    };
+    use crate::error::exit_code;
+    use crate::structured_error::StructuredError;
+    use redis_cloud::CloudError;
+
+    #[test]
+    fn create_engine_errors_map_onto_inits_exit_codes() {
+        let m = || "x".to_string();
+        for (err, code) in [
+            (QuickDatabaseError::InvalidName(m()), exit_code::VALIDATION),
+            (QuickDatabaseError::NameConflict(m()), exit_code::CONFLICT),
+            (QuickDatabaseError::FreeDbExists(m()), exit_code::CONFLICT),
+            (QuickDatabaseError::QuotaExceeded(m()), exit_code::CONFLICT),
+            (QuickDatabaseError::NotAuthenticated(m()), exit_code::AUTH),
+            (QuickDatabaseError::Transient(m()), exit_code::UPSTREAM),
+            (
+                QuickDatabaseError::RateLimited(m()),
+                exit_code::RATE_LIMITED,
+            ),
+            (QuickDatabaseError::Other(m()), exit_code::GENERIC),
+        ] {
+            let label = format!("{err:?}");
+            assert_eq!(quick_err(err).exit_code(), code, "{label}");
+        }
+    }
+
+    #[test]
+    fn api_errors_map_onto_inits_exit_codes() {
+        let m = || "x".to_string();
+        for (err, code) in [
+            (
+                CloudError::AuthenticationFailed { message: m() },
+                exit_code::AUTH,
+            ),
+            (CloudError::Forbidden { message: m() }, exit_code::AUTH),
+            (CloudError::NotFound { message: m() }, exit_code::NOT_FOUND),
+            (
+                CloudError::ApiError {
+                    code: 409,
+                    message: m(),
+                },
+                exit_code::CONFLICT,
+            ),
+            (
+                CloudError::RateLimited { message: m() },
+                exit_code::RATE_LIMITED,
+            ),
+            (
+                CloudError::InternalServerError { message: m() },
+                exit_code::UPSTREAM,
+            ),
+        ] {
+            let label = format!("{err:?}");
+            assert_eq!(api_err(err).exit_code(), code, "{label}");
+        }
+    }
+
+    /// The three shapes `cloud auth login` refuses a keyring with; init has no
+    /// `--allow-plaintext`, so the remedy has to be the login command itself.
+    #[test]
+    fn a_keyring_refusal_names_the_login_command_not_an_init_flag() {
+        for (message, reason) in [
+            (
+                "no OS keyring is available to store the credentials, and storing them in the config file has to be asked for. Re-run with `--allow-plaintext` to store them there (0600) instead.",
+                "no OS keyring is available to store the credentials",
+            ),
+            (
+                "the OS keyring cannot store credentials (collection is locked). Re-run with `--allow-plaintext` to store them in the config file (0600) instead.",
+                "the OS keyring cannot store credentials (collection is locked).",
+            ),
+            (
+                "failed to store credentials in the OS keyring (no secret service). Re-run `redisctl cloud auth login --allow-plaintext` to store them in the config file (0600) instead. The key redisctl-cli-9 was created but not stored; revoke it in the Redis Cloud console (Access Management > API Keys).",
+                "failed to store credentials in the OS keyring (no secret service). The key redisctl-cli-9 was created but not stored; revoke it",
+            ),
+        ] {
+            let e = sign_in_error(
+                RedisCtlError::Structured(Box::new(StructuredError::keyring_unavailable(message))),
+                None,
+            );
+            let text = e.to_string();
+            assert_eq!(e.exit_code(), exit_code::GENERIC, "{text}");
+            assert!(text.contains(reason), "{text}");
+            assert!(
+                text.contains("redisctl cloud auth login --allow-plaintext"),
+                "{text}"
+            );
+            assert!(text.contains("re-run redisctl init"), "{text}");
+            assert!(!text.contains("Re-run"), "{text}");
+            assert_eq!(text.matches("--allow-plaintext").count(), 1, "{text}");
+        }
+
+        let pinned = sign_in_error(
+            RedisCtlError::Structured(Box::new(StructuredError::keyring_unavailable("x"))),
+            Some("work"),
+        );
+        assert!(
+            pinned
+                .to_string()
+                .contains("redisctl --profile work cloud auth login --allow-plaintext"),
+            "{pinned}"
+        );
+
+        let other = sign_in_error(
+            RedisCtlError::Structured(Box::new(StructuredError::not_authenticated("x"))),
+            None,
+        );
+        assert!(matches!(other, RedisCtlError::Structured(_)));
+    }
+
+    /// The create engine writes into whatever file is at the path, so the path must be
+    /// one nobody else could have prepared: a fresh owner-only directory per run.
+    #[test]
+    fn credentials_land_in_a_fresh_private_directory() {
+        let first = TempCredentials::new().unwrap();
+        let second = TempCredentials::new().unwrap();
+        let dir = first.0.parent().unwrap().to_path_buf();
+        assert_ne!(dir, std::env::temp_dir(), "{}", first.0.display());
+        assert_eq!(dir.parent(), Some(std::env::temp_dir().as_path()));
+        assert_ne!(first.0.parent(), second.0.parent());
+        let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+        let id = name.strip_prefix("redisctl-init-").unwrap_or_default();
+        assert!(uuid::Uuid::parse_str(id).is_ok(), "{name}");
+        assert!(dir.is_dir());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700, "{mode:o}");
+        }
+        assert!(!first.0.exists());
+        std::fs::write(&first.0, "REDIS_URL=redis://h:1\n").unwrap();
+        drop(first);
+        assert!(!dir.exists());
+    }
 
     #[test]
     fn default_names_always_pass_the_rule() {

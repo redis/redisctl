@@ -58,20 +58,19 @@ fn invalid_input(message: String) -> RedisCtlError {
 
 /// A pasted connect command given as positionals: quoted whole, or unquoted with
 /// `redis-cli` and the URL landing here and `-u` parsed as the alias of --url.
-/// Anything else is a stray argument, rejected so a typo cannot pass silently.
+/// Anything else is a stray argument, rejected so a typo cannot pass silently, and
+/// not echoed: it can be a bare password.
 fn check_pasted(pasted: &[String]) -> Result<(), RedisCtlError> {
     let stray = pasted.iter().find(|token| {
         let first = token.split_whitespace().next().unwrap_or_default();
         first != "redis-cli" && !first.starts_with("redis://") && !first.starts_with("rediss://")
     });
     match stray {
-        Some(token) => Err(RedisCtlError::init(
+        Some(_) => Err(RedisCtlError::init(
             "usage",
             exit_code::USAGE,
-            format!(
-                "unexpected argument '{}' found\n  A connection string goes in --url; see redisctl init --help",
-                engine::mask_url(token)
-            ),
+            "unexpected positional argument found\n  A connection string goes in --url; see redisctl init --help"
+                .to_string(),
         )),
         None => Ok(()),
     }
@@ -119,8 +118,7 @@ fn requested_products(args: &InitArgs) -> Result<Vec<engine::ProductRequest>, Re
             && !url.starts_with("https://")
         {
             return Err(invalid_input(format!(
-                "--{flag} takes the service endpoint, not \"{}\" - copy it from the console (https://...).",
-                engine::mask_url(url)
+                "--{flag} takes the service endpoint - copy it from the console (https://...)."
             )));
         }
         let id = match id_spec {
@@ -162,7 +160,7 @@ fn requested_products(args: &InitArgs) -> Result<Vec<engine::ProductRequest>, Re
         }
         if requests.len() > 1 {
             return Err(invalid_input(
-                "--api-key is ambiguous with more than one product. Pass the keys as environment variables instead:\n    AGENT_MEMORY_API_KEY=<key> LANGCACHE_API_KEY=<key> CONTEXT_RETRIEVER_AGENT_KEY=<key> redisctl init ..."
+                "--api-key is ambiguous with more than one product. Pass the keys as environment variables instead, or paste them into .env when it already holds placeholders:\n    AGENT_MEMORY_API_KEY=<key> LANGCACHE_API_KEY=<key> CONTEXT_RETRIEVER_AGENT_KEY=<key> redisctl init ..."
                     .to_string(),
             ));
         }
@@ -322,12 +320,16 @@ async fn run_inner(
                     output::step("sign in to Redis Cloud in your browser");
                     println!("{}  {}", output::rail_gap(), dim(url));
                 })
-                .await?;
+                .await
+                .map_err(|e| cloud::sign_in_error(e, profile))?;
                 output::step(&format!(
                     "signed in as {}  (profile '{}')",
                     signed_in.email.as_deref().unwrap_or("your account"),
                     signed_in.profile
                 ));
+                for notice in &signed_in.notices {
+                    println!("{}  {}", output::rail_gap(), dim(notice));
+                }
                 signed_in
                     .conn_mgr
                     .create_cloud_client(Some(&signed_in.profile))
@@ -393,7 +395,11 @@ async fn run_inner(
             bold("Agents"),
             names,
             if args.agents.is_empty() && !asked_agents {
-                dim(" (detected)")
+                if engine::detect_agents(&cwd).is_empty() {
+                    dim(" (none detected, so all)")
+                } else {
+                    dim(" (detected)")
+                }
             } else {
                 String::new()
             },

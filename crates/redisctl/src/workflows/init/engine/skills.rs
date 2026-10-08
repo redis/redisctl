@@ -298,16 +298,53 @@ impl SkillsAction {
     }
 
     pub(crate) fn preview(&self, cwd: &Path) -> Vec<Change> {
+        self.preview_with(cwd, &has_bin)
+    }
+
+    /// The npx check happens here too, so a dry run reports the same skip a real
+    /// run would.
+    fn preview_with(&self, cwd: &Path, has: &dyn Fn(&str) -> bool) -> Vec<Change> {
         match &self.repo {
             Some(repo) => match self.copy_steps(cwd, repo) {
                 Ok(steps) => steps.into_iter().map(|step| step.change).collect(),
                 Err(skipped) => vec![skipped],
             },
+            None if !has("npx") => vec![self.npx_missing()],
             None => vec![Change::new(
-                describe_target(self.global),
+                self.target(),
                 Status::Planned,
                 format!("would run: npx {}", self.npx_args().join(" ")),
             )],
+        }
+    }
+
+    /// Where this agent set's skills land, for a line that names no installed skill.
+    pub(crate) fn target(&self) -> String {
+        if self.global {
+            describe_target(true)
+        } else {
+            format!("{}/", project_dir(&self.agents))
+        }
+    }
+
+    fn npx_missing(&self) -> Change {
+        Change::new(
+            self.target(),
+            Status::Skipped,
+            "npx not found - install Node, or pass --skills-repo <a redis/agent-skills checkout>",
+        )
+    }
+
+    /// The skills a run is expected to install, for the plan-time project skill: a
+    /// checkout's skills, the ones the lock already tracks, or none without npx.
+    pub(crate) fn planned_installed(&self, cwd: &Path) -> Vec<String> {
+        match &self.repo {
+            Some(repo) => self
+                .copy_steps(cwd, repo)
+                .map(|steps| steps.into_iter().map(|step| step.name).collect())
+                .unwrap_or_default(),
+            None if !has_bin("npx") => Vec::new(),
+            None => read_lock_hashes(cwd).into_keys().collect(),
         }
     }
 
@@ -327,8 +364,7 @@ impl SkillsAction {
     /// What a checkout copy does per skill, decided the same way for the preview
     /// and the copy. `Err` is the one skipped line when there is nothing to copy.
     fn copy_steps(&self, cwd: &Path, repo: &Path) -> Result<Vec<CopyStep>, Change> {
-        let skipped =
-            |note: String| Change::new(describe_target(self.global), Status::Skipped, note);
+        let skipped = |note: String| Change::new(self.target(), Status::Skipped, note);
         let source = repo.join("skills");
         if !source.exists() {
             return Err(skipped(format!(
@@ -428,17 +464,13 @@ impl SkillsAction {
                 });
             }
             return Ok(SkillsOutcome::skipped(Change::new(
-                describe_target(self.global),
+                self.target(),
                 Status::Skipped,
                 failure_note(&r.stderr, &r.stdout, r.status),
             )));
         }
 
-        Ok(SkillsOutcome::skipped(Change::new(
-            describe_target(self.global),
-            Status::Skipped,
-            "npx not found - install Node, or pass --skills-repo <a redis/agent-skills checkout>",
-        )))
+        Ok(SkillsOutcome::skipped(self.npx_missing()))
     }
 
     /// The npx project outcome, read from the lock the CLI maintains.
@@ -636,13 +668,36 @@ mod tests {
             global: true,
             repo: None,
         };
-        let [change] = &a.preview(Path::new("/p"))[..] else {
+        let [change] = &a.preview_with(Path::new("/p"), &|_| true)[..] else {
             panic!("one npx line");
         };
         assert_eq!(change.status, Status::Planned);
         assert_eq!(
             change.note,
             "would run: npx -y skills@latest add redis/agent-skills -s * -a claude-code -a github-copilot -g -y"
+        );
+    }
+
+    #[test]
+    fn preview_without_npx_is_the_skip_a_real_run_reports() {
+        let a = SkillsAction {
+            agents: vec![Agent::Claude],
+            global: false,
+            repo: None,
+        };
+        let [change] = &a.preview_with(Path::new("/p"), &|_| false)[..] else {
+            panic!("one skipped line");
+        };
+        assert_eq!(change.subject, ".claude/skills/");
+        assert_eq!(change.status, Status::Skipped);
+        assert!(change.note.starts_with("npx not found"), "{}", change.note);
+        let shared = SkillsAction {
+            agents: vec![Agent::Claude, Agent::Cursor],
+            ..a
+        };
+        assert_eq!(
+            shared.preview_with(Path::new("/p"), &|_| false)[0].subject,
+            ".agents/skills/"
         );
     }
 

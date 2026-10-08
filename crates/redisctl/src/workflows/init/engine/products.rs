@@ -296,10 +296,15 @@ pub async fn validate_product(product: &WiredProduct) -> Result<String, String> 
     }
 }
 
-/// Anything wrapped in angle brackets counts as unset - that is what placeholders
-/// look like, both ours and the .env.example ones.
+/// Anything holding an angle-bracketed part counts as unset - that is what
+/// placeholders look like, both ours and the .env.example ones
+/// (`https://<region>.langcache.redis.io`).
 pub(crate) fn is_configured(value: &str) -> bool {
-    !value.is_empty() && !(value.starts_with('<') && value.ends_with('>') && value.len() > 2)
+    !value.is_empty()
+        && !value
+            .split_once('<')
+            .and_then(|(_, rest)| rest.find('>'))
+            .is_some_and(|end| end > 0)
 }
 
 /// A real stored value wins; a stored placeholder yields only to the explicit flag,
@@ -347,8 +352,10 @@ pub(crate) fn wire(
         if request.is_none() && !complete {
             continue;
         }
-        let url =
-            read_env_key(cwd, ".env", spec.env_url).or_else(|| request.map(|r| r.url.clone()));
+        let url = prefer_stored(
+            read_env_key(cwd, ".env", spec.env_url),
+            request.map(|r| r.url.as_str()),
+        );
         let id = prefer_stored(
             spec.env_id.and_then(|key| read_env_key(cwd, ".env", key)),
             request.and_then(|r| r.id.as_deref()),
@@ -392,6 +399,7 @@ mod tests {
         assert!(!is_configured(""));
         assert!(!is_configured("<paste-from-redis-cloud>"));
         assert!(!is_configured("<LANGCACHE_API_KEY>"));
+        assert!(!is_configured("https://<region>.langcache.redis.io"));
         assert!(is_configured("real-key"));
         assert!(is_configured("<>")); // not a placeholder shape
     }
@@ -466,6 +474,23 @@ mod tests {
         }];
         let wired = wire(dir.path(), &requests, None, false, &|_| None).unwrap();
         assert_eq!(wired[0].id.as_deref(), Some("c1"));
+    }
+
+    #[test]
+    fn a_placeholder_url_copied_from_the_example_yields_to_the_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".env"),
+            "LANGCACHE_URL=\"https://<region>.langcache.redis.io\"\nLANGCACHE_CACHE_ID=\"c1\"\n",
+        )
+        .unwrap();
+        let requests = vec![ProductRequest {
+            key: ProductKey::LangCache,
+            url: "https://l".into(),
+            id: Some("c1".into()),
+        }];
+        let wired = wire(dir.path(), &requests, None, false, &|_| None).unwrap();
+        assert_eq!(wired[0].url, "https://l");
     }
 
     #[test]

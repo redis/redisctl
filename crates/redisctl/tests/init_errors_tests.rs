@@ -96,8 +96,86 @@ fn a_stray_word_is_a_usage_error() {
         .args(["strayword", "--dry-run"])
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("unexpected argument 'strayword'"))
+        .stderr(predicate::str::contains(
+            "unexpected positional argument found",
+        ))
         .stderr(predicate::str::contains("no redis:// or rediss:// URL found").not());
+    assert!(project.entries().is_empty(), "{:?}", project.entries());
+}
+
+#[test]
+fn a_stray_positional_is_never_echoed() {
+    let project = Project::new();
+    for args in [
+        &["s3cret", "--dry-run"][..],
+        &["--url", "redis://127.0.0.1:9", "s3cret", "--dry-run"],
+    ] {
+        let out = project.init().args(args).output().unwrap();
+        let all = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.status.code(), Some(2), "{args:?}: {all}");
+        assert!(!all.contains("s3cret"), "{args:?}: {all}");
+        assert!(all.contains("see redisctl init --help"), "{args:?}: {all}");
+    }
+    assert!(project.entries().is_empty(), "{:?}", project.entries());
+}
+
+#[test]
+fn a_paste_without_a_url_never_echoes_its_password() {
+    let project = Project::new();
+    for paste in [
+        "redis-cli -h host.example -p 12000 -a s3cret",
+        "redis-cli -h host.example -p 12000 --user default --pass s3cret",
+        "redis-cli -h host.example -p 12000 --password s3cret",
+    ] {
+        for args in [
+            &[paste, "--dry-run"][..],
+            &["--url", paste, "--dry-run"],
+            &["-o", "json", paste, "--dry-run"],
+        ] {
+            let out = project.init().args(args).output().unwrap();
+            let all = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert_eq!(out.status.code(), Some(6), "{args:?}: {all}");
+            assert!(!all.contains("s3cret"), "{args:?}: {all}");
+            assert!(all.contains("redis-cli -u <url>"), "{args:?}: {all}");
+        }
+    }
+    assert!(project.entries().is_empty(), "{:?}", project.entries());
+}
+
+#[test]
+fn cloud_with_a_pasted_url_is_a_usage_error_and_writes_nothing() {
+    let project = Project::new();
+    let flag = project
+        .init()
+        .args(["--cloud", "--url", "redis://localhost:6379"])
+        .output()
+        .unwrap();
+    let pasted = project
+        .init()
+        .args(["--cloud", "redis://localhost:6379"])
+        .output()
+        .unwrap();
+    assert_eq!(flag.status.code(), Some(2));
+    assert_eq!(
+        pasted.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&pasted.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&pasted.stderr)
+            .contains("the argument '--cloud' cannot be used with '[REDIS_URL]...'"),
+        "{}",
+        String::from_utf8_lossy(&pasted.stderr)
+    );
     assert!(project.entries().is_empty(), "{:?}", project.entries());
 }
 
@@ -138,14 +216,14 @@ fn a_bare_url_or_quoted_paste_positional_is_accepted() {
 }
 
 #[test]
-fn a_rejected_positional_is_credential_masked() {
+fn a_rejected_positional_is_not_echoed() {
     let project = Project::new();
     project
         .init()
         .args(["redisx://default:S3cretPw@h:1", "--dry-run"])
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("redisx://default:****@h:1"))
+        .stderr(predicate::str::contains("redisx://").not())
         .stderr(predicate::str::contains("S3cretPw").not());
 }
 
@@ -182,6 +260,40 @@ fn a_rejected_endpoint_flag_masks_the_password() {
             "--langcache takes the service endpoint",
         ))
         .stderr(predicate::str::contains("S3cretPw").not());
+}
+
+#[test]
+fn a_rejected_endpoint_flag_never_echoes_its_value() {
+    let project = Project::new();
+    let paste = "redis-cli -a s3cret";
+    for (flag, args) in [
+        ("--langcache", &["--langcache", paste, "--cache", "c"][..]),
+        (
+            "--agent-memory",
+            &["--agent-memory", paste, "--store", "s1"],
+        ),
+        ("--context-retriever", &["--context-retriever", paste]),
+    ] {
+        for json in [false, true] {
+            let mut cmd = project.init();
+            if json {
+                cmd.args(["-o", "json"]);
+            }
+            let out = cmd.args(args).output().unwrap();
+            let all = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert_eq!(out.status.code(), Some(6), "{args:?}: {all}");
+            assert!(!all.contains("s3cret"), "{args:?}: {all}");
+            assert!(
+                all.contains(&format!("{flag} takes the service endpoint")),
+                "{args:?}: {all}"
+            );
+        }
+    }
+    assert!(project.entries().is_empty(), "{:?}", project.entries());
 }
 
 #[test]
@@ -250,6 +362,6 @@ fn an_unwritable_project_is_a_failure_naming_the_file_not_a_usage_error() {
         .args(["--url", "redis://127.0.0.1:9"])
         .assert()
         .code(1)
-        .stderr(predicate::str::contains("cannot write '.env'"))
+        .stderr(predicate::str::contains("cannot write '.gitignore'"))
         .stderr(predicate::str::contains("tip:").not());
 }

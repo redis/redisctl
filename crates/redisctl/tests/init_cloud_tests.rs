@@ -388,7 +388,7 @@ async fn exhausted_free_tier_fails_with_the_ways_out_writing_nothing() {
 
     run_init_cloud(&cfg, project.path(), &repo, &["--name", "second-project"])
         .assert()
-        .failure()
+        .code(7)
         .stderr(predicates::str::contains("--cloud --name someone-elses"))
         .stderr(predicates::str::contains("--cloud-subscription"));
     assert!(!project.path().join(".env").exists());
@@ -427,7 +427,7 @@ fn piped_stdin_without_a_profile_says_how_to_sign_in_and_writes_nothing() {
         .stderr(predicates::str::contains(
             "Sign in first: redisctl cloud auth login",
         ))
-        .stderr(predicates::str::contains("Opening your browser").not());
+        .stdout(predicates::str::contains("sign in to Redis Cloud in your browser").not());
     assert!(!project.path().join(".env").exists());
     assert_eq!(
         std::fs::read_to_string(cfg.path().join("config.toml")).unwrap(),
@@ -632,4 +632,279 @@ async fn an_explicit_cloud_flag_replaces_an_existing_env_url() {
     let env = std::fs::read_to_string(project.path().join(".env")).unwrap();
     assert!(env.contains(&endpoint), "{env}");
     assert!(!env.contains("stale-host"), "{env}");
+}
+
+/// Mount 200 GETs, one route per entry.
+async fn mount_gets(server: &MockServer, routes: Vec<(&str, serde_json::Value)>) {
+    for (route, body) in routes {
+        Mock::given(method("GET"))
+            .and(path(route))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(server)
+            .await;
+    }
+}
+
+/// A `redisctl-<name>` subscription on a paid plan is refused by the create engine as a
+/// name conflict; init reports it on the conflict row of its exit-code table.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_paid_marker_subscription_exits_with_the_conflict_code() {
+    let cfg = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let repo = skills_fixture();
+    let server = MockServer::start().await;
+    write_cloud_profile(&cfg, &server.uri());
+    mount_gets(
+        &server,
+        vec![
+            (
+                "/fixed/subscriptions",
+                json!({"subscriptions": [{"id": 7, "name": "redisctl-my-project", "price": 100, "maximumDatabases": 1}]}),
+            ),
+            (
+                "/fixed/subscriptions/7/databases",
+                json!({"subscription": {"subscriptionId": 7, "databases": []}}),
+            ),
+            ("/subscriptions", json!({"subscriptions": []})),
+        ],
+    )
+    .await;
+
+    run_init_cloud(
+        &cfg,
+        project.path(),
+        &repo,
+        &["--name", "my-project", "--defaults"],
+    )
+    .assert()
+    .code(7)
+    .stderr(predicate::str::contains("not free"));
+    assert!(!project.path().join(".env").exists());
+}
+
+/// A 429 from the create call itself, which only the create engine sees.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rate_limited_create_exits_with_the_rate_limit_code() {
+    let cfg = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let repo = skills_fixture();
+    let server = MockServer::start().await;
+    write_cloud_profile(&cfg, &server.uri());
+    mount_gets(
+        &server,
+        vec![
+            ("/fixed/subscriptions", json!({"subscriptions": []})),
+            ("/subscriptions", json!({"subscriptions": []})),
+            (
+                "/fixed/plans",
+                json!({"plans": [{"id": 12, "name": "Free", "price": 0}]}),
+            ),
+        ],
+    )
+    .await;
+    Mock::given(method("POST"))
+        .and(path("/fixed/subscriptions"))
+        .respond_with(
+            ResponseTemplate::new(429).set_body_json(json!({"message": "Too many requests"})),
+        )
+        .mount(&server)
+        .await;
+
+    run_init_cloud(
+        &cfg,
+        project.path(),
+        &repo,
+        &["--name", "brand-new", "--defaults"],
+    )
+    .assert()
+    .code(9);
+    assert!(!project.path().join(".env").exists());
+}
+
+/// Keys the API rejects or does not authorise are an auth failure, not a server error.
+#[tokio::test(flavor = "multi_thread")]
+async fn rejected_credentials_exit_with_the_auth_code() {
+    for status in [401, 403] {
+        let cfg = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let repo = skills_fixture();
+        let server = MockServer::start().await;
+        write_cloud_profile(&cfg, &server.uri());
+        Mock::given(method("GET"))
+            .and(path("/fixed/subscriptions"))
+            .respond_with(
+                ResponseTemplate::new(status).set_body_json(json!({"message": "Unauthorized"})),
+            )
+            .mount(&server)
+            .await;
+
+        run_init_cloud(
+            &cfg,
+            project.path(),
+            &repo,
+            &["--name", "my-project", "--defaults"],
+        )
+        .assert()
+        .code(4)
+        .stderr(predicate::str::contains("redisctl cloud auth login"));
+        assert!(!project.path().join(".env").exists());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_invalid_name_fails_a_dry_run_as_invalid_input() {
+    let cfg = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let repo = skills_fixture();
+    let server = MockServer::start().await;
+    write_cloud_profile(&cfg, &server.uri());
+    mount_gets(
+        &server,
+        vec![
+            ("/fixed/subscriptions", json!({"subscriptions": []})),
+            ("/subscriptions", json!({"subscriptions": []})),
+        ],
+    )
+    .await;
+
+    run_init_cloud(
+        &cfg,
+        project.path(),
+        &repo,
+        &["--dry-run", "--name", "Bad_Name"],
+    )
+    .assert()
+    .code(6)
+    .stdout(predicate::str::contains("would create").not())
+    .stderr(predicate::str::contains("Bad_Name"))
+    .stderr(predicate::str::contains("starts with a letter"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_invalid_name_never_reaches_a_pinned_subscription() {
+    let cfg = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let repo = skills_fixture();
+    let server = MockServer::start().await;
+    write_cloud_profile(&cfg, &server.uri());
+    mount_gets(
+        &server,
+        vec![(
+            "/fixed/subscriptions/7/databases",
+            json!({"subscription": {"subscriptionId": 7, "databases": []}}),
+        )],
+    )
+    .await;
+    Mock::given(method("POST"))
+        .and(path("/fixed/subscriptions/7/databases"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({"message": "invalid name"})))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    run_init_cloud(
+        &cfg,
+        project.path(),
+        &repo,
+        &[
+            "--cloud-subscription",
+            "7",
+            "--name",
+            "Bad_Name",
+            "--defaults",
+        ],
+    )
+    .assert()
+    .code(6)
+    .stderr(predicate::str::contains("starts with a letter"));
+}
+
+/// The naming rule applies to what init creates; a database that already carries the
+/// name (made in the console, say) is connected whatever its name looks like.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_name_cloud_would_not_create_still_reuses_its_database() {
+    let cfg = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let repo = skills_fixture();
+    let server = MockServer::start().await;
+    write_cloud_profile(&cfg, &server.uri());
+    let endpoint = format!("127.0.0.1:{}", fake_redis());
+    mount_gets(
+        &server,
+        vec![
+            (
+                "/fixed/subscriptions/7/databases",
+                json!({"subscription": {"subscriptionId": 7, "databases": [
+                    {"databaseId": 3, "name": "Legacy_DB", "publicEndpoint": endpoint}
+                ]}}),
+            ),
+            (
+                "/fixed/subscriptions/7/databases/3",
+                json!({"databaseId": 3, "name": "Legacy_DB", "publicEndpoint": endpoint,
+                       "security": {"enableTls": false, "password": MOCK_PASSWORD}}),
+            ),
+        ],
+    )
+    .await;
+
+    run_init_cloud(
+        &cfg,
+        project.path(),
+        &repo,
+        &[
+            "--cloud-subscription",
+            "7",
+            "--name",
+            "Legacy_DB",
+            "--dry-run",
+            "--agent",
+            "claude",
+        ],
+    )
+    .assert()
+    .success()
+    .stdout(predicate::str::contains(
+        "database 3 in Essentials subscription 7",
+    ));
+}
+
+/// Under --cloud-subscription the create lands in that subscription, which need not be free.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pinned_dry_run_offers_a_new_database_in_that_subscription() {
+    let cfg = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("my-app");
+    std::fs::create_dir(&project).unwrap();
+    let repo = skills_fixture();
+    let server = MockServer::start().await;
+    write_cloud_profile(&cfg, &server.uri());
+    mount_gets(
+        &server,
+        vec![(
+            "/fixed/subscriptions/7/databases",
+            json!({"subscription": {"subscriptionId": 7, "databases": [
+                {"databaseId": 3, "name": "existing-db", "publicEndpoint": "h:1"}
+            ]}}),
+        )],
+    )
+    .await;
+
+    run_init_cloud(
+        &cfg,
+        &project,
+        &repo,
+        &[
+            "--cloud-subscription",
+            "7",
+            "--dry-run",
+            "--agent",
+            "claude",
+        ],
+    )
+    .assert()
+    .success()
+    .stdout(predicate::str::contains(
+        "would offer \"existing-db\" or a new database \"my-app\" in subscription 7",
+    ))
+    .stdout(predicate::str::contains("free database").not());
 }

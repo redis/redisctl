@@ -152,6 +152,8 @@ fn mcp_launcher_reads_the_url_the_way_init_does() {
         format!("REDIS_URL={url}\r\n"),
         format!("export REDIS_URL = '{url}'\nREDIS_URL=redis://second:1\n"),
         format!("NAME=$(whoami)\nREDIS_URL='{url}'\n"),
+        format!("REDIS_URL=\"{url}\" # local\n"),
+        format!("REDIS_URL={url} # local\r\n"),
     ] {
         std::fs::write(dir.path().join(".env"), &env).unwrap();
         let output = std::process::Command::new(server["command"].as_str().unwrap())
@@ -173,5 +175,49 @@ fn mcp_launcher_reads_the_url_the_way_init_does() {
             Some(url),
             "launcher reading of {env:?}"
         );
+    }
+}
+
+#[test]
+fn editing_mcp_json_keeps_the_users_key_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(".mcp.json"),
+        r#"{"mcpServers":{"zeta":{"command":"z","args":[]}},"alpha":true}"#,
+    )
+    .unwrap();
+    Command::cargo_bin("redisctl")
+        .unwrap()
+        .current_dir(dir.path())
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", home.path())
+        .env("REDISCTL_INIT_AMPLITUDE_KEY", "")
+        .arg("--config-file")
+        .arg(home.path().join("config.toml"))
+        .args([
+            "init",
+            "--no-telemetry",
+            "--no-install-cli",
+            "--url",
+            "redis://127.0.0.1:9",
+            "--agent",
+            "claude",
+            "--skills-repo",
+        ])
+        .arg(dir.path().join("no-checkout"))
+        .assert()
+        .code(10);
+    // Raw text, not a parsed Value: parsing would hide the order on disk.
+    let text = std::fs::read_to_string(dir.path().join(".mcp.json")).unwrap();
+    let at = |needle: &str, from: usize| {
+        from + text[from..]
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle} missing:\n{text}"))
+    };
+    assert!(at("\"mcpServers\"", 0) < at("\"alpha\"", 0), "{text}");
+    for server in ["\"zeta\"", "\"redis\""] {
+        let start = at(server, 0);
+        assert!(at("\"command\"", start) < at("\"args\"", start), "{text}");
     }
 }

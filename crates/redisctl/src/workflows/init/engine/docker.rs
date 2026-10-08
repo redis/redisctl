@@ -15,8 +15,8 @@ use crate::workflows::init::engine::{Event, InitError};
 pub(crate) enum DatabaseAction {
     /// A URL the caller supplied; nothing to provision.
     Provided { url: String },
-    /// `.env` already carries `REDIS_URL`; a stopped local container gets a
-    /// best-effort restart (validation reports the truth either way).
+    /// `.env` already carries `REDIS_URL`; a stopped local container it points at
+    /// gets restarted, and a failed restart fails the run.
     ExistingEnv {
         url: String,
         container: Option<String>,
@@ -334,9 +334,12 @@ pub(crate) async fn apply_database(
                     .as_deref()
                     .map(|name| already_running(name, url_port(url))));
             };
-            // A failed start must not read as updated; validation reports the truth.
-            if sh("docker", &["start", name]).status != 0 {
-                return Ok(None);
+            let r = sh("docker", &["start", name]);
+            if r.status != 0 {
+                return Err(InitError::DockerCommand {
+                    command: format!("docker start {name}"),
+                    stderr: r.stderr.trim().to_string(),
+                });
             }
             wait_for_ping(url, Duration::from_secs(30)).await?;
             Ok(Some(Change::new(
