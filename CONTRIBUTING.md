@@ -205,7 +205,6 @@ We use a manual release workflow with semantic versioning:
 
 ## Getting Help
 
-- Open a [Discussion](https://github.com/redis/redisctl/discussions) for questions
 - Check existing [Issues](https://github.com/redis/redisctl/issues)
 - Review [Documentation](https://docs.rs/redisctl)
 
