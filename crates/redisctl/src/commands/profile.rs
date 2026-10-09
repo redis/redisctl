@@ -1639,7 +1639,10 @@ async fn handle_validate(
 ) -> Result<(), RedisCtlError> {
     debug!("Validating configuration (connect={})", connect);
 
-    let config_path = Config::config_path()?;
+    let config_path = match &conn_mgr.config_path {
+        Some(path) => path.clone(),
+        None => Config::config_path()?,
+    };
     let config_exists = config_path.exists();
     let config_path_str = config_path.display().to_string();
 
