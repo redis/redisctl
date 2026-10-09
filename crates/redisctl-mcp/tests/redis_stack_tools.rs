@@ -170,6 +170,27 @@ async fn test_json_tools() {
     let text = call_tool_text(&redis::json_get(state.clone()), json!({"key": "js_doc:1"})).await;
     assert!(text.contains("alice"), "json_get: {}", text);
 
+    // redis_json_get -- missing key is a readable message, not a type error
+    let result = redis::json_get(state.clone())
+        .call(json!({"key": "js_doc:missing"}))
+        .await;
+    let text = result
+        .content
+        .first()
+        .and_then(|c: &tower_mcp::Content| c.as_text())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        !result.is_error,
+        "json_get missing key should not error: {}",
+        text
+    );
+    assert!(
+        text.contains("does not exist"),
+        "json_get missing: {}",
+        text
+    );
+
     // redis_json_mget -- multi-key get at $.name (js_doc:2 missing)
     let text = call_tool_text(
         &redis::json_mget(state.clone()),
@@ -1182,16 +1203,35 @@ async fn test_json_array_tools() {
     .await;
     assert!(text.contains("6"), "json_arrinsert: {}", text);
 
-    // redis_json_arrpop -- pop the last element. Uses a legacy path (".nums")
-    // because the tool deserializes the reply into a scalar String; a "$" path
-    // returns a wrapped array that would not deserialize.
+    // redis_json_arrpop -- pop the last element with a JSONPath ("$.nums").
+    // The reply is an array with one entry per matched path.
+    let text = call_tool_text(
+        &redis::json_arrpop(state.clone()),
+        json!({"key": "jarr_doc:1", "path": "$.nums"}),
+    )
+    .await;
+    assert!(text.contains("Popped:"), "json_arrpop: {}", text);
+    assert!(text.contains("50"), "json_arrpop value: {}", text);
+
+    // redis_json_arrpop -- legacy path still returns a scalar.
     let text = call_tool_text(
         &redis::json_arrpop(state.clone()),
         json!({"key": "jarr_doc:1", "path": ".nums"}),
     )
     .await;
-    assert!(text.contains("Popped:"), "json_arrpop: {}", text);
-    assert!(text.contains("50"), "json_arrpop value: {}", text);
+    assert!(text.contains("Popped:"), "json_arrpop legacy: {}", text);
+
+    // redis_json_arrpop -- a path that matches nothing is reported, not a crash.
+    let text = call_tool_text(
+        &redis::json_arrpop(state.clone()),
+        json!({"key": "jarr_doc:1", "path": "$.nope"}),
+    )
+    .await;
+    assert!(
+        text.contains("Nothing popped"),
+        "json_arrpop no match: {}",
+        text
+    );
 
     // redis_json_arrtrim -- trim to indices 0..=1 -> new length 2.
     let text = call_tool_text(

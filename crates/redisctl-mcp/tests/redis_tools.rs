@@ -1305,6 +1305,24 @@ async fn test_stream_tools() {
     )
     .await;
 
+    // redis_xadd with nomkstream on a missing stream returns nil from Redis;
+    // the tool must report that rather than fail on the reply type.
+    let result = redis::xadd(rw_state.clone())
+        .call(json!({"key": format!("{p}missing"), "nomkstream": true, "fields": {"a": "b"}}))
+        .await;
+    let text = result
+        .content
+        .first()
+        .and_then(|c: &tower_mcp::Content| c.as_text())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        !result.is_error,
+        "xadd nomkstream should not error: {}",
+        text
+    );
+    assert!(text.contains("No entry added"), "xadd nomkstream: {}", text);
+
     // redis_xlen
     let text = call_tool_text(&redis::xlen(state.clone()), json!({"key": format!("{p}s")})).await;
     assert!(text.contains("2"), "xlen: {}", text);

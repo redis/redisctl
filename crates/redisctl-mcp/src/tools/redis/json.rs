@@ -52,12 +52,20 @@ database_tool!(read_only, json_get, "redis_json_get",
             cmd.arg(path);
         }
 
-        let value: String = cmd
+        // JSON.GET returns nil when the key does not exist; a `String` reply type
+        // would turn that into a type error instead of a readable message.
+        let value: Option<String> = cmd
             .query_async(&mut conn)
             .await
             .tool_context("JSON.GET failed")?;
 
-        Ok(CallToolResult::text(value))
+        match value {
+            Some(value) => Ok(CallToolResult::text(value)),
+            None => Ok(CallToolResult::text(format!(
+                "Key '{}' does not exist",
+                input.key
+            ))),
+        }
     }
 );
 
@@ -426,14 +434,43 @@ database_tool!(destructive, json_arrpop, "redis_json_arrpop",
             cmd.arg(idx);
         }
 
-        let result: String = cmd
+        // With a JSONPath (`$...`) JSON.ARRPOP returns one entry per matched path,
+        // nil for paths that are not arrays (or are empty). Legacy paths return a
+        // single bulk string. Handle both instead of forcing a `String`.
+        let result: redis::Value = cmd
             .query_async(&mut conn)
             .await
             .tool_context("JSON.ARRPOP failed")?;
 
-        Ok(CallToolResult::text(format!("Popped: {}", result)))
+        Ok(CallToolResult::text(format_arrpop_result(
+            &input.key, &input.path, &result,
+        )))
     }
 );
+
+/// Render a JSON.ARRPOP reply for either a JSONPath (array of per-path results)
+/// or a legacy path (single scalar).
+fn format_arrpop_result(key: &str, path: &str, result: &redis::Value) -> String {
+    const NOT_ARRAY: &str = "(nil) - matched value is not an array or is empty";
+    match result {
+        redis::Value::Nil => format!("Nothing popped: '{}' at '{}' {}", key, path, NOT_ARRAY),
+        redis::Value::Array(items) if items.is_empty() => {
+            format!(
+                "Nothing popped: path '{}' matched nothing in '{}'",
+                path, key
+            )
+        }
+        redis::Value::Array(items) => items
+            .iter()
+            .map(|item| match item {
+                redis::Value::Nil => NOT_ARRAY.to_string(),
+                other => format!("Popped: {}", format_value(other)),
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        other => format!("Popped: {}", format_value(other)),
+    }
+}
 
 database_tool!(destructive, json_arrtrim, "redis_json_arrtrim",
     "DANGEROUS: Trim a JSON array to the specified inclusive range. Requires the RedisJSON module.",
@@ -464,3 +501,41 @@ database_tool!(destructive, json_arrtrim, "redis_json_arrtrim",
         )))
     }
 );
+
+#[cfg(test)]
+mod tests {
+    use super::format_arrpop_result;
+    use redis::Value;
+
+    #[test]
+    fn arrpop_jsonpath_reply_renders_each_match() {
+        let reply = Value::Array(vec![
+            Value::BulkString(b"50".to_vec()),
+            Value::Nil,
+            Value::BulkString(b"\"x\"".to_vec()),
+        ]);
+        let text = format_arrpop_result("doc", "$..nums", &reply);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 3, "{text}");
+        assert_eq!(lines[0], "Popped: 50");
+        assert!(lines[1].starts_with("(nil)"), "{text}");
+        assert_eq!(lines[2], "Popped: \"x\"");
+    }
+
+    #[test]
+    fn arrpop_legacy_path_reply_is_scalar() {
+        let reply = Value::BulkString(b"50".to_vec());
+        assert_eq!(format_arrpop_result("doc", ".nums", &reply), "Popped: 50");
+    }
+
+    #[test]
+    fn arrpop_empty_and_nil_replies_are_explicit() {
+        let text = format_arrpop_result("doc", "$.nope", &Value::Array(vec![]));
+        assert!(text.starts_with("Nothing popped"), "{text}");
+        assert!(text.contains("$.nope"), "{text}");
+
+        let text = format_arrpop_result("doc", ".name", &Value::Nil);
+        assert!(text.starts_with("Nothing popped"), "{text}");
+        assert!(text.contains("not an array"), "{text}");
+    }
+}
