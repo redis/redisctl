@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.2](https://github.com/redis/redisctl/compare/redisctl-mcp-v0.12.1...redisctl-mcp-v0.12.2) - 2026-10-09
+
+### Added
+
+- *(mcp)* add opt-in redis-mcp read-only database pilot ([#1176](https://github.com/redis/redisctl/pull/1176))
+- *(mcp)* embed skills and add resource-based onboarding ([#1174](https://github.com/redis/redisctl/pull/1174))
+
+### Fixed
+
+- *(mcp)* report the configured database default in profiles resources ([#1196](https://github.com/redis/redisctl/pull/1196))
+- *(mcp)* mask Unicode profile credentials without panicking ([#1180](https://github.com/redis/redisctl/pull/1180))
+
+### Other
+
+- repair public documentation and contributor links ([#1200](https://github.com/redis/redisctl/pull/1200))
+
 ## [0.12.1](https://github.com/redis/redisctl/compare/redisctl-mcp-v0.12.0...redisctl-mcp-v0.12.1) - 2026-10-01
 
 ### Fixed

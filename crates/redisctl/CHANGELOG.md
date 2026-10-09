@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.2](https://github.com/redis/redisctl/compare/redisctl-v0.12.1...redisctl-v0.12.2) - 2026-10-09
+
+### Fixed
+
+- *(cli)* use shared confirmation for Cloud user deletion ([#1187](https://github.com/redis/redisctl/pull/1187))
+- *(cli)* clear database default when removing its profile ([#1194](https://github.com/redis/redisctl/pull/1194))
+- *(cli)* validate the selected configuration path ([#1193](https://github.com/redis/redisctl/pull/1193))
+- *(cli)* preserve support-package overwrite cancellation contracts ([#1192](https://github.com/redis/redisctl/pull/1192))
+
+### Other
+
+- repair public documentation and contributor links ([#1200](https://github.com/redis/redisctl/pull/1200))
+- qualify README API coverage and raw access claims ([#1185](https://github.com/redis/redisctl/pull/1185))
+
 ## [0.12.1](https://github.com/redis/redisctl/compare/redisctl-v0.12.0...redisctl-v0.12.1) - 2026-10-01
 
 ### Other
