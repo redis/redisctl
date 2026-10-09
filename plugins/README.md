@@ -124,6 +124,12 @@ Only macOS has local execution evidence so far. Neither harness connects to Redi
 or exercises user credential storage. Inspect-Codex reads only package metadata
 through app-server; it does not start a conversation or MCP connection.
 
+The hermetic suite also exercises malformed skill sources, drift/missing generated
+files without repair, and a missing executable. Synthetic platform-branch tests
+check that credential/target environment values are stripped, unverified platforms
+are rejected, and macOS never retries without its sandbox. These mocked branches
+are harness regressions, not native Windows/Linux install or isolation evidence.
+
 ## Evidence and limitations
 
 Initial checkpoint, 2026-10-09, macOS Apple Silicon:

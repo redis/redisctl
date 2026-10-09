@@ -3,6 +3,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -85,6 +86,43 @@ class PluginTests(unittest.TestCase):
             skill.write_text("---\nname: unrelated\ndescription: synthetic\n---\nbody\n")
             with self.assertRaisesRegex(ValueError, "identity mismatch"):
                 builder.generated_files(root)
+
+    def test_generator_rejects_malformed_frontmatter(self):
+        for content in ("name: redisctl-setup\nbody", "---\nname: redisctl-setup\nbody"):
+            with self.subTest(content=content), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                skill = root / "crates/redisctl-mcp/skills/redisctl-setup/SKILL.md"
+                skill.parent.mkdir(parents=True)
+                skill.write_text(content)
+                with self.assertRaisesRegex(ValueError, "Invalid skill frontmatter"):
+                    builder.generated_files(root)
+
+    def test_check_rejects_drift_and_missing_files_without_repairing_them(self):
+        with tempfile.TemporaryDirectory(prefix="plugin generation fixture ") as directory:
+            root = Path(directory)
+            script = root / "plugins/build_plugin.py"
+            script.parent.mkdir(parents=True)
+            shutil.copyfile(ROOT / "plugins/build_plugin.py", script)
+            for name in builder.SKILLS:
+                source = ROOT / f"crates/redisctl-mcp/skills/{name}/SKILL.md"
+                target = root / source.relative_to(ROOT)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, target)
+            subprocess.run([sys.executable, str(script)], check=True, capture_output=True)
+            package = root / "plugins/redisctl-mcp"
+            drifted = package / "mcp.json"
+            drifted.write_text('{"synthetic_drift": true}\n')
+            missing = package / "skills/data-explorer/SKILL.md"
+            missing.unlink()  # only this test's disposable generated fixture
+            fixture = root / "crates/redisctl-mcp/tests/fixtures/plugin-read-only.toml"
+            fixture.write_text('tier = "full"\n')
+            before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in root.rglob("*") if p.is_file()}
+            result = subprocess.run([sys.executable, str(script), "--check"], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 1)
+            for relative in (drifted.relative_to(root), missing.relative_to(root), fixture.relative_to(root)):
+                self.assertIn(str(relative), result.stderr)
+            self.assertFalse(missing.exists())
+            self.assertEqual(before, {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before})
 
     def test_check_command_passes_without_rewriting_files(self):
         before = {p: p.stat().st_mtime_ns for p in PACKAGE.rglob("*") if p.is_file()}
