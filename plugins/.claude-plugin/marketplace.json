@@ -1,0 +1,12 @@
+{
+  "name": "redisctl-experimental",
+  "description": "Experimental local redisctl-mcp plugin compatibility spike",
+  "owner": {"name": "Redis"},
+  "plugins": [
+    {
+      "name": "redisctl-mcp",
+      "source": "./redisctl-mcp",
+      "description": "Experimental local Rust MCP plugin; requires installed binaries and local profiles"
+    }
+  ]
+}
