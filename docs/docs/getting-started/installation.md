@@ -48,39 +48,52 @@ cargo install redisctl --features secure-storage
 
 ## Binary Downloads
 
-Download pre-built binaries from [GitHub Releases](https://github.com/redis/redisctl/releases/latest).
+The examples below install **redisctl 0.12.1** from its
+[CLI release](https://github.com/redis/redisctl/releases/tag/redisctl-v0.12.1).
+For another version, choose its `redisctl-v<VERSION>` release and matching assets.
+Avoid the repository-wide "latest" link: this workspace releases the CLI and MCP
+server separately, so "latest" may point to the other application.
+
+Archives contain a top-level platform directory. These commands extract it into
+a temporary directory before installing the binary.
 
 === "Linux (x86_64)"
 
     ``` bash
-    curl -L https://github.com/redis/redisctl/releases/latest/download/redisctl-x86_64-unknown-linux-gnu.tar.xz | tar xJ
-    sudo mv redisctl /usr/local/bin/
+    install_dir="$(mktemp -d)"
+    curl -fL https://github.com/redis/redisctl/releases/download/redisctl-v0.12.1/redisctl-x86_64-unknown-linux-gnu.tar.xz -o "$install_dir/redisctl.tar.xz"
+    tar -xJf "$install_dir/redisctl.tar.xz" --strip-components=1 -C "$install_dir"
+    sudo install -m 755 "$install_dir/redisctl" /usr/local/bin/redisctl
     ```
 
 === "Linux (ARM64)"
 
-    ``` bash
-    curl -L https://github.com/redis/redisctl/releases/latest/download/redisctl-aarch64-unknown-linux-gnu.tar.xz | tar xJ
-    sudo mv redisctl /usr/local/bin/
-    ```
+    Version 0.12.1 does not provide a pre-built Linux ARM64 archive. Build from
+    source with [Cargo](#cargo-from-source), or see the [Docker guide](docker.md)
+    for container-based installation.
 
 === "macOS (Intel)"
 
     ``` bash
-    curl -L https://github.com/redis/redisctl/releases/latest/download/redisctl-x86_64-apple-darwin.tar.xz | tar xJ
-    sudo mv redisctl /usr/local/bin/
+    install_dir="$(mktemp -d)"
+    curl -fL https://github.com/redis/redisctl/releases/download/redisctl-v0.12.1/redisctl-x86_64-apple-darwin.tar.xz -o "$install_dir/redisctl.tar.xz"
+    tar -xJf "$install_dir/redisctl.tar.xz" --strip-components=1 -C "$install_dir"
+    sudo install -m 755 "$install_dir/redisctl" /usr/local/bin/redisctl
     ```
 
 === "macOS (Apple Silicon)"
 
     ``` bash
-    curl -L https://github.com/redis/redisctl/releases/latest/download/redisctl-aarch64-apple-darwin.tar.xz | tar xJ
-    sudo mv redisctl /usr/local/bin/
+    install_dir="$(mktemp -d)"
+    curl -fL https://github.com/redis/redisctl/releases/download/redisctl-v0.12.1/redisctl-aarch64-apple-darwin.tar.xz -o "$install_dir/redisctl.tar.xz"
+    tar -xJf "$install_dir/redisctl.tar.xz" --strip-components=1 -C "$install_dir"
+    sudo install -m 755 "$install_dir/redisctl" /usr/local/bin/redisctl
     ```
 
 === "Windows"
 
-    Download the `.zip` file from releases and extract to a directory in your PATH.
+    Download the [Windows x86_64 archive](https://github.com/redis/redisctl/releases/download/redisctl-v0.12.1/redisctl-x86_64-pc-windows-msvc.zip),
+    extract it, and add the directory containing `redisctl.exe` to your PATH.
 
 ## Verify Installation
 
@@ -88,10 +101,10 @@ Download pre-built binaries from [GitHub Releases](https://github.com/redis/redi
 redisctl --version
 ```
 
-Expected output:
+For the 0.12.1 binary download examples above, the expected output is:
 
 ```
-redisctl 0.11.1
+redisctl 0.12.1
 ```
 
 ## Shell Completions
