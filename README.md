@@ -74,7 +74,7 @@ The `cloud`/`enterprise` prefix is optional -- the CLI infers the platform from 
 
 ## MCP Server
 
-`redisctl-mcp` exposes 300+ tools to AI assistants (Claude Desktop, Cursor, VS Code, or any MCP client). It covers the full Cloud and Enterprise APIs plus direct Redis database operations -- all with a safety-first policy system.
+`redisctl-mcp` exposes 300+ tools to AI assistants (Claude Desktop, Cursor, VS Code, or any MCP client). It provides Cloud and Enterprise management tools plus direct Redis database operations -- all with a safety-first policy system.
 
 ### Set Up
 
@@ -125,17 +125,19 @@ See the [MCP documentation](https://redis-field-engineering.github.io/redisctl-d
 
 ## What's Covered
 
-### Redis Cloud -- Full API Coverage
+Coverage varies by product/API version and between CLI commands and MCP tools. The areas below do not guarantee that every upstream endpoint is implemented or live-tested. A versioned [support and validation matrix](https://github.com/redis/redisctl/issues/1085) remains part of 1.0 readiness.
+
+### Redis Cloud Management
 
 Subscriptions, databases, VPC peering, Transit Gateway, PrivateLink, Private Service Connect, ACLs, cloud accounts, tasks, and async operations.
 
-### Redis Enterprise -- Full API Coverage
+### Redis Enterprise Management
 
 Clusters, nodes, shards, databases (BDBs), Active-Active (CRDBs), users, roles, LDAP, logs, metrics, alerts, support packages, and diagnostics.
 
 ### Database Tools
 
-Connect directly to any Redis instance for key inspection, data structure operations, server diagnostics, and health checks. Available in both the CLI and MCP server.
+Connect directly to Redis for key inspection, data structure operations, server diagnostics, and health checks. Available in both the CLI and MCP server.
 
 ### Key Capabilities
 
@@ -143,7 +145,7 @@ Connect directly to any Redis instance for key inspection, data structure operat
 - **Output formats** -- tables, JSON, YAML, with JMESPath filtering (`-q`)
 - **Profiles** -- manage multiple environments with optional keyring-backed credential storage
 - **Workflows** -- high-level commands that compose multi-step operations (e.g., `subscription-setup`)
-- **Raw API access** -- `redisctl api cloud get /subscriptions/12345` for any endpoint
+- **Raw API access** -- `redisctl api cloud get /subscriptions/12345` sends a REST request; endpoint availability, payloads, and permissions depend on the upstream service
 - **Streaming** -- `--follow` for real-time log tailing
 
 ---
