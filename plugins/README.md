@@ -77,11 +77,14 @@ codex plugin list --marketplace redisctl-experimental --available --json
 codex plugin add redisctl-mcp@redisctl-experimental
 ```
 
-These commands change the user's plugin configuration; the automated native
-inspection below does not run them. Inspect `/mcp` in a new local session and
+These commands change the user's plugin configuration. The metadata inspector
+does not run them; the installation fixture runs them only inside a disposable,
+network-disabled container with no personal configuration mounted.
+Inspect `/mcp` in a new local session and
 run the namespaced setup skill. Disable/uninstall using the client's plugin
-controls; preserve existing Redis profiles and credentials. The spike has not
-validated installed-cache relocation, upgrade, uninstall or Desktop/IDE UI.
+controls; preserve existing Redis profiles and credentials. Codex CLI 0.160.1
+has passed installed-cache launch and uninstall in the Linux fixture. Upgrade,
+rollback, model-driven skill use, and Desktop/IDE UI remain untested.
 
 This local stdio package is not a hosted ChatGPT plugin. Current OpenAI public
 submission requires a remote HTTPS MCP endpoint or separately arranged local
@@ -108,6 +111,11 @@ claude plugin validate ./plugins/redisctl-mcp --strict --json
 claude plugin validate ./plugins/.claude-plugin/marketplace.json --strict --json
 claude --plugin-dir ./plugins/redisctl-mcp plugin details redisctl-mcp
 python3 plugins/tests/inspect_codex.py
+```
+
+Native Claude installation trial (macOS only, no model request):
+
+```sh
 python3 plugins/tests/inspect_claude.py --binary target/debug/redisctl-mcp
 ```
 
@@ -137,6 +145,33 @@ It uses bare mode and starts no model request. Canonical fixture paths are requi
 for macOS sandbox subpath rules. This script fails rather than running unsandboxed
 or claiming support on another platform.
 
+Native Codex installation trial (requires Docker):
+
+```sh
+docker build --platform linux/amd64 -t redisctl-plugin-codex-test:0.160.1 plugins/tests/codex-container
+python3 plugins/tests/inspect_codex_install.py
+```
+
+The test-only image pins Codex 0.160.1 and the published Linux musl MCP 0.12.1
+archive with its recorded SHA-256. Image building downloads developer test
+dependencies; this is not the plugin's consumer binary-delivery/trust mechanism.
+That server release lacks embedded skills, so this trial does not validate the
+new embedded-skill setup/resource journey. Native plugin skills are independent
+and are verified in the installed cache.
+
+The runner mounts only this plugin directory read-only, disables network, drops
+capabilities, and uses disposable tmpfs state with a read-only container root.
+It does not forward host credentials, mount a Docker socket/home/client config,
+or override the operator's HOME/CODEX_HOME. Missing Docker/image or invalid
+fixture isolation fails; there is no host-install fallback. It installs from a
+marketplace path containing spaces, checks enabled cached skills, starts an
+ephemeral thread without `turn/start`, inspects native MCP inventory, calls
+`show_policy`, and confirms that profile creation is unavailable. After uninstall,
+both the cache and plugin runtime/skills in a fresh app-server connection must
+be absent; source package hashes must remain unchanged. No model request or
+Redis connection is made. The app-server plugin API is experimental, not a
+production integration contract.
+
 The hermetic suite also exercises malformed skill sources, drift/missing generated
 files without repair, and a missing executable. Synthetic platform-branch tests
 check that credential/target environment values are stripped, unverified platforms
@@ -145,7 +180,8 @@ are harness regressions, not native Windows/Linux install or isolation evidence.
 
 ## Evidence and limitations
 
-Initial checkpoint, 2026-10-09, macOS Apple Silicon:
+Compatibility checkpoints, 2026-10-09: macOS Apple Silicon host, plus Linux
+x86_64 Docker execution under emulation on that host where explicitly noted.
 
 | Check | Result |
 | --- | --- |
@@ -153,23 +189,26 @@ Initial checkpoint, 2026-10-09, macOS Apple Silicon:
 | Claude inline component inventory | Three native skills, one MCP server, no hooks/agents |
 | Claude disposable local marketplace install → native MCP health → uninstall | Pass on 2.1.295; namespaced installed registration connects, source package preserved |
 | Codex CLI 0.160.1 local `plugin/read` | Three `redisctl-mcp:`-namespaced skills and `redisctl` server discovered |
+| Codex CLI 0.160.1 disposable Linux x86_64 install → cached MCP launch → uninstall | Pass: three enabled cached skills, 69 read-only tools, cached policy used, profile creation rejected, fresh runtime/cache removed |
 | Rust main-based stdio smoke, both generated configs | 69 read-only tools, 11 embedded skills, profile creation rejected |
 | Package moved to a directory containing spaces | Pass in both protocol smokes |
 | Hermetic generation/adapter regression suite | Pass |
 | Pure Rust package policy regression | Pass |
 
-Native inventory and direct protocol launch are separate evidence. The Claude
-fixture additionally proves native server startup through a local installed
-registration; it does **not** prove Codex installed-plugin startup, skill execution
-through a model, or onboarding against a real target.
-Secure setup, real approved connectivity, namespace tool invocation,
-missing-binary client UX, installed-cache lifecycle, Linux/Windows,
-independent review and current-head CI remain incomplete. Keep the PR draft.
+Native inventory and direct protocol launch are separate evidence. Both client
+fixtures additionally prove native server startup through an installed registration;
+Codex also proves a policy tool call through its plugin-owned runtime. These are
+not skill execution through a model or onboarding against a real target.
+Secure setup, real approved connectivity, model-selected namespaced tools,
+missing-binary client UX, cache upgrade/rollback, Windows and native Desktop/IDE
+journeys, independent review and final-head CI reconciliation remain incomplete.
+Keep the PR draft.
 
 ## Sources
 
 - [OpenAI plugin packaging](https://developers.openai.com/plugins/build/plugins)
 - [Codex MCP configuration](https://developers.openai.com/codex/mcp)
+- [Codex app-server protocol and experimental plugin API](https://learn.chatgpt.com/docs/app-server)
 - [Claude plugin components](https://code.claude.com/docs/en/plugins/components)
 - [Claude configuration-directory isolation](https://code.claude.com/docs/en/env-vars)
 - [Agent Plugins schemas](https://agent-plugins.org/schemas/1.0.0/plugin.schema.json)
