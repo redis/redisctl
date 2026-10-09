@@ -17,6 +17,14 @@ fn command(directory: &TempDir) -> Command {
         .arg("--config-file")
         .arg(directory.path().join("config.toml"))
         .env_remove("REDISCTL_PROFILE")
+        // Passing --config-file already disables environment credential overrides
+        // (ConnectionManager runs the resolver with EnvironmentOverrides::Disabled),
+        // so ambient Cloud credentials cannot reach these subprocesses. Strip them
+        // anyway to match the other cloud suites and stay robust if that changes.
+        .env_remove("REDIS_CLOUD_API_KEY")
+        .env_remove("REDIS_CLOUD_SECRET_KEY")
+        .env_remove("REDIS_CLOUD_API_SECRET")
+        .env_remove("REDIS_CLOUD_API_URL")
         .env_remove("RUST_LOG")
         .env_remove("COMPLETE")
         .timeout(Duration::from_secs(5));
