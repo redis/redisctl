@@ -4,12 +4,13 @@ mod upload;
 
 use crate::error::RedisCtlError;
 
-use anyhow::{Context, Result as AnyhowResult};
+use anyhow::Context;
 use chrono::Local;
 use clap::Subcommand;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use crate::cli::OutputFormat;
@@ -194,7 +195,7 @@ pub async fn handle_support_package_command(
             });
 
             if !skip_checks {
-                perform_preflight_checks(&output_path)?;
+                perform_preflight_checks(&output_path, output_format)?;
             }
 
             let optimization_opts = if optimize {
@@ -246,7 +247,7 @@ pub async fn handle_support_package_command(
             });
 
             if !skip_checks {
-                perform_preflight_checks(&output_path)?;
+                perform_preflight_checks(&output_path, output_format)?;
             }
 
             let optimization_opts = if optimize {
@@ -301,7 +302,7 @@ pub async fn handle_support_package_command(
             });
 
             if !skip_checks {
-                perform_preflight_checks(&output_path)?;
+                perform_preflight_checks(&output_path, output_format)?;
             }
 
             let optimization_opts = if optimize {
@@ -334,15 +335,25 @@ pub async fn handle_support_package_command(
 }
 
 /// Perform pre-flight checks before generating support package
-fn perform_preflight_checks(output_path: &Path) -> AnyhowResult<()> {
+fn perform_preflight_checks(output_path: &Path, output_format: OutputFormat) -> CliResult<()> {
     // Check if output file already exists
     if output_path.exists() {
+        let cancelled = || RedisCtlError::OverwriteCancelled {
+            path: output_path.display().to_string(),
+        };
+        // Never consume piped consent or contaminate a structured error with a prompt.
+        // Human-mode terminal confirmation and explicit --skip-checks remain available.
+        if !std::io::stdin().is_terminal()
+            || matches!(output_format, OutputFormat::Json | OutputFormat::Yaml)
+        {
+            return Err(cancelled());
+        }
         eprintln!("Warning: File {} already exists", output_path.display());
         eprint!("Overwrite? (y/N): ");
         let mut response = String::new();
         std::io::stdin().read_line(&mut response)?;
         if !response.trim().eq_ignore_ascii_case("y") {
-            return Err(anyhow::anyhow!("Operation cancelled by user"));
+            return Err(cancelled());
         }
     }
 
@@ -354,10 +365,9 @@ fn perform_preflight_checks(output_path: &Path) -> AnyhowResult<()> {
         parent_dir
     };
     if !parent_dir.exists() {
-        return Err(anyhow::anyhow!(
-            "Output directory {} does not exist",
-            parent_dir.display()
-        ));
+        return Err(
+            anyhow::anyhow!("Output directory {} does not exist", parent_dir.display()).into(),
+        );
     }
 
     // Check available disk space (warn if less than 1GB)

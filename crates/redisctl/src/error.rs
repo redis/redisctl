@@ -147,6 +147,9 @@ pub enum RedisCtlError {
     #[error("Cancelled at the confirmation prompt: {prompt}")]
     Cancelled { prompt: String },
 
+    #[error("Cancelled overwrite of existing file '{path}'")]
+    OverwriteCancelled { path: String },
+
     #[error("Command not supported for deployment type '{deployment_type}'")]
     UnsupportedDeploymentType { deployment_type: String },
     #[error("File error for '{path}': {message}")]
@@ -288,6 +291,11 @@ impl RedisCtlError {
                 "Confirmation prompts require an interactive terminal".to_string(),
                 "A declined or unanswerable prompt is a failure, not a no-op".to_string(),
             ],
+            RedisCtlError::OverwriteCancelled { .. } => vec![
+                "Choose a different output file with --file".to_string(),
+                "Overwrite confirmation requires an interactive terminal and human-readable output"
+                    .to_string(),
+            ],
             RedisCtlError::Configuration(_) => vec![
                 "Check the profile: redisctl profile show <name>".to_string(),
                 "Verify the config file syntax and required fields".to_string(),
@@ -310,7 +318,9 @@ impl RedisCtlError {
             RedisCtlError::AuthenticationFailed { .. } => "authentication_failed",
             RedisCtlError::ApiError { .. } => "api_error",
             RedisCtlError::InvalidInput { .. } => "invalid_input",
-            RedisCtlError::Cancelled { .. } => "cancelled",
+            RedisCtlError::Cancelled { .. } | RedisCtlError::OverwriteCancelled { .. } => {
+                "cancelled"
+            }
             RedisCtlError::UnsupportedDeploymentType { .. } => "unsupported_deployment_type",
             RedisCtlError::FileError { .. } => "file_error",
             RedisCtlError::ConnectionError { .. } => "connection_error",
@@ -355,7 +365,9 @@ impl RedisCtlError {
             }
 
             RedisCtlError::InvalidInput { .. } => exit_code::VALIDATION,
-            RedisCtlError::Cancelled { .. } => exit_code::CANCELLED,
+            RedisCtlError::Cancelled { .. } | RedisCtlError::OverwriteCancelled { .. } => {
+                exit_code::CANCELLED
+            }
 
             // The command does not apply to this deployment, or names a file
             // that could not be read: in both cases the invocation was wrong.
