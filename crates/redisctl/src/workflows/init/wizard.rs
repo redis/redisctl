@@ -1,0 +1,734 @@
+//! The wizard: three questions, and only the three that change what happens. Each
+//! is skipped the moment a flag already answers it; `--defaults` takes the defaults
+//! instead, and piped stdin never prompts - an agent-invoked run never blocks.
+
+use std::io::IsTerminal;
+
+use super::engine;
+use dialoguer::console::Style;
+use dialoguer::theme::Theme;
+use dialoguer::{Input, MultiSelect, Select};
+
+use crate::cli::InitArgs;
+use crate::error::RedisCtlError;
+
+/// A clack-style rail in brand red: `│` down the side, `◆` while a question is
+/// live, `◇` once answered. The colour index matches the banner's 256-colour
+/// fallback tone.
+pub(crate) struct RedisTheme;
+
+fn brand() -> Style {
+    Style::new().color256(203)
+}
+
+impl Theme for RedisTheme {
+    fn format_prompt(&self, f: &mut dyn std::fmt::Write, prompt: &str) -> std::fmt::Result {
+        write!(
+            f,
+            "{}  {}",
+            brand().apply_to('◆'),
+            Style::new().bold().apply_to(prompt)
+        )
+    }
+
+    fn format_error(&self, f: &mut dyn std::fmt::Write, err: &str) -> std::fmt::Result {
+        write!(
+            f,
+            "{}  {}",
+            brand().apply_to('└'),
+            Style::new().red().apply_to(err)
+        )
+    }
+
+    fn format_select_prompt_item(
+        &self,
+        f: &mut dyn std::fmt::Write,
+        text: &str,
+        active: bool,
+    ) -> std::fmt::Result {
+        let mark = if active {
+            brand().apply_to('●').to_string()
+        } else {
+            Style::new().dim().apply_to('○').to_string()
+        };
+        let label = if active {
+            text.to_string()
+        } else {
+            Style::new().dim().apply_to(text).to_string()
+        };
+        write!(f, "{}  {mark} {label}", brand().apply_to('│'))
+    }
+
+    fn format_multi_select_prompt_item(
+        &self,
+        f: &mut dyn std::fmt::Write,
+        text: &str,
+        checked: bool,
+        active: bool,
+    ) -> std::fmt::Result {
+        let mark = if checked {
+            brand().apply_to('■').to_string()
+        } else {
+            Style::new().dim().apply_to('□').to_string()
+        };
+        let label = if active {
+            text.to_string()
+        } else {
+            Style::new().dim().apply_to(text).to_string()
+        };
+        write!(f, "{}  {mark} {label}", brand().apply_to('│'))
+    }
+
+    fn format_select_prompt_selection(
+        &self,
+        f: &mut dyn std::fmt::Write,
+        prompt: &str,
+        sel: &str,
+    ) -> std::fmt::Result {
+        // The trailing bare rail row carries the line to the next entry, so the
+        // clack rail never breaks between answered questions.
+        write!(
+            f,
+            "{}  {}\n{}  {}\n{}",
+            brand().apply_to('◇'),
+            Style::new().bold().apply_to(prompt),
+            brand().apply_to('│'),
+            Style::new().dim().apply_to(sel),
+            brand().apply_to('│')
+        )
+    }
+
+    fn format_multi_select_prompt_selection(
+        &self,
+        f: &mut dyn std::fmt::Write,
+        prompt: &str,
+        selections: &[&str],
+    ) -> std::fmt::Result {
+        self.format_select_prompt_selection(f, prompt, &selections.join(", "))
+    }
+
+    fn format_input_prompt(
+        &self,
+        f: &mut dyn std::fmt::Write,
+        prompt: &str,
+        default: Option<&str>,
+    ) -> std::fmt::Result {
+        match default {
+            Some(default) => write!(
+                f,
+                "{}  {}  {}",
+                brand().apply_to('◆'),
+                Style::new().bold().apply_to(prompt),
+                Style::new()
+                    .dim()
+                    .apply_to(format!("Enter keeps {default}, or type another: "))
+            ),
+            None => write!(
+                f,
+                "{}  {}",
+                brand().apply_to('◆'),
+                Style::new().bold().apply_to(prompt)
+            ),
+        }
+    }
+
+    fn format_input_prompt_selection(
+        &self,
+        f: &mut dyn std::fmt::Write,
+        prompt: &str,
+        sel: &str,
+    ) -> std::fmt::Result {
+        // The pasted connection string carries a password; the confirmation line
+        // must not reprint it.
+        self.format_select_prompt_selection(f, prompt, &engine::mask_url(sel))
+    }
+}
+
+const DATABASE_PROMPT: &str = "Where should the database come from?";
+
+/// The database options, shaped by what .env already carries: an existing
+/// REDIS_URL leads (masked) and replaces the fill-in-later option - placeholders
+/// make no sense when the value is already there.
+fn database_items(env_url: Option<&str>) -> Vec<String> {
+    let mut items = Vec::new();
+    if let Some(url) = env_url {
+        items.push(format!(
+            "Keep the REDIS_URL already in .env  ({})",
+            engine::mask_url(url)
+        ));
+    }
+    items.extend(
+        ["Redis Cloud", "Local Redis", "Paste a connection string"]
+            .into_iter()
+            .map(str::to_string),
+    );
+    if env_url.is_none() {
+        items.push("Skip for now - fill in .env later".to_string());
+    }
+    items
+}
+const LOCAL_FOUND_PROMPT: &str = "Found a local Redis at localhost:6379 - use it?";
+const LOCAL_NONE_PROMPT: &str = "No local Redis found - create one?";
+const AGENTS_PROMPT: &str = "Which agent(s) should be configured?";
+const SKILLS_PROMPT: &str = "Where should the Redis skills be installed?";
+const INTERRUPTED: &str = "interrupted";
+
+/// Cancel tips are picked by prompt (see `error.rs`): the wizard's questions get
+/// `--defaults` guidance, while confirmation prompts elsewhere keep `--force`.
+pub(crate) fn is_wizard_prompt(prompt: &str) -> bool {
+    matches!(
+        prompt,
+        DATABASE_PROMPT
+            | LOCAL_FOUND_PROMPT
+            | LOCAL_NONE_PROMPT
+            | AGENTS_PROMPT
+            | SKILLS_PROMPT
+            | INTERRUPTED
+    ) || prompt == super::cloud::PICKER_PROMPT
+        || prompt == super::cloud::NAME_PROMPT
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Question {
+    Database,
+    Agents,
+    Skills,
+}
+
+/// A question is worth asking only when no flag has already answered it.
+pub fn pending_questions(args: &InitArgs, url_given: bool) -> Vec<Question> {
+    let mut pending = Vec::new();
+    // A product flag, --iris, or --complete already says where (or whether) the
+    // database comes from.
+    let products_answered = args.agent_memory.is_some()
+        || args.langcache.is_some()
+        || args.context_retriever.is_some()
+        || args.iris
+        || args.complete;
+    if !url_given && !args.cloud && !products_answered {
+        pending.push(Question::Database);
+    }
+    if args.agents.is_empty() {
+        pending.push(Question::Agents);
+    }
+    if !args.skills_global && !args.no_skills {
+        pending.push(Question::Skills);
+    }
+    pending
+}
+
+pub fn applies(args: &InitArgs, pending: &[Question]) -> bool {
+    std::io::stdin().is_terminal() && !args.defaults && !pending.is_empty()
+}
+
+/// What the wizard decided; `None` per field means the question was not asked.
+#[derive(Default)]
+pub struct Answers {
+    pub url: Option<String>,
+    pub cloud: bool,
+    /// The user picked a concrete source (not "keep .env"), superseding any
+    /// REDIS_URL already there.
+    pub database_explicit: bool,
+    /// "Skip for now": write a placeholder REDIS_URL to fill in later.
+    pub placeholder: bool,
+    pub agents: Option<Vec<engine::Agent>>,
+    pub skills: Option<SkillsScope>,
+}
+
+pub enum SkillsScope {
+    Project,
+    Global,
+    Skip,
+}
+
+fn cancelled(prompt: &str) -> RedisCtlError {
+    RedisCtlError::Cancelled {
+        prompt: prompt.to_string(),
+    }
+}
+
+pub(crate) fn prompt_failed(e: dialoguer::Error) -> RedisCtlError {
+    let dialoguer::Error::IO(io) = e;
+    if io.kind() == std::io::ErrorKind::Interrupted {
+        RedisCtlError::Cancelled {
+            prompt: INTERRUPTED.to_string(),
+        }
+    } else {
+        RedisCtlError::Other(format!("prompt failed: {io}"))
+    }
+}
+
+pub fn run(
+    pending: &[Question],
+    requested: Option<&[engine::Agent]>,
+    detected: &[engine::Agent],
+    docker: bool,
+    local: engine::LocalRedis,
+    env_url: Option<&str>,
+) -> Result<Answers, RedisCtlError> {
+    let mut answers = Answers::default();
+    for question in pending {
+        match question {
+            Question::Database => match ask_database(docker, local, env_url)? {
+                DatabaseChoice::KeepEnv => {}
+                DatabaseChoice::Placeholder => answers.placeholder = true,
+                DatabaseChoice::Docker => answers.database_explicit = true,
+                DatabaseChoice::Cloud => {
+                    answers.cloud = true;
+                    answers.database_explicit = true;
+                }
+                DatabaseChoice::Url(url) => {
+                    answers.url = Some(url);
+                    answers.database_explicit = true;
+                }
+            },
+            Question::Agents => answers.agents = Some(ask_agents(detected)?),
+            Question::Skills => {
+                let agents =
+                    engine::resolve_agents(answers.agents.as_deref().or(requested), detected);
+                answers.skills = Some(ask_skills_scope(engine::project_skills_dir(&agents))?);
+            }
+        }
+    }
+    Ok(answers)
+}
+
+enum DatabaseChoice {
+    KeepEnv,
+    Placeholder,
+    Docker,
+    Cloud,
+    Url(String),
+}
+
+/// Redis Cloud leads and is the default; "Local Redis" reuses a server that is
+/// already running (asking for credentials when it wants them) and only falls back
+/// to creating a Docker container; a paste comes back as the URL.
+fn ask_database(
+    docker: bool,
+    local: engine::LocalRedis,
+    env_url: Option<&str>,
+) -> Result<DatabaseChoice, RedisCtlError> {
+    const PROMPT: &str = DATABASE_PROMPT;
+    // No tier qualifier on Redis Cloud: the cloud flow connects to existing
+    // databases on any plan; only creating a new one defaults to the free plan.
+    let items = database_items(env_url);
+    let selection = Select::with_theme(&RedisTheme)
+        .with_prompt(PROMPT)
+        .items(&items)
+        .default(0)
+        .interact_opt()
+        .map_err(prompt_failed)?;
+    let Some(selection) = selection else {
+        return Err(cancelled(PROMPT));
+    };
+    // With an existing .env the keep-option occupies slot 0 and there is no
+    // fill-in-later slot; without one the list ends with it.
+    let offset = usize::from(env_url.is_some());
+    if env_url.is_some() && selection == 0 {
+        return Ok(DatabaseChoice::KeepEnv);
+    }
+    match selection - offset {
+        0 => Ok(DatabaseChoice::Cloud),
+        1 => ask_local(docker, local),
+        2 => ask_paste(),
+        _ => Ok(DatabaseChoice::Placeholder),
+    }
+}
+
+/// The "Local Redis" sub-question, shaped by what the probe found: a ready server
+/// is offered for reuse, one that wants credentials routes to the paste prompt,
+/// and an absent one offers to create a Docker container.
+fn ask_local(docker: bool, local: engine::LocalRedis) -> Result<DatabaseChoice, RedisCtlError> {
+    if local == engine::LocalRedis::NeedsAuth {
+        eprintln!(
+            "  Found a local Redis at localhost:6379, but it needs credentials - paste its connection string."
+        );
+        return ask_paste();
+    }
+    // An option that cannot work stays on the list carrying the reason - the same
+    // information the error would deliver after the run, shown before it instead.
+    let docker_item = |label: &str| {
+        if docker {
+            label.to_string()
+        } else {
+            format!("{label}  (Docker is not running)")
+        }
+    };
+    let found = local == engine::LocalRedis::Ready;
+    let (prompt, items) = if found {
+        (
+            LOCAL_FOUND_PROMPT,
+            [
+                "Use it".to_string(),
+                docker_item("Start a fresh Docker container instead"),
+            ],
+        )
+    } else {
+        (
+            LOCAL_NONE_PROMPT,
+            [
+                docker_item("Start one with Docker"),
+                "Paste a connection string".to_string(),
+            ],
+        )
+    };
+    let docker_index = if found { 1 } else { 0 };
+    let default = if found || docker { 0 } else { 1 };
+    loop {
+        let selection = Select::with_theme(&RedisTheme)
+            .with_prompt(prompt)
+            .items(&items)
+            .default(default)
+            .interact_opt()
+            .map_err(prompt_failed)?;
+        match selection {
+            None => return Err(cancelled(prompt)),
+            Some(i) if i == docker_index && !docker => {
+                eprintln!("  Docker is not running - start it, or paste a connection string.");
+            }
+            Some(i) if i == docker_index => return Ok(DatabaseChoice::Docker),
+            Some(_) if found => return Ok(DatabaseChoice::Url(engine::LOCAL_REDIS_URL.into())),
+            Some(_) => return ask_paste(),
+        }
+    }
+}
+
+fn ask_paste() -> Result<DatabaseChoice, RedisCtlError> {
+    let pasted: String = Input::with_theme(&RedisTheme)
+        .with_prompt("Paste the connection string")
+        .validate_with(|input: &String| {
+            engine::extract_url(input)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        })
+        .interact_text()
+        .map_err(prompt_failed)?;
+    Ok(DatabaseChoice::Url(engine::extract_url(&pasted)?))
+}
+
+/// Detection preselects, it does not decide: having Cursor installed is not consent
+/// to write .cursor/mcp.json into this repo.
+fn ask_agents(detected: &[engine::Agent]) -> Result<Vec<engine::Agent>, RedisCtlError> {
+    const PROMPT: &str = AGENTS_PROMPT;
+    let labels: Vec<&str> = engine::KNOWN_AGENTS.iter().map(|a| a.label()).collect();
+    let preselected: Vec<bool> = engine::KNOWN_AGENTS
+        .iter()
+        .map(|agent| detected.contains(agent))
+        .collect();
+    loop {
+        let picks = MultiSelect::with_theme(&RedisTheme)
+            .with_prompt(format!("{PROMPT} (space toggles, enter confirms)"))
+            .items(&labels)
+            .defaults(&preselected)
+            .interact_opt()
+            .map_err(prompt_failed)?;
+        match picks {
+            None => return Err(cancelled(PROMPT)),
+            Some(picks) if picks.is_empty() => eprintln!("  pick at least one"),
+            Some(picks) => {
+                return Ok(picks
+                    .into_iter()
+                    .map(|index| engine::KNOWN_AGENTS[index])
+                    .collect());
+            }
+        }
+    }
+}
+
+fn skills_scope_items(project_dir: &str) -> [String; 3] {
+    [
+        format!("This project only ({project_dir})"),
+        "Global (available in every project)".to_string(),
+        "Skip - do not install them".to_string(),
+    ]
+}
+
+fn ask_skills_scope(project_dir: &str) -> Result<SkillsScope, RedisCtlError> {
+    const PROMPT: &str = SKILLS_PROMPT;
+    let selection = Select::with_theme(&RedisTheme)
+        .with_prompt(PROMPT)
+        .items(&skills_scope_items(project_dir))
+        .default(0)
+        .interact_opt()
+        .map_err(prompt_failed)?;
+    match selection {
+        None => Err(cancelled(PROMPT)),
+        Some(0) => Ok(SkillsScope::Project),
+        Some(1) => Ok(SkillsScope::Global),
+        Some(_) => Ok(SkillsScope::Skip),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::AgentArg;
+
+    fn args() -> InitArgs {
+        InitArgs {
+            url: None,
+            cloud: false,
+            cloud_subscription: None,
+            name: None,
+            agents: Vec::new(),
+            defaults: false,
+            no_install_cli: false,
+            skills_repo: None,
+            skills_global: false,
+            no_skills: false,
+            dry_run: false,
+            no_telemetry: false,
+            agent_memory: None,
+            store: None,
+            langcache: None,
+            cache: None,
+            context_retriever: None,
+            iris: false,
+            api_key: None,
+            complete: false,
+            no_example: false,
+            pasted: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_cloud_picker_cancel_gets_wizard_tips() {
+        assert!(is_wizard_prompt(super::super::cloud::PICKER_PROMPT));
+        assert!(is_wizard_prompt(super::super::cloud::NAME_PROMPT));
+        assert!(!is_wizard_prompt("Delete user 5?"));
+    }
+
+    #[test]
+    fn the_project_skills_option_names_the_dir_the_agents_get() {
+        use engine::Agent;
+        let solo = engine::project_skills_dir(&[Agent::Claude]);
+        let shared = engine::project_skills_dir(&[Agent::Claude, Agent::Cursor]);
+        assert_eq!(
+            skills_scope_items(solo)[0],
+            "This project only (.claude/skills)"
+        );
+        assert_eq!(
+            skills_scope_items(shared)[0],
+            "This project only (.agents/skills)"
+        );
+    }
+
+    #[test]
+    fn a_suggested_value_says_what_enter_does() {
+        use dialoguer::theme::Theme;
+        let mut line = String::new();
+        RedisTheme
+            .format_input_prompt(&mut line, "Name for the new database", Some("db-1-cloud"))
+            .unwrap();
+        let plain = dialoguer::console::strip_ansi_codes(&line);
+        assert!(
+            plain.ends_with("Name for the new database  Enter keeps db-1-cloud, or type another: "),
+            "{plain:?}"
+        );
+    }
+
+    #[test]
+    fn ctrl_c_at_a_prompt_is_a_wizard_cancel() {
+        let err = prompt_failed(dialoguer::Error::IO(std::io::Error::from(
+            std::io::ErrorKind::Interrupted,
+        )));
+        assert_eq!(err.exit_code(), crate::error::exit_code::CANCELLED);
+        assert!(
+            err.suggestions()
+                .iter()
+                .any(|tip| tip.contains("--defaults")),
+            "{:?}",
+            err.suggestions()
+        );
+    }
+
+    #[test]
+    fn an_answered_question_carries_a_trailing_rail_row() {
+        // The bare rail row under each answer keeps the clack line unbroken
+        // between entries.
+        let mut out = String::new();
+        RedisTheme
+            .format_select_prompt_selection(&mut out, "Q?", "Answer")
+            .unwrap();
+        assert!(out.trim_end().ends_with('│'), "{out}");
+    }
+
+    #[test]
+    fn redis_cloud_leads_the_database_options() {
+        assert_eq!(
+            database_items(None),
+            [
+                "Redis Cloud",
+                "Local Redis",
+                "Paste a connection string",
+                "Skip for now - fill in .env later"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_existing_env_url_becomes_the_first_option_masked() {
+        let items = database_items(Some("redis://default:s3cret@host:6379"));
+        assert_eq!(
+            items[0],
+            "Keep the REDIS_URL already in .env  (redis://default:****@host:6379)"
+        );
+        assert!(!items[0].contains("s3cret"));
+        assert_eq!(items[1], "Redis Cloud");
+        // Placeholders make no sense when .env is already filled in.
+        assert!(!items.iter().any(|i| i.contains("Skip for now")));
+    }
+
+    #[test]
+    fn the_local_subflow_prompts_get_wizard_cancel_tips() {
+        assert!(is_wizard_prompt(LOCAL_FOUND_PROMPT));
+        assert!(is_wizard_prompt(LOCAL_NONE_PROMPT));
+    }
+
+    #[test]
+    fn cloud_answers_the_database_question() {
+        let mut a = args();
+        a.cloud = true;
+        assert_eq!(
+            pending_questions(&a, false),
+            vec![Question::Agents, Question::Skills]
+        );
+    }
+
+    #[test]
+    fn product_flags_iris_and_complete_answer_the_database_question() {
+        for set in [
+            |a: &mut InitArgs| a.agent_memory = Some("https://x.io".into()),
+            |a: &mut InitArgs| a.langcache = Some("https://x.io".into()),
+            |a: &mut InitArgs| a.context_retriever = Some("https://x.io".into()),
+            |a: &mut InitArgs| a.iris = true,
+            |a: &mut InitArgs| a.complete = true,
+        ] {
+            let mut a = args();
+            set(&mut a);
+            assert_eq!(
+                pending_questions(&a, false),
+                vec![Question::Agents, Question::Skills]
+            );
+        }
+    }
+
+    #[test]
+    fn with_no_flags_all_three_questions_are_open() {
+        assert_eq!(
+            pending_questions(&args(), false),
+            vec![Question::Database, Question::Agents, Question::Skills]
+        );
+    }
+
+    #[test]
+    fn a_url_answers_the_database_question() {
+        assert_eq!(
+            pending_questions(&args(), true),
+            vec![Question::Agents, Question::Skills]
+        );
+    }
+
+    #[test]
+    fn agent_flags_answer_the_agents_question() {
+        let mut a = args();
+        a.agents = vec![AgentArg::Claude];
+        assert_eq!(
+            pending_questions(&a, false),
+            vec![Question::Database, Question::Skills]
+        );
+    }
+
+    #[test]
+    fn no_skills_answers_the_skills_question() {
+        let mut a = args();
+        a.no_skills = true;
+        assert_eq!(
+            pending_questions(&a, false),
+            vec![Question::Database, Question::Agents]
+        );
+    }
+
+    #[test]
+    fn the_skills_question_offers_to_skip_them() {
+        assert_eq!(
+            skills_scope_items(".claude/skills")[2],
+            "Skip - do not install them"
+        );
+    }
+
+    #[test]
+    fn skills_global_answers_the_skills_question() {
+        let mut a = args();
+        a.skills_global = true;
+        assert_eq!(
+            pending_questions(&a, false),
+            vec![Question::Database, Question::Agents]
+        );
+    }
+
+    #[test]
+    fn wizard_cancel_tips_never_hijack_destructive_confirmations() {
+        use crate::error::RedisCtlError;
+        let wizard = RedisCtlError::Cancelled {
+            prompt: DATABASE_PROMPT.to_string(),
+        };
+        assert!(
+            wizard
+                .suggestions()
+                .iter()
+                .any(|t| t.contains("--defaults"))
+        );
+        assert!(
+            wizard
+                .suggestions()
+                .iter()
+                .any(|t| t.contains("--skills-global or --no-skills")),
+            "{:?}",
+            wizard.suggestions()
+        );
+
+        let destructive = RedisCtlError::Cancelled {
+            prompt: "Delete user 5?".to_string(),
+        };
+        assert!(
+            destructive
+                .suggestions()
+                .iter()
+                .any(|t| t.contains("--force")),
+            "{:?}",
+            destructive.suggestions()
+        );
+    }
+
+    #[test]
+    fn defaults_flag_disables_the_wizard() {
+        let mut a = args();
+        a.defaults = true;
+        let pending = pending_questions(&a, false);
+        assert!(!applies(&a, &pending));
+    }
+
+    #[test]
+    fn nothing_pending_disables_the_wizard() {
+        assert!(!applies(&args(), &[]));
+    }
+
+    #[test]
+    fn pasted_url_confirmation_is_masked() {
+        let mut rendered = String::new();
+        RedisTheme
+            .format_input_prompt_selection(
+                &mut rendered,
+                "Paste the connection string",
+                "redis://default:s3cret@host:6379",
+            )
+            .unwrap();
+        assert!(
+            rendered.contains("redis://default:****@host:6379"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("s3cret"), "{rendered}");
+    }
+}

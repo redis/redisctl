@@ -1,0 +1,475 @@
+//! MCP registration per agent: the official Redis data-plane server in each agent's
+//! project config. Every config stays credential-free and safe to commit: a shell
+//! launcher reads the keys it needs from `.env` when the MCP client starts the
+//! server, so the URL (and its password) never lands in a committed file.
+
+use std::path::Path;
+
+use crate::workflows::init::engine::InitError;
+use crate::workflows::init::engine::change::{Change, Status};
+use crate::workflows::init::engine::docker::docker_ok;
+use crate::workflows::init::engine::env::{FileAction, read_for_planning};
+use crate::workflows::init::engine::project::Agent;
+use crate::workflows::init::engine::util::has_bin;
+
+/// How the launcher runs the server: uvx when available, a Docker bridge otherwise.
+/// With neither, the config is still written for uvx and the caller shows a note.
+enum Runner {
+    Uvx,
+    Docker,
+    UvxMissing,
+}
+
+/// `load KEY` exports KEY from `.env`, parsed like `env::read_env_key`: the first
+/// `[export] KEY = value` line; a quoted value is the text between its quotes, a
+/// bare one ends at ` #` and is trimmed. The file is never run as shell code, so
+/// any dotenv-valid content (or CRLF endings) is safe.
+const LOAD_FROM_ENV_FILE: &str = r#"load() { v=$(sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}$1[[:space:]]*=[[:space:]]*//p" .env 2>/dev/null | head -n 1 | sed -e "s/^\"\([^\"]*\)\".*/\1/" -e t -e "s/^'\([^']*\)'.*/\1/" -e t -e 's/[[:space:]]#.*//' -e 's/[[:space:]]*$//'); [ -z "$v" ] || export "$1=$v"; }"#;
+
+fn launcher(keys: &[&str], command: &str) -> serde_json::Value {
+    let loads: String = keys.iter().map(|key| format!(" load {key};")).collect();
+    serde_json::json!({
+        "command": "sh",
+        "args": ["-c", format!("{LOAD_FROM_ENV_FILE};{loads} {command}")]
+    })
+}
+
+/// Splits REDIS_URL where `util::mask_url` does (the last `@`, then the userinfo's
+/// first `:`): `url` keeps everything but the password, which goes in REDIS_PWD.
+/// redis-mcp-server (0.5.1) reads REDIS_PWD when its `--url` carries none, so the password
+/// stays off the command line that `ps` shows to every user.
+const SPLIT_PASSWORD: &str = r#"REDIS_PWD=$(printf %s "$REDIS_URL" | sed -n 's~^rediss\{0,1\}://[^:@/]*:\(.*\)@.*~\1~p'); export REDIS_PWD; url=$(printf %s "$REDIS_URL" | sed -e 's~^\(rediss\{0,1\}://[^:@/]*\):.*@~\1@~' -e 's~^\(rediss\{0,1\}://\)@~\1~')"#;
+
+fn server_entry(runner: &Runner) -> serde_json::Value {
+    let inner = match runner {
+        // Rewrite only the hostname; userinfo and remote hosts stay intact.
+        Runner::Docker => {
+            r#"exec docker run --rm -i -e REDIS_PWD --add-host=host.docker.internal:host-gateway mcp/redis --url "$(printf %s "$url" | sed -E 's~^(rediss?://([^/]*@)?)(localhost|127\.0\.0\.1)([:/?#]|$)~\1host.docker.internal\4~')""#
+        }
+        _ => r#"exec uvx --from redis-mcp-server@latest redis-mcp-server --url "$url""#,
+    };
+    launcher(&["REDIS_URL"], &format!("{SPLIT_PASSWORD}; {inner}"))
+}
+
+/// One agent's registration, decided at plan time.
+#[derive(Debug)]
+pub(crate) enum McpAction {
+    File(FileAction),
+    Report(Change),
+}
+
+impl McpAction {
+    pub(crate) fn preview(&self) -> Change {
+        match self {
+            McpAction::File(action) => action.preview(),
+            McpAction::Report(change) => change.clone(),
+        }
+    }
+
+    pub(crate) fn perform(&self, cwd: &Path) -> Result<Change, InitError> {
+        match self {
+            McpAction::File(action) => action.perform(cwd),
+            McpAction::Report(change) => Ok(change.clone()),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct McpPlan {
+    pub(crate) actions: Vec<McpAction>,
+    pub(crate) uvx_missing: bool,
+}
+
+/// The control-plane server: credentials stay in the redisctl profile, so the
+/// committed config carries only the launch command.
+fn control_plane_entry(cloud: &crate::workflows::init::engine::CloudFacts) -> serde_json::Value {
+    let args: Vec<String> = match &cloud.profile {
+        Some(profile) => vec!["--profile".into(), profile.clone()],
+        None => vec![],
+    };
+    serde_json::json!({ "command": "redisctl-mcp", "args": args })
+}
+
+/// What decides which servers get registered; probing stays with the caller so
+/// this module never runs anything.
+pub(crate) struct McpInputs<'a> {
+    /// A database exists, so the data-plane `redis` server applies.
+    pub(crate) database: bool,
+    pub(crate) cloud: Option<(&'a crate::workflows::init::engine::CloudFacts, bool)>,
+    /// `Some(npx_available)` when a Context Retriever product is wired.
+    pub(crate) context_retriever: Option<bool>,
+}
+
+/// The remote bridge: single quotes keep `${...}` unexpanded by sh, so mcp-remote
+/// resolves the agent key from its own environment and the config stays
+/// credential-free.
+fn context_retriever_entry() -> serde_json::Value {
+    launcher(
+        &["CONTEXT_RETRIEVER_MCP_URL", "CONTEXT_RETRIEVER_AGENT_KEY"],
+        r#"exec npx -y mcp-remote "$CONTEXT_RETRIEVER_MCP_URL" --header 'X-API-Key:${CONTEXT_RETRIEVER_AGENT_KEY}'"#,
+    )
+}
+
+pub(crate) fn plan_mcp(
+    cwd: &Path,
+    agents: &[Agent],
+    inputs: McpInputs<'_>,
+) -> Result<McpPlan, InitError> {
+    let mut servers = Vec::new();
+    let mut uvx_missing = false;
+    if inputs.database {
+        let runner = if has_bin("uvx") {
+            Runner::Uvx
+        } else if docker_ok() {
+            Runner::Docker
+        } else {
+            Runner::UvxMissing
+        };
+        uvx_missing = matches!(runner, Runner::UvxMissing);
+        servers.push((
+            "redis",
+            server_entry(&runner),
+            "redis: reads REDIS_URL from .env at launch".to_string(),
+        ));
+    }
+    if let Some((cloud, true)) = inputs.cloud {
+        servers.push((
+            "redisctl",
+            control_plane_entry(cloud),
+            "redisctl: control plane, credentials stay in the redisctl profile".to_string(),
+        ));
+    }
+    if inputs.context_retriever == Some(true) {
+        servers.push((
+            "context-retriever",
+            context_retriever_entry(),
+            "context-retriever: reads the MCP URL and scoped agent key from .env at launch"
+                .to_string(),
+        ));
+    }
+    let mut actions = Vec::new();
+    // No servers means no config files at all - a products-only run without an MCP
+    // product writes nothing here.
+    if !servers.is_empty() {
+        for agent in agents {
+            actions.push(match agent {
+                Agent::Claude => upsert(cwd, ".mcp.json", "mcpServers", &servers, false)?,
+                Agent::Cursor => upsert(cwd, ".cursor/mcp.json", "mcpServers", &servers, false)?,
+                Agent::Vscode => upsert(cwd, ".vscode/mcp.json", "servers", &servers, true)?,
+                Agent::Codex => McpAction::Report(Change::new(
+                    "mcp (codex)",
+                    Status::Skipped,
+                    "codex MCP config is user-scoped (~/.codex/config.toml); the skills cover it",
+                )),
+            });
+        }
+    }
+    if let Some((_, false)) = inputs.cloud {
+        actions.push(McpAction::Report(Change::new(
+            "mcp (redisctl)",
+            Status::Skipped,
+            "redisctl-mcp not on PATH (cargo install redisctl-mcp) - the CLI still works",
+        )));
+    }
+    if inputs.context_retriever == Some(false) {
+        actions.push(McpAction::Report(Change::new(
+            "mcp (context-retriever)",
+            Status::Skipped,
+            "npx is required for the remote MCP bridge; ctxctl remains available",
+        )));
+    }
+    Ok(McpPlan {
+        actions,
+        uvx_missing,
+    })
+}
+
+fn kept_invalid(rel: &str) -> McpAction {
+    McpAction::Report(Change::new(
+        rel,
+        Status::Kept,
+        "existing file is not valid JSON; left untouched",
+    ))
+}
+
+fn upsert(
+    cwd: &Path,
+    rel: &str,
+    top_key: &str,
+    servers: &[(&str, serde_json::Value, String)],
+    stdio: bool,
+) -> Result<McpAction, InitError> {
+    let existing = read_for_planning(cwd, rel)?;
+    let mut cfg = match &existing {
+        None => serde_json::json!({}),
+        Some(text) => match serde_json::from_str::<serde_json::Value>(text) {
+            Ok(value) => value,
+            Err(_) => return Ok(kept_invalid(rel)),
+        },
+    };
+    let Some(root) = cfg.as_object_mut() else {
+        return Ok(kept_invalid(rel));
+    };
+    let entries = root.entry(top_key).or_insert_with(|| serde_json::json!({}));
+    let Some(map) = entries.as_object_mut() else {
+        return Ok(kept_invalid(rel));
+    };
+    let mut notes = Vec::new();
+    for (name, entry, fresh_note) in servers {
+        let mut server = entry.clone();
+        if stdio {
+            server["type"] = "stdio".into();
+        }
+        match map.get(*name) {
+            Some(previous) if *previous == server => {}
+            Some(_) => {
+                notes.push(format!("replaced existing {name} server"));
+                map.insert((*name).to_string(), server);
+            }
+            None => {
+                notes.push(fresh_note.clone());
+                map.insert((*name).to_string(), server);
+            }
+        }
+    }
+    if notes.is_empty() {
+        return Ok(McpAction::Report(Change::new(rel, Status::Unchanged, "")));
+    }
+    let note = notes.join("; ");
+    let status = if existing.is_some() {
+        Status::Updated
+    } else {
+        Status::Created
+    };
+    let content = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&cfg).map_err(|e| InitError::WriteFailed {
+            rel: rel.to_string(),
+            message: e.to_string(),
+        })?
+    );
+    Ok(McpAction::File(FileAction::Write {
+        rel: rel.to_string(),
+        content,
+        status,
+        note,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn plan_for(dir: &Path, agents: &[Agent]) -> McpPlan {
+        plan_mcp(
+            dir,
+            agents,
+            McpInputs {
+                database: true,
+                cloud: None,
+                context_retriever: None,
+            },
+        )
+        .unwrap()
+    }
+
+    fn cloud_facts(profile: Option<&str>) -> crate::workflows::init::engine::CloudFacts {
+        crate::workflows::init::engine::CloudFacts {
+            name: "cloud-db".to_string(),
+            subscription_id: "1".to_string(),
+            database_id: "9".to_string(),
+            tier: crate::workflows::init::engine::CloudTier::Essentials,
+            profile: profile.map(str::to_string),
+            created: false,
+        }
+    }
+
+    #[test]
+    fn cloud_registers_the_control_plane_server_alongside_redis() {
+        let dir = tempfile::tempdir().unwrap();
+        let cloud = cloud_facts(Some("qa"));
+        let plan = plan_mcp(
+            dir.path(),
+            &[Agent::Claude, Agent::Vscode],
+            McpInputs {
+                database: true,
+                cloud: Some((&cloud, true)),
+                context_retriever: None,
+            },
+        )
+        .unwrap();
+        apply_all(dir.path(), &plan);
+
+        let claude: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.path().join(".mcp.json")).unwrap())
+                .unwrap();
+        assert_eq!(claude["mcpServers"]["redisctl"]["command"], "redisctl-mcp");
+        assert_eq!(claude["mcpServers"]["redisctl"]["args"][1], "qa");
+        assert!(claude["mcpServers"]["redis"].is_object());
+        // Credentials stay in the redisctl profile; the committed file has none.
+        let raw = std::fs::read_to_string(dir.path().join(".mcp.json")).unwrap();
+        assert!(
+            !raw.contains("api-key") && !raw.contains("api_secret"),
+            "{raw}"
+        );
+
+        let vscode: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join(".vscode/mcp.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(vscode["servers"]["redisctl"]["type"], "stdio");
+    }
+
+    #[test]
+    fn cloud_without_the_mcp_binary_reports_a_skip() {
+        let dir = tempfile::tempdir().unwrap();
+        let cloud = cloud_facts(None);
+        let plan = plan_mcp(
+            dir.path(),
+            &[Agent::Claude],
+            McpInputs {
+                database: true,
+                cloud: Some((&cloud, false)),
+                context_retriever: None,
+            },
+        )
+        .unwrap();
+        let last = plan.actions.last().unwrap().preview();
+        assert_eq!(last.status, Status::Skipped);
+        assert_eq!(last.subject, "mcp (redisctl)");
+        assert!(
+            last.note.contains("cargo install redisctl-mcp"),
+            "{}",
+            last.note
+        );
+        // And the data-plane entry alone lands in the config.
+        apply_all(dir.path(), &plan);
+        let raw = std::fs::read_to_string(dir.path().join(".mcp.json")).unwrap();
+        assert!(!raw.contains("redisctl-mcp"), "{raw}");
+    }
+
+    fn apply_all(dir: &Path, plan: &McpPlan) -> Vec<Change> {
+        plan.actions
+            .iter()
+            .map(|a| a.perform(dir).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn registers_per_agent_with_the_right_shapes() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = plan_for(
+            dir.path(),
+            &[Agent::Claude, Agent::Cursor, Agent::Vscode, Agent::Codex],
+        );
+        let changes = apply_all(dir.path(), &plan);
+        assert_eq!(changes[0].subject, ".mcp.json");
+        assert_eq!(changes[1].subject, ".cursor/mcp.json");
+        assert_eq!(changes[2].subject, ".vscode/mcp.json");
+        assert_eq!(changes[3].status, Status::Skipped);
+
+        let claude: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.path().join(".mcp.json")).unwrap())
+                .unwrap();
+        let launcher = claude["mcpServers"]["redis"]["args"][1].as_str().unwrap();
+        assert!(launcher.starts_with(LOAD_FROM_ENV_FILE), "{launcher}");
+        assert!(launcher.contains("$REDIS_URL"));
+        // Credential-free: the config carries the env reference, never a URL value.
+        assert!(!launcher.contains("redis://"));
+
+        let vscode: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join(".vscode/mcp.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(vscode["servers"]["redis"]["type"], "stdio");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn context_retriever_launcher_exports_both_keys_without_sourcing_env() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let npx = dir.path().join("npx");
+        std::fs::write(
+            &npx,
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" \"$CONTEXT_RETRIEVER_AGENT_KEY\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&npx, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(
+            dir.path().join(".env"),
+            "TITLE=My App (dev)\r\nCONTEXT_RETRIEVER_MCP_URL=\"https://ctx.example/mcp\"\r\nCONTEXT_RETRIEVER_AGENT_KEY='k$y'\r\n",
+        )
+        .unwrap();
+        let entry = context_retriever_entry();
+        let output = std::process::Command::new("sh")
+            .args(["-c", entry["args"][1].as_str().unwrap()])
+            .current_dir(dir.path())
+            .env("PATH", format!("{}:/usr/bin:/bin", dir.path().display()))
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            "-y\nmcp-remote\nhttps://ctx.example/mcp\n--header\nX-API-Key:${CONTEXT_RETRIEVER_AGENT_KEY}\nk$y\n"
+        );
+    }
+
+    #[test]
+    fn docker_launcher_defines_the_host_alias_and_anchors_rewrites() {
+        let entry = server_entry(&Runner::Docker);
+        let launcher = entry["args"][1].as_str().unwrap();
+        assert!(
+            launcher.contains("--add-host=host.docker.internal:host-gateway"),
+            "{launcher}"
+        );
+    }
+
+    #[test]
+    fn rerun_is_unchanged_and_foreign_servers_survive() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".mcp.json"),
+            r#"{"mcpServers":{"mine":{"command":"custom"}}}"#,
+        )
+        .unwrap();
+        let plan = plan_for(dir.path(), &[Agent::Claude]);
+        apply_all(dir.path(), &plan);
+        let cfg: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.path().join(".mcp.json")).unwrap())
+                .unwrap();
+        assert_eq!(cfg["mcpServers"]["mine"]["command"], "custom");
+        assert!(cfg["mcpServers"]["redis"].is_object());
+
+        let rerun = plan_for(dir.path(), &[Agent::Claude]);
+        assert_eq!(rerun.actions[0].preview().status, Status::Unchanged);
+    }
+
+    #[test]
+    fn a_different_existing_redis_server_is_replaced_without_its_arguments() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".mcp.json"),
+            r#"{"mcpServers":{"redis":{"command":"redis-mcp","args":["--url","redis://default:s3cret@h:1"]}}}"#,
+        )
+        .unwrap();
+        let plan = plan_for(dir.path(), &[Agent::Claude]);
+        let change = plan.actions[0].preview();
+        assert_eq!(change.status, Status::Updated);
+        assert!(change.note.contains("replaced existing redis server"));
+        assert_eq!(change.note, "replaced existing redis server");
+        assert!(!change.note.contains("s3cret"));
+    }
+
+    #[test]
+    fn invalid_json_is_kept_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".mcp.json"), "{not json").unwrap();
+        let plan = plan_for(dir.path(), &[Agent::Claude]);
+        let change = plan.actions[0].preview();
+        assert_eq!(change.status, Status::Kept);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".mcp.json")).unwrap(),
+            "{not json"
+        );
+    }
+}

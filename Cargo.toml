@@ -76,6 +76,7 @@ rustls = { version = "0.23.32", default-features = false, features = ["aws_lc_rs
 # Standards-compliant OAuth2/OIDC (device grant, auth-code+PKCE, refresh); rustls to match reqwest.
 oauth2 = { version = "5", default-features = false, features = ["reqwest", "rustls-tls"] }
 url = "2.5"
+hickory-resolver = "0.26"
 base64 = "0.22"
 urlencoding = "2.1"
 chrono = { version = "0.4", features = ["serde"] }
