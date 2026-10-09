@@ -34,6 +34,8 @@ dump.rdb
 .claude/
 CLAUDE.md
 .mcp.json
+!plugins/redisctl-mcp/.mcp.json
+plugins/**/__pycache__/
 
 # Temporary stuff
 tmp/

@@ -1,0 +1,12 @@
+{
+  "name": "redisctl-mcp",
+  "version": "0.0.1",
+  "description": "Experimental local Redis management plugin using the Rust redisctl-mcp server.",
+  "author": {
+    "name": "Redis",
+    "url": "https://github.com/redis/redisctl"
+  },
+  "homepage": "https://redis.github.io/redisctl/mcp/",
+  "repository": "https://github.com/redis/redisctl",
+  "license": "MIT OR Apache-2.0"
+}

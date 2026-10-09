@@ -1,0 +1,22 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "redisctl-mcp",
+  "version": "0.0.1",
+  "description": "Experimental local Redis management plugin using the Rust redisctl-mcp server.",
+  "author": {
+    "name": "Redis",
+    "url": "https://github.com/redis/redisctl"
+  },
+  "homepage": "https://redis.github.io/redisctl/mcp/",
+  "repository": "https://github.com/redis/redisctl",
+  "license": "MIT OR Apache-2.0",
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./skills/redisctl-setup/SKILL.md",
+      "interface": {
+        "displayName": "redisctl MCP (experimental)",
+        "shortDescription": "Read-only Redis workflows with local profiles"
+      }
+    }
+  }
+}
