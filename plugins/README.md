@@ -59,7 +59,11 @@ plugin; it does not delete profiles or credentials.
 
 The optional Claude marketplace root is `./plugins`, with its catalog at
 `plugins/.claude-plugin/marketplace.json`. Adding/installing from that marketplace
-is a deliberate user action and has not been exercised as part of this spike.
+is a deliberate user action. An isolated macOS fixture has exercised local install,
+native MCP health checking, skill inventory, and uninstall; it did not alter the
+operator's personal Claude state or connect to Redis. Claude Code 2.1.295 reports
+local marketplace packages as reading from the source folder in place, so that
+result is not proof of installed-cache relocation or upgrade behavior.
 
 ## Local Codex: repository marketplace
 
@@ -104,6 +108,7 @@ claude plugin validate ./plugins/redisctl-mcp --strict --json
 claude plugin validate ./plugins/.claude-plugin/marketplace.json --strict --json
 claude --plugin-dir ./plugins/redisctl-mcp plugin details redisctl-mcp
 python3 plugins/tests/inspect_codex.py
+python3 plugins/tests/inspect_claude.py --binary target/debug/redisctl-mcp
 ```
 
 To exercise the Rust protocol from both generated configurations:
@@ -124,6 +129,14 @@ Only macOS has local execution evidence so far. Neither harness connects to Redi
 or exercises user credential storage. Inspect-Codex reads only package metadata
 through app-server; it does not start a conversation or MCP connection.
 
+Inspect-Claude installs into a disposable `CLAUDE_CONFIG_DIR` on macOS, checks
+the installed registration with native `mcp list` (without `--plugin-dir`), and
+uninstalls it. Its sandbox denies network, personal client/Redis configuration
+and keychain reads, `/usr/bin/security` execution, and writes outside the fixture.
+It uses bare mode and starts no model request. Canonical fixture paths are required
+for macOS sandbox subpath rules. This script fails rather than running unsandboxed
+or claiming support on another platform.
+
 The hermetic suite also exercises malformed skill sources, drift/missing generated
 files without repair, and a missing executable. Synthetic platform-branch tests
 check that credential/target environment values are stripped, unverified platforms
@@ -138,17 +151,19 @@ Initial checkpoint, 2026-10-09, macOS Apple Silicon:
 | --- | --- |
 | Claude Code 2.1.294 strict manifest + marketplace validation | Pass |
 | Claude inline component inventory | Three native skills, one MCP server, no hooks/agents |
+| Claude disposable local marketplace install → native MCP health → uninstall | Pass on 2.1.295; namespaced installed registration connects, source package preserved |
 | Codex CLI 0.160.1 local `plugin/read` | Three `redisctl-mcp:`-namespaced skills and `redisctl` server discovered |
 | Rust main-based stdio smoke, both generated configs | 69 read-only tools, 11 embedded skills, profile creation rejected |
 | Package moved to a directory containing spaces | Pass in both protocol smokes |
 | Hermetic generation/adapter regression suite | Pass |
 | Pure Rust package policy regression | Pass |
 
-Native inventory and direct protocol launch are separate evidence: these checks
-do **not** prove either client launched the MCP server from an installed plugin,
-executed a skill through a model, or completed onboarding against a real target.
-Fresh client installation, secure setup, real approved connectivity, namespace
-tool invocation, missing-binary UX, installed-cache lifecycle, Linux/Windows,
+Native inventory and direct protocol launch are separate evidence. The Claude
+fixture additionally proves native server startup through a local installed
+registration; it does **not** prove Codex installed-plugin startup, skill execution
+through a model, or onboarding against a real target.
+Secure setup, real approved connectivity, namespace tool invocation,
+missing-binary client UX, installed-cache lifecycle, Linux/Windows,
 independent review and current-head CI remain incomplete. Keep the PR draft.
 
 ## Sources
@@ -156,4 +171,5 @@ independent review and current-head CI remain incomplete. Keep the PR draft.
 - [OpenAI plugin packaging](https://developers.openai.com/plugins/build/plugins)
 - [Codex MCP configuration](https://developers.openai.com/codex/mcp)
 - [Claude plugin components](https://code.claude.com/docs/en/plugins/components)
+- [Claude configuration-directory isolation](https://code.claude.com/docs/en/env-vars)
 - [Agent Plugins schemas](https://agent-plugins.org/schemas/1.0.0/plugin.schema.json)
