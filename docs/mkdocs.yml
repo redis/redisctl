@@ -188,6 +188,7 @@ nav:
       - developer/index.md
       - Architecture: developer/architecture.md
       - Libraries: developer/libraries.md
+      - Auth Layering: developer/auth-layering.md
       - Python Bindings: developer/python.md
       - Contributing: developer/contributing.md
   - Presentation: presentation/index.md
