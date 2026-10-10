@@ -1,6 +1,8 @@
 //! Command alias tools — save and replay named Redis command sequences
 
-use tower_mcp::{CallToolResult, ResultExt};
+use tower_mcp::CallToolResult;
+
+use super::RedisResultExt;
 
 use crate::policy::ToolSafety;
 use crate::tools::macros::{database_tool, mcp_module};
