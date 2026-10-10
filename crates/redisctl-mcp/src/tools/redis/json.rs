@@ -1,6 +1,8 @@
 //! RedisJSON module tools (JSON.GET, JSON.SET, JSON.DEL, JSON.MGET, JSON.TYPE, etc.)
 
-use tower_mcp::{CallToolResult, ResultExt};
+use tower_mcp::CallToolResult;
+
+use super::RedisResultExt;
 
 use super::format_value;
 use crate::serde_helpers;
