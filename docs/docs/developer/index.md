@@ -79,6 +79,13 @@ We welcome contributions:
 
 [:octicons-arrow-right-24: Contributing Guide](contributing.md)
 
+## Public Repository Baseline
+
+The [candidate public repository standard v0.1](public-repository-standard-v0.1.md)
+and [redisctl adoption record](redisctl-adoption.md) document observable quality
+requirements, current evidence and open decisions. They are proposals, not approved
+organization policy or a claim that redisctl is compliant.
+
 ## Links
 
 - [GitHub Repository](https://github.com/redis/redisctl)

@@ -190,4 +190,6 @@ nav:
       - Libraries: developer/libraries.md
       - Python Bindings: developer/python.md
       - Contributing: developer/contributing.md
+      - Public Repository Standard (Candidate): developer/public-repository-standard-v0.1.md
+      - Redisctl Adoption Record: developer/redisctl-adoption.md
   - Presentation: presentation/index.md
