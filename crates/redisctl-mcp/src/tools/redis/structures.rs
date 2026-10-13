@@ -841,6 +841,12 @@ database_tool!(read_only, zrangebyscore, "redis_zrangebyscore",
         #[serde(default, deserialize_with = "serde_helpers::string_or_opt_i64::deserialize")]
         pub count: Option<i64>,
     } => |conn, input| {
+        if input.offset.is_some() != input.count.is_some() {
+            return Err(tower_mcp::Error::tool(
+                "offset and count must be provided together for pagination",
+            ));
+        }
+
         let mut cmd = redis::cmd("ZRANGEBYSCORE");
         cmd.arg(&input.key).arg(&input.min).arg(&input.max);
 

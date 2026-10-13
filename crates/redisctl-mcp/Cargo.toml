@@ -45,6 +45,10 @@ required-features = ["database", "test-support"]
 name = "expire_ttl_guard"
 required-features = ["database", "test-support"]
 
+[[test]]
+name = "zrange_pagination"
+required-features = ["database", "test-support"]
+
 [dependencies]
 # MCP framework
 tower-mcp = { version = "0.23.2", features = ["http", "dynamic-tools"] }
