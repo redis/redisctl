@@ -1347,15 +1347,23 @@ database_tool!(write, xadd, "redis_xadd",
             cmd.arg(field).arg(value);
         }
 
-        let entry_id: String = cmd
+        // XADD returns nil (not an error) when NOMKSTREAM is set and the stream
+        // does not exist.
+        let entry_id: Option<String> = cmd
             .query_async(&mut conn)
             .await
             .tool_context("XADD failed")?;
 
-        Ok(CallToolResult::text(format!(
-            "OK - added entry {} to stream '{}'",
-            entry_id, input.key
-        )))
+        match entry_id {
+            Some(entry_id) => Ok(CallToolResult::text(format!(
+                "OK - added entry {} to stream '{}'",
+                entry_id, input.key
+            ))),
+            None => Ok(CallToolResult::text(format!(
+                "No entry added: stream '{}' does not exist and nomkstream was set",
+                input.key
+            ))),
+        }
     }
 );
 
