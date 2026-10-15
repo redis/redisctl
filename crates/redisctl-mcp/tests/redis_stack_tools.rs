@@ -27,6 +27,7 @@ use tower_mcp::Tool;
 
 use redisctl_mcp::tools::redis;
 use redisctl_mcp::{AppState, CredentialSource, Policy, PolicyConfig, SafetyTier, ToolsetKind};
+use support::docker_fixture::{FixtureStage, fixture_error};
 use support::{database_state_full, database_state_readonly};
 
 // ============================================================================
@@ -61,12 +62,12 @@ async fn get_redis_stack() -> anyhow::Result<&'static RedisStackTestContext> {
                 .stop_timeout(Duration::from_secs(10))
                 .start()
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to start container: {}", e))?;
+                .map_err(|e| fixture_error(FixtureStage::StackStart, e))?;
 
             let port = guard
                 .host_port(6379)
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to get port: {}", e))?;
+                .map_err(|e| fixture_error(FixtureStage::StackPort, e))?;
 
             Ok(RedisStackTestContext {
                 _guard: guard,
