@@ -31,6 +31,10 @@ const BUNDLED: &[(&str, &str)] = &[
         include_str!("../skills/enterprise-health-check/SKILL.md"),
     ),
     (
+        "expert-search",
+        include_str!("../skills/expert-search/SKILL.md"),
+    ),
+    (
         "index-ab-test",
         include_str!("../skills/index-ab-test/SKILL.md"),
     ),
@@ -196,6 +200,176 @@ pub(crate) fn register(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_workflows_link_to_embedded_expertise() {
+        let entries = catalog(None).unwrap();
+        assert_eq!(entries["expert-search"].source, "bundled");
+        for name in ["index-advisor", "query-tuning"] {
+            assert!(entries[name].markdown.contains("../expert-search/SKILL.md"));
+            assert!(
+                entries[name]
+                    .markdown
+                    .contains("redisctl://skills/expert-search")
+            );
+        }
+    }
+
+    #[cfg(feature = "database")]
+    mod search_examples {
+        use super::*;
+        use crate::tools::redis::{
+            FtAggregateInput, FtExplainInput, FtInfoInput, FtProfileInput, FtSearchInput,
+        };
+        use serde::de::DeserializeOwned;
+        use serde_json::{Value, json};
+
+        // Deserialization alone is insufficient: older inputs silently ignore
+        // unknown fields. Check declared schema properties independently first.
+        fn validate_arguments<T: schemars::JsonSchema + DeserializeOwned>(
+            args: &Value,
+        ) -> Result<()> {
+            let schema = serde_json::to_value(schemars::schema_for!(T))?;
+            let properties = schema["properties"]
+                .as_object()
+                .context("Missing properties")?;
+            let args_object = args.as_object().context("Arguments must be an object")?;
+            for field in args_object.keys() {
+                if !properties.contains_key(field) {
+                    bail!("Undeclared example input: {field}");
+                }
+            }
+            let _: T = serde_json::from_value(args.clone())?;
+            Ok(())
+        }
+
+        fn validate_example(example: &Value) -> Result<()> {
+            let envelope = example.as_object().context("Example must be an object")?;
+            if envelope.len() != 2 || !envelope.contains_key("arguments") {
+                bail!("Expected name and arguments only");
+            }
+            let args = &example["arguments"];
+            match example["name"].as_str().context("Missing tool name")? {
+                "redis_ft_info" => validate_arguments::<FtInfoInput>(args),
+                "redis_ft_search" => validate_arguments::<FtSearchInput>(args),
+                "redis_ft_aggregate" => validate_arguments::<FtAggregateInput>(args),
+                "redis_ft_explain" => validate_arguments::<FtExplainInput>(args),
+                "redis_ft_profile" => {
+                    validate_arguments::<FtProfileInput>(args)?;
+                    if !matches!(args["command"].as_str(), Some("SEARCH" | "AGGREGATE")) {
+                        bail!("Unsupported profile command");
+                    }
+                    Ok(())
+                }
+                _ => bail!("Unexpected tool in Search reference"),
+            }
+        }
+
+        fn examples() -> Vec<Value> {
+            let entries = catalog(None).unwrap();
+            entries["expert-search"]
+                .markdown
+                .split("```json\n")
+                .skip(1)
+                .map(|block| {
+                    let (json, _) = block.split_once("\n```").expect("Unclosed JSON example");
+                    serde_json::from_str(json).expect("Invalid JSON example")
+                })
+                .collect()
+        }
+
+        #[test]
+        fn bundled_search_examples_match_real_input_properties_and_types() {
+            let examples = examples();
+            let names = examples
+                .iter()
+                .map(|e| e["name"].as_str().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                names,
+                [
+                    "redis_ft_info",
+                    "redis_ft_search",
+                    "redis_ft_explain",
+                    "redis_ft_aggregate",
+                    "redis_ft_profile"
+                ]
+            );
+            for example in examples {
+                validate_example(&example).unwrap();
+                // Examples must not silently override the operator's target.
+                assert!(example["arguments"].get("url").is_none());
+                assert!(example["arguments"].get("profile").is_none());
+            }
+        }
+
+        #[test]
+        fn example_validation_rejects_invented_fields_and_invalid_shapes() {
+            for (name, field) in [
+                ("redis_ft_search", "dialect"),
+                ("redis_ft_search", "params"),
+                ("redis_ft_search", "timeout"),
+                ("redis_ft_aggregate", "group_by"),
+                ("redis_ft_aggregate", "reduce"),
+                ("redis_ft_explain", "dialect"),
+                ("redis_ft_profile", "limit_num"),
+            ] {
+                let mut example = examples().into_iter().find(|e| e["name"] == name).unwrap();
+                example["arguments"][field] = json!(2);
+                let error = validate_example(&example).unwrap_err().to_string();
+                assert!(
+                    error.contains("Undeclared example input"),
+                    "{name}/{field}: {error}"
+                );
+            }
+            for example in [
+                json!({"name":"redis_ft_search", "arguments":{"index":"demo"}}),
+                json!({"name":"redis_ft_search", "arguments":{"index":"demo", "query":5}}),
+                json!({"name":"redis_ft_aggregate", "arguments":{"index":"demo", "query":"*", "raw_args":[1]}}),
+                json!({"name":"redis_ft_profile", "arguments":{"index":"demo", "query":"*", "command":"HYBRID"}}),
+                json!({"name":"redis_ft_create", "arguments":{"index":"demo"}}),
+                json!({"name":"redis_ft_info", "arguments":{"index":"demo"}, "extra":true}),
+            ] {
+                assert!(validate_example(&example).is_err(), "{example}");
+            }
+        }
+
+        #[test]
+        fn examples_preserve_escaping_pagination_and_count_pipeline() {
+            let examples = examples();
+            let search = &examples
+                .iter()
+                .find(|e| e["name"] == "redis_ft_search")
+                .unwrap()["arguments"];
+            assert_eq!(search["query"], "@tags:{usb\\-c} @price:[50 200]");
+            assert_eq!(search["limit_offset"], 0);
+            assert_eq!(search["limit_num"], 5);
+            let aggregate = &examples
+                .iter()
+                .find(|e| e["name"] == "redis_ft_aggregate")
+                .unwrap()["arguments"];
+            assert_eq!(aggregate["load_fields"], json!(["@category"]));
+            assert_eq!(
+                aggregate["raw_args"],
+                json!([
+                    "GROUPBY",
+                    "1",
+                    "@category",
+                    "REDUCE",
+                    "COUNT",
+                    "0",
+                    "AS",
+                    "count",
+                    "SORTBY",
+                    "2",
+                    "@count",
+                    "DESC"
+                ])
+            );
+            assert_eq!(aggregate["limit_offset"], 0);
+            assert_eq!(aggregate["limit_num"], 5);
+        }
+    }
 
     #[test]
     fn embedded_catalog_matches_skill_directories() {

@@ -108,7 +108,10 @@ async fn copied_binary_discovers_reads_and_prompts_for_embedded_setup() {
     .await;
     let index: Value =
         serde_json::from_str(index["contents"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(index["skills"].as_array().unwrap().len(), 11);
+    assert_eq!(index["skills"].as_array().unwrap().len(), 12);
+    assert!(index["skills"].as_array().unwrap().iter().any(|s| {
+        s["name"] == "expert-search" && s["uri"] == "redisctl://skills/expert-search"
+    }));
     assert!(
         !index["available_tools"]
             .as_array()
