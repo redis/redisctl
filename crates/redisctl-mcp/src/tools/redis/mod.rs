@@ -180,6 +180,42 @@ pub(crate) fn format_value(v: &redis::Value) -> String {
     }
 }
 
+/// Render a Redis error the way the server sent it.
+///
+/// `redis-rs` splits every error reply on the first space and treats the first
+/// word as an error code. That is right for `ERR ...` and `WRONGTYPE ...`, but
+/// module errors are often plain sentences ("No such index", "Syntax error at
+/// offset 8"), so its `Display` output becomes "No: such index". Rebuilding
+/// `code detail` restores the original text for both cases. Errors without a
+/// server code (I/O, type conversion, client-side) keep their `Display` form.
+pub(crate) fn describe_redis_error(err: &redis::RedisError) -> String {
+    match (err.code(), err.detail()) {
+        (Some(code), Some(detail)) => format!("{code} {detail}"),
+        (Some(code), None) => code.to_string(),
+        _ => err.to_string(),
+    }
+}
+
+/// `tool_context` for Redis results that formats the server error faithfully.
+///
+/// Shadows `tower_mcp::ResultExt::tool_context` inside the Redis tool modules so
+/// every handler gets the readable form without per-call changes.
+pub(crate) trait RedisResultExt<T> {
+    fn tool_context(self, context: impl Into<String>) -> Result<T, tower_mcp::Error>;
+}
+
+impl<T> RedisResultExt<T> for Result<T, redis::RedisError> {
+    fn tool_context(self, context: impl Into<String>) -> Result<T, tower_mcp::Error> {
+        self.map_err(|err| {
+            tower_mcp::Error::Tool(ToolError::new(format!(
+                "{}: {}",
+                context.into(),
+                describe_redis_error(&err)
+            )))
+        })
+    }
+}
+
 /// Build an MCP sub-router containing all Redis database tools
 pub fn router(state: Arc<AppState>) -> McpRouter {
     McpRouter::new()
@@ -192,4 +228,73 @@ pub fn router(state: Arc<AppState>) -> McpRouter {
         .merge(bulk::router(state.clone()))
         .merge(raw::router(state.clone()))
         .merge(aliases::router(state))
+}
+
+#[cfg(test)]
+mod error_format_tests {
+    use super::describe_redis_error;
+
+    /// Build a `RedisError` exactly as the client would from a raw `-...` reply line.
+    fn server_error(line: &str) -> redis::RedisError {
+        let raw = format!("-{line}\r\n");
+        redis::parse_redis_value(raw.as_bytes())
+            .expect("error line parses as a value")
+            .extract_error()
+            .expect_err("error reply becomes an error")
+    }
+
+    #[test]
+    fn module_errors_keep_their_first_word() {
+        for line in [
+            "No such index idx:nope",
+            "Syntax error at offset 8 near abc",
+            "Not a tag field",
+            "Index already exists",
+            "idx:nope: no such index",
+            "Existing key has wrong Redis type",
+        ] {
+            let err = server_error(line);
+            assert_ne!(
+                err.to_string(),
+                line,
+                "precondition: redis-rs mangles {line:?}"
+            );
+            assert_eq!(describe_redis_error(&err), line);
+        }
+    }
+
+    #[test]
+    fn core_errors_are_the_original_server_text() {
+        let err = server_error("ERR value is not an integer or out of range");
+        assert_eq!(
+            describe_redis_error(&err),
+            "ERR value is not an integer or out of range"
+        );
+
+        let err = server_error("WRONGTYPE Operation against a key holding the wrong kind of value");
+        assert_eq!(
+            describe_redis_error(&err),
+            "WRONGTYPE Operation against a key holding the wrong kind of value"
+        );
+
+        let err = server_error("NOAUTH Authentication required.");
+        assert_eq!(
+            describe_redis_error(&err),
+            "NOAUTH Authentication required."
+        );
+    }
+
+    #[test]
+    fn client_side_errors_fall_back_to_display() {
+        let err = redis::RedisError::from((
+            redis::ErrorKind::TypeError,
+            "Response was of incompatible type",
+            "expected string".to_string(),
+        ));
+        assert_eq!(describe_redis_error(&err), err.to_string());
+
+        let io = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused");
+        let err = redis::RedisError::from(io);
+        assert_eq!(describe_redis_error(&err), err.to_string());
+    }
 }

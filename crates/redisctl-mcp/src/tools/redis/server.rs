@@ -2,7 +2,9 @@
 //! config_get, memory_stats, latency_history, acl_list, acl_whoami, module_list,
 //! config_set, flushdb)
 
-use tower_mcp::{CallToolResult, ResultExt};
+use tower_mcp::CallToolResult;
+
+use super::RedisResultExt;
 
 use crate::serde_helpers;
 use crate::tools::macros::{database_tool, mcp_module};

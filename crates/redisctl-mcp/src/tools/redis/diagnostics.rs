@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
-use tower_mcp::{CallToolResult, ResultExt};
+use tower_mcp::CallToolResult;
+
+use super::RedisResultExt;
 
 use crate::serde_helpers;
 use crate::tools::macros::{database_tool, mcp_module};

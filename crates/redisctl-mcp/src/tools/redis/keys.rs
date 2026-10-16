@@ -3,7 +3,9 @@
 //! unlink, copy, dump, restore, randomkey, touch, incr, decr, append, strlen, getrange, setrange,
 //! setnx)
 
-use tower_mcp::{CallToolResult, ResultExt};
+use tower_mcp::CallToolResult;
+
+use super::RedisResultExt;
 
 use super::format_value;
 use crate::serde_helpers;
