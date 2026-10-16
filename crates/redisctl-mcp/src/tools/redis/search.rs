@@ -26,6 +26,7 @@ fn format_kv_pairs(values: &[redis::Value]) -> Vec<String> {
 
 /// Field definition for FT.CREATE and FT.ALTER schema definitions.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FieldDefinition {
     /// Field name (or JSONPath for JSON indexes)
     pub name: String,
@@ -305,47 +306,54 @@ database_tool!(read_only, ft_search, "redis_ft_search",
 );
 
 database_tool!(read_only, ft_aggregate, "redis_ft_aggregate",
-    "Execute an aggregation query against a search index. Use raw_args for complex pipelines. Requires the RediSearch module.\n\n\
+    "Execute an aggregation query against a search index. Requires the RediSearch module.\n\n\
+     An aggregation needs a pipeline: set group_by/reduce, load_fields, sort_by, or raw_args. \
+     Calling with only index and query is rejected.\n\n\
+     Structured pipeline (preferred):\n\
+     - group_by: fields to group on, e.g. [\"@category\"] ([] groups everything into one row)\n\
+     - reduce: one reducer per entry, e.g. [\"COUNT 0 AS count\", \"AVG 1 @price AS avg_price\"]\n\
+     - sort_by: SORTBY arguments, e.g. [\"@count\", \"DESC\"]\n\
+     - load_fields: document fields to load when not grouping\n\n\
+     raw_args appends any other FT.AGGREGATE steps after GROUPBY/REDUCE and before SORTBY, e.g. \
+     [\"APPLY\", \"@price * 1.1\", \"AS\", \"price_with_tax\"] or [\"FILTER\", \"@count > 5\"].\n\n\
      Architectural note: FT.AGGREGATE can replace client-side fan-out queries across many keys \
      with a single server-side aggregation. If you're doing SCAN + filter + reduce, an \
-     aggregation pipeline is likely simpler and faster.\n\nCommon raw_args patterns:\n- Group by field: `[\"GROUPBY\", \"1\", \"@category\", \"REDUCE\", \"COUNT\", \"0\", \"AS\", \"count\"]`\n- Average: `[\"GROUPBY\", \"1\", \"@category\", \"REDUCE\", \"AVG\", \"1\", \"@price\", \"AS\", \"avg_price\"]`\n- Sort results: `[\"SORTBY\", \"2\", \"@count\", \"DESC\"]`\n- Computed field: `[\"APPLY\", \"@price * 1.1\", \"AS\", \"price_with_tax\"]`\n\nChain multiple pipeline steps in a single raw_args array.",
+     aggregation pipeline is likely simpler and faster.",
     {
         /// Index name
         pub index: String,
         /// Search query (use "*" for all documents)
         pub query: String,
-        /// Fields to load from the document
+        /// Fields to load from the document (LOAD)
         #[serde(default)]
         pub load_fields: Option<Vec<String>>,
+        /// Fields to group by (GROUPBY). Use an empty list to aggregate all results into one row.
+        #[serde(default)]
+        pub group_by: Option<Vec<String>>,
+        /// Reducers, one per entry, as "FUNC nargs args... AS alias"
+        /// (e.g. "COUNT 0 AS count", "AVG 1 @price AS avg_price"). Requires group_by.
+        #[serde(default)]
+        pub reduce: Option<Vec<String>>,
+        /// SORTBY arguments (e.g. ["@count", "DESC"]). Applied after raw_args.
+        #[serde(default)]
+        pub sort_by: Option<Vec<String>>,
         /// Result offset for pagination
         #[serde(default, deserialize_with = "serde_helpers::string_or_opt_u64::deserialize")]
         pub limit_offset: Option<u64>,
         /// Number of results to return
         #[serde(default, deserialize_with = "serde_helpers::string_or_opt_u64::deserialize")]
         pub limit_num: Option<u64>,
-        /// Additional raw arguments for complex pipelines (for example,
-        /// `["GROUPBY", "1", "@city", "REDUCE", "COUNT", "0", "AS", "count"]`)
+        /// Additional raw FT.AGGREGATE arguments (APPLY, FILTER, ...). Appended after
+        /// GROUPBY/REDUCE and before SORTBY.
         #[serde(default)]
         pub raw_args: Option<Vec<String>>,
     } => |conn, input| {
+        let args = build_aggregate_args(&input).map_err(McpError::tool)?;
+
         let mut cmd = redis::cmd("FT.AGGREGATE");
         cmd.arg(&input.index).arg(&input.query);
-
-        if let Some(ref fields) = input.load_fields {
-            cmd.arg("LOAD").arg(fields.len());
-            for f in fields {
-                cmd.arg(f);
-            }
-        }
-        if let Some(ref args) = input.raw_args {
-            for arg in args {
-                cmd.arg(arg);
-            }
-        }
-        if input.limit_offset.is_some() || input.limit_num.is_some() {
-            cmd.arg("LIMIT")
-                .arg(input.limit_offset.unwrap_or(0))
-                .arg(input.limit_num.unwrap_or(10));
+        for arg in &args {
+            cmd.arg(arg);
         }
 
         let result: Vec<redis::Value> = cmd
@@ -353,14 +361,12 @@ database_tool!(read_only, ft_aggregate, "redis_ft_aggregate",
             .await
             .tool_context("FT.AGGREGATE failed")?;
 
-        if result.is_empty() {
-            return Ok(CallToolResult::text("No results"));
-        }
+        // The first element of a non-cursor FT.AGGREGATE reply is not a reliable
+        // total (it is 1 for pipelines without GROUPBY), so report the rows we got.
+        let rows = result.iter().skip(1);
+        let mut output = format!("Results: {}\n\n", rows.len());
 
-        let total = format_value(&result[0]);
-        let mut output = format!("Total results: {}\n\n", total);
-
-        for (idx, row) in result.iter().skip(1).enumerate() {
+        for (idx, row) in rows.enumerate() {
             output.push_str(&format!("{}. ", idx + 1));
             if let redis::Value::Array(fields) = row {
                 output.push_str(&format_kv_pairs(fields).join(", "));
@@ -373,6 +379,103 @@ database_tool!(read_only, ft_aggregate, "redis_ft_aggregate",
         Ok(CallToolResult::text(output))
     }
 );
+
+/// Prefix a field reference with `@` unless it already has one or is a SORTBY keyword.
+fn field_ref(field: &str) -> String {
+    let trimmed = field.trim();
+    if trimmed.starts_with('@')
+        || matches!(
+            trimmed.to_ascii_uppercase().as_str(),
+            "ASC" | "DESC" | "MAX"
+        )
+    {
+        trimmed.to_string()
+    } else {
+        format!("@{trimmed}")
+    }
+}
+
+/// Build the FT.AGGREGATE arguments that follow `index query`.
+///
+/// Order: LOAD, GROUPBY + REDUCE, raw_args, SORTBY, LIMIT. Returns an error message
+/// when the input describes no pipeline at all, or when `reduce` is given without
+/// `group_by`.
+fn build_aggregate_args(input: &FtAggregateInput) -> Result<Vec<String>, String> {
+    if input.reduce.is_some() && input.group_by.is_none() {
+        return Err(
+            "reduce requires group_by. Use group_by=[] to reduce over all results.".to_string(),
+        );
+    }
+
+    let has_pipeline = input.load_fields.is_some()
+        || input.group_by.is_some()
+        || input.sort_by.is_some()
+        || input.raw_args.as_ref().is_some_and(|args| !args.is_empty());
+    if !has_pipeline {
+        return Err(
+            "FT.AGGREGATE needs a pipeline. Set group_by (with reduce) to aggregate, \
+             load_fields to project document fields, sort_by to order, or raw_args for \
+             other steps. Example: group_by=[\"@category\"], reduce=[\"COUNT 0 AS count\"]. \
+             For a plain document search use redis_ft_search."
+                .to_string(),
+        );
+    }
+
+    let mut args: Vec<String> = Vec::new();
+
+    if let Some(fields) = &input.load_fields {
+        args.push("LOAD".into());
+        args.push(fields.len().to_string());
+        args.extend(fields.iter().cloned());
+    }
+
+    if let Some(fields) = &input.group_by {
+        args.push("GROUPBY".into());
+        args.push(fields.len().to_string());
+        args.extend(fields.iter().map(|f| field_ref(f)));
+        for (i, reducer) in input.reduce.iter().flatten().enumerate() {
+            let mut tokens = reducer.split_whitespace().peekable();
+            if tokens
+                .peek()
+                .is_some_and(|t| t.eq_ignore_ascii_case("REDUCE"))
+            {
+                tokens.next();
+            }
+            let tokens: Vec<&str> = tokens.collect();
+            if tokens.len() < 2 {
+                return Err(format!(
+                    "reduce[{i}] '{reducer}' must be 'FUNC nargs args... AS alias', \
+                     e.g. 'COUNT 0 AS count' or 'AVG 1 @price AS avg_price'"
+                ));
+            }
+            args.push("REDUCE".into());
+            args.extend(tokens.iter().map(|t| t.to_string()));
+        }
+    }
+
+    if let Some(raw) = &input.raw_args {
+        args.extend(raw.iter().cloned());
+    }
+
+    if let Some(sort) = &input.sort_by {
+        if sort.is_empty() {
+            return Err(
+                "sort_by must name at least one field, e.g. [\"@count\", \"DESC\"]".to_string(),
+            );
+        }
+        args.push("SORTBY".into());
+        args.push(sort.len().to_string());
+        args.extend(sort.iter().map(|f| field_ref(f)));
+    }
+
+    if input.limit_offset.is_some() || input.limit_num.is_some() {
+        args.push("LIMIT".into());
+        args.push(input.limit_offset.unwrap_or(0).to_string());
+        args.push(input.limit_num.unwrap_or(10).to_string());
+    }
+
+    Ok(args)
+}
 
 database_tool!(read_only, ft_explain, "redis_ft_explain",
     "Get the execution plan for a search query. Useful for understanding and optimizing queries. Requires the RediSearch module.",
@@ -861,3 +964,137 @@ database_tool!(write, ft_dictdel, "redis_ft_dictdel",
         )))
     }
 );
+
+#[cfg(test)]
+mod tests {
+    use super::{FtAggregateInput, build_aggregate_args};
+
+    fn input(json: serde_json::Value) -> Result<FtAggregateInput, serde_json::Error> {
+        serde_json::from_value(json)
+    }
+
+    #[test]
+    fn group_by_and_reduce_build_a_pipeline() {
+        let input = input(serde_json::json!({
+            "index": "idx", "query": "*",
+            "group_by": ["category"],
+            "reduce": ["COUNT 0 AS count", "REDUCE AVG 1 @price AS avg_price"],
+            "sort_by": ["count", "DESC"],
+            "limit_num": 5
+        }))
+        .unwrap();
+        let args = build_aggregate_args(&input).unwrap();
+        assert_eq!(
+            args,
+            [
+                "GROUPBY",
+                "1",
+                "@category",
+                "REDUCE",
+                "COUNT",
+                "0",
+                "AS",
+                "count",
+                "REDUCE",
+                "AVG",
+                "1",
+                "@price",
+                "AS",
+                "avg_price",
+                "SORTBY",
+                "2",
+                "@count",
+                "DESC",
+                "LIMIT",
+                "0",
+                "5",
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_group_by_reduces_over_everything() {
+        let input = input(serde_json::json!({
+            "index": "idx", "query": "*", "group_by": [], "reduce": ["COUNT 0 AS total"]
+        }))
+        .unwrap();
+        let args = build_aggregate_args(&input).unwrap();
+        assert_eq!(
+            args,
+            ["GROUPBY", "0", "REDUCE", "COUNT", "0", "AS", "total"]
+        );
+    }
+
+    #[test]
+    fn raw_args_sit_between_group_and_sort() {
+        let input = input(serde_json::json!({
+            "index": "idx", "query": "*",
+            "load_fields": ["name", "price"],
+            "raw_args": ["APPLY", "@price * 1.1", "AS", "with_tax"],
+            "sort_by": ["@with_tax", "DESC"]
+        }))
+        .unwrap();
+        let args = build_aggregate_args(&input).unwrap();
+        assert_eq!(
+            args,
+            [
+                "LOAD",
+                "2",
+                "name",
+                "price",
+                "APPLY",
+                "@price * 1.1",
+                "AS",
+                "with_tax",
+                "SORTBY",
+                "2",
+                "@with_tax",
+                "DESC",
+            ]
+        );
+    }
+
+    #[test]
+    fn no_pipeline_is_rejected_with_guidance() {
+        let input = input(serde_json::json!({"index": "idx", "query": "*"})).unwrap();
+        let err = build_aggregate_args(&input).unwrap_err();
+        assert!(err.contains("needs a pipeline"), "{err}");
+        assert!(err.contains("group_by"), "{err}");
+    }
+
+    #[test]
+    fn reduce_without_group_by_is_rejected() {
+        let input = input(serde_json::json!({
+            "index": "idx", "query": "*", "reduce": ["COUNT 0 AS count"]
+        }))
+        .unwrap();
+        let err = build_aggregate_args(&input).unwrap_err();
+        assert!(err.contains("reduce requires group_by"), "{err}");
+    }
+
+    #[test]
+    fn malformed_reducer_is_rejected() {
+        let input = input(serde_json::json!({
+            "index": "idx", "query": "*", "group_by": [], "reduce": ["COUNT"]
+        }))
+        .unwrap();
+        let err = build_aggregate_args(&input).unwrap_err();
+        assert!(err.contains("reduce[0]"), "{err}");
+    }
+
+    #[test]
+    fn unknown_input_fields_are_rejected_not_ignored() {
+        // The agent-facing regression behind #1212: a misspelled or invented
+        // parameter must fail loudly instead of silently running a bare command.
+        let err = input(serde_json::json!({
+            "index": "idx", "query": "*", "groupby": ["@category"]
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("unknown field `groupby`"), "{err}");
+        assert!(
+            err.contains("group_by"),
+            "should list accepted fields: {err}"
+        );
+    }
+}

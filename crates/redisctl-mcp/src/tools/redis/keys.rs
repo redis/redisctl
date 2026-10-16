@@ -525,6 +525,7 @@ database_tool!(read_only, mget, "redis_mget",
 
 /// A key-value pair for MSET
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct KeyValuePair {
     /// Key name
     pub key: String,

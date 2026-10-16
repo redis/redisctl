@@ -10,6 +10,7 @@ use crate::tools::macros::{database_tool, mcp_module};
 
 /// A single Redis command represented as a list of arguments.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Command {
     /// Redis command arguments (e.g. ["SET", "key", "value"] or ["ZADD", "myset", "1.0", "member"])
     pub args: Vec<String>,
@@ -17,6 +18,7 @@ pub struct Command {
 
 /// A field-value pair for hash seeding.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FieldValue {
     /// Field name (supports {i} substitution)
     pub name: String,
