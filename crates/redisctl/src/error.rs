@@ -293,6 +293,7 @@ impl RedisCtlError {
             ],
             RedisCtlError::OverwriteCancelled { .. } => vec![
                 "Choose a different output file with --file".to_string(),
+                "Re-run with --force to skip only overwrite confirmation, or --skip-checks to skip all pre-flight checks".to_string(),
                 "Overwrite confirmation requires an interactive terminal and human-readable output"
                     .to_string(),
             ],
