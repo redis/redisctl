@@ -37,6 +37,10 @@ required-features = ["database", "test-support"]
 name = "redis_tools"
 required-features = ["database", "test-support"]
 
+[[test]]
+name = "json_empty_increment"
+required-features = ["database", "test-support"]
+
 [dependencies]
 # MCP framework
 tower-mcp = { version = "0.23.2", features = ["http", "dynamic-tools"] }

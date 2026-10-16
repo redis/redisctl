@@ -267,6 +267,18 @@ database_tool!(write, json_numincrby, "redis_json_numincrby",
             .await
             .tool_context("JSON.NUMINCRBY failed")?;
 
+        if input.path.starts_with('$')
+            && matches!(
+                serde_json::from_str::<serde_json::Value>(&result),
+                Ok(serde_json::Value::Array(values)) if values.is_empty()
+            )
+        {
+            return Ok(CallToolResult::text(format!(
+                "Nothing incremented: path '{}' matched no values",
+                input.path
+            )));
+        }
+
         Ok(CallToolResult::text(format!(
             "New value at '{}': {}", input.path, result
         )))
