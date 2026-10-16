@@ -183,25 +183,44 @@ record an intentional additive change. Never refresh the fixture solely to make 
 
 ## Release Process
 
-We use a manual release workflow with semantic versioning:
+The [Release-plz workflow](.github/workflows/release-plz.yml) runs on pushes to
+`main` and can be invoked with `workflow_dispatch`. Release-plz maintains the
+release PR, using conventional commits for version selection. Workspace crates
+share a lockstep version. After the approved release PR is merged, release-plz
+handles crate publication and application tags; the
+[cargo-dist workflow](.github/workflows/release.yml) builds the binary archives,
+installers and checksums and creates their GitHub releases.
 
-1. **Trigger Release Workflow**
-   - Go to Actions → "Manual Release" workflow
-   - Click "Run workflow"
-   - Select version bump type (patch/minor/major)
-   - Optionally run in dry-run mode first
+The CLI and MCP server have separate release tags: `redisctl-v<VERSION>` and
+`redisctl-mcp-v<VERSION>`. Do not use a generic `v<VERSION>` tag or the
+repository-wide `latest` release to select an application's installer.
 
-2. **Automated Steps**
-   - Updates all crate versions in workspace
-   - Creates git commit and tag
-   - Publishes to crates.io
-   - Triggers binary builds via cargo-dist
-   - Publishes Docker images
+### Installation Documentation Release Checklist
 
-3. **Version Management**
-   - All workspace crates are versioned in lockstep
-   - Tags follow format: `v{major}.{minor}.{patch}`
-   - Conventional commits guide version selection
+Release-plz updates crate versions and changelogs, not pinned installation
+examples. Review the following alongside every release PR, and complete any
+asset-dependent documentation follow-up once the application releases exist:
+
+- [ ] Check both [CLI installation](docs/docs/getting-started/installation.md)
+      and [MCP getting started](docs/docs/mcp/getting-started.md). Account for every
+      pinned version, release link, installer URL, archive URL and expected
+      `--version` output, not just the first example on each page.
+- [ ] Select each application's published tag and verify the referenced assets
+      exist there. Update the examples together when the new assets are available;
+      until then, retain the explicitly named, last-verified published version
+      rather than linking to nonexistent future assets.
+- [ ] Recheck platform availability against the actual asset lists, including
+      GNU/musl and ARM64 guidance. A workspace version bump alone does not prove
+      that an archive exists for every platform.
+- [ ] Confirm CLI URLs use `redisctl-v<VERSION>` / `redisctl-*` assets and MCP
+      URLs use `redisctl-mcp-v<VERSION>` / `redisctl-mcp-*` assets. Keep the warning
+      about repository-wide `latest` links.
+- [ ] Build the documentation with `cd docs && mkdocs build --strict`. Validate
+      command syntax and published asset references without executing downloaded
+      installers as part of documentation review.
+
+This checklist documents maintenance checks; it does not grant release,
+publication or installer-execution permission.
 
 ## Getting Help
 
