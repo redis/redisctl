@@ -35,10 +35,12 @@ futures = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
+# A user's MCP config keeps its key order when init edits it.
+serde_json = { workspace = true, features = ["preserve_order"] }
 chrono = { workspace = true }
 rpassword = { workspace = true }
 url = { workspace = true }
+hickory-resolver = { workspace = true }
 urlencoding = { workspace = true }
 dialoguer = "0.11"
 colored = "2.1"
@@ -64,6 +66,8 @@ tower-resilience = { version = "0.1", features = ["circuitbreaker", "retry", "ra
 regex = "1.12.2"
 zip = "6.0.0"
 which = "7"
+uuid = { version = "1", features = ["v4"] }
+reqwest = { workspace = true }
 redis = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]

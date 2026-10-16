@@ -106,6 +106,7 @@ nav:
       - getting-started/index.md
       - Installation: getting-started/installation.md
       - Quick Start: getting-started/quickstart.md
+      - Project Onboarding: getting-started/init.md
       - Authentication: getting-started/authentication.md
       - Docker: getting-started/docker.md
   - Common Features:
