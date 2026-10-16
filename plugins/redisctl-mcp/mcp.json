@@ -1,0 +1,18 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "redisctl": {
+      "type": "stdio",
+      "command": "redisctl-mcp",
+      "args": [
+        "--transport",
+        "stdio",
+        "--read-only=true",
+        "--policy",
+        "${PLUGIN_ROOT}/read-only.toml",
+        "--tools",
+        "cloud,enterprise,database,app"
+      ]
+    }
+  }
+}

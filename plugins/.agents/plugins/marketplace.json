@@ -1,0 +1,12 @@
+{
+  "name": "redisctl-experimental",
+  "interface": {"displayName": "redisctl Experimental Plugins"},
+  "plugins": [
+    {
+      "name": "redisctl-mcp",
+      "source": {"source": "local", "path": "./redisctl-mcp"},
+      "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+      "category": "Developer tools"
+    }
+  ]
+}

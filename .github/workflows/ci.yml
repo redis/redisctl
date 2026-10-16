@@ -50,6 +50,11 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Check experimental plugin generation and packaging
+        run: |
+          python3 plugins/build_plugin.py --check
+          python3 -m unittest discover -s plugins/tests -p 'test_*.py' -v
+
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
