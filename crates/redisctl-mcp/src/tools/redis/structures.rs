@@ -136,8 +136,8 @@ database_tool!(read_only, lrange, "redis_lrange",
 
         if result.is_empty() {
             return Ok(CallToolResult::text(format!(
-                "(empty list or key '{}' not found)",
-                input.key
+                "No list elements returned for '{}' in range [{}, {}]",
+                input.key, input.start, input.stop
             )));
         }
 
@@ -325,7 +325,10 @@ database_tool!(read_only, xrange, "redis_xrange",
         // Format stream entries
         let formatted = match &result {
             redis::Value::Array(entries) if entries.is_empty() => {
-                format!("(empty stream or key '{}' not found)", input.key)
+                format!(
+                    "No stream entries returned for '{}' in range [{}, {}]",
+                    input.key, input.start, input.end
+                )
             }
             redis::Value::Array(entries) => {
                 let mut output =

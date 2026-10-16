@@ -22,6 +22,10 @@ name = "cloud_tools"
 required-features = ["cloud", "test-support"]
 
 [[test]]
+name = "empty_range_replies"
+required-features = ["database", "test-support"]
+
+[[test]]
 name = "enterprise_mcp_docker_integration_tests"
 required-features = ["enterprise", "test-support"]
 
