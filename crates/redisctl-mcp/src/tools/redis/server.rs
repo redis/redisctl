@@ -56,7 +56,11 @@ database_tool!(read_only, info, "redis_info",
             .await
             .tool_context("INFO failed")?;
 
-        Ok(CallToolResult::text(info))
+        Ok(CallToolResult::text(if info.is_empty() {
+            "(no INFO data returned)".to_string()
+        } else {
+            info
+        }))
     }
 );
 

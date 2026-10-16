@@ -854,7 +854,11 @@ database_tool!(read_only, getrange, "redis_getrange",
             .await
             .tool_context("GETRANGE failed")?;
 
-        Ok(CallToolResult::text(value))
+        Ok(CallToolResult::text(if value.is_empty() {
+            "(empty string)".to_string()
+        } else {
+            value
+        }))
     }
 );
 
