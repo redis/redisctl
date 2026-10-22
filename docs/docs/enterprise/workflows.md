@@ -17,6 +17,8 @@ This:
 2. Configures the cluster name
 3. Waits for initialization
 
+When the workflow creates the default database, it discovers the Redis version to request from the cluster. If the cluster does not advertise one (for example, right after bootstrap on some releases), the workflow prints a note and creates the database with the cluster default instead of failing. Pass `--database-redis-version MAJOR.MINOR` to pin a version; an explicit value skips discovery and is validated strictly.
+
 ## When to Use Workflows
 
 **Use workflows when:**

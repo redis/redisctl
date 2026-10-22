@@ -160,20 +160,25 @@ impl Workflow for InitClusterWorkflow {
                     println!("Creating default database '{}'...", db_name);
                 }
 
-                let selected_version = select_database_redis_version(
+                let selected_version = match select_database_redis_version(
                     &authenticated_client,
                     requested_db_redis_version.as_deref(),
                 )
-                .await?;
-                database_redis_version = Some(selected_version.clone());
+                .await?
+                {
+                    DatabaseVersion::Selected(version) => Some(version),
+                    DatabaseVersion::ClusterDefault { reason } => {
+                        if is_human_output {
+                            eprintln!(
+                                "Note: could not discover the cluster's supported Redis versions ({reason}); creating '{db_name}' with the cluster default. Pass --database-redis-version MAJOR.MINOR to pin one."
+                            );
+                        }
+                        None
+                    }
+                };
+                database_redis_version = selected_version.clone();
 
-                let db_data = json!({
-                    "name": db_name,
-                    "memory_size": db_memory_gb * 1024 * 1024 * 1024,  // Convert GB to bytes
-                    "type": "redis",
-                    "replication": false,
-                    "redis_version": selected_version,
-                });
+                let db_data = database_payload(&db_name, db_memory_gb, selected_version.as_deref());
 
                 let db_result = create_database_strict(&authenticated_client, db_data)
                     .await
@@ -231,8 +236,9 @@ impl Workflow for InitClusterWorkflow {
                 println!("Admin user: {}", username);
                 if database_created {
                     println!("Database: {} ({}GB)", db_name, db_memory_gb);
-                    if let Some(version) = &database_redis_version {
-                        println!("Redis version: {version}");
+                    match &database_redis_version {
+                        Some(version) => println!("Redis version: {version}"),
+                        None => println!("Redis version: cluster default"),
                     }
                 }
                 println!();
@@ -280,16 +286,80 @@ async fn create_database_with_retry_delay(
     }
 }
 
+/// Attempts made to discover the supported Redis version right after bootstrap.
+const VERSION_DISCOVERY_ATTEMPTS: u32 = 3;
+/// Delay between discovery attempts while the API settles.
+const VERSION_DISCOVERY_RETRY_DELAY: Duration = Duration::from_secs(2);
+
+/// Outcome of choosing the Redis version for the default database.
+#[derive(Debug, PartialEq, Eq)]
+enum DatabaseVersion {
+    /// An explicit or discovered MAJOR.MINOR version to send as `redis_version`.
+    Selected(String),
+    /// Nothing usable was discovered; omit `redis_version` and let the cluster choose.
+    ClusterDefault { reason: String },
+}
+
+fn database_payload(name: &str, memory_gb: i64, redis_version: Option<&str>) -> Value {
+    let mut payload = json!({
+        "name": name,
+        "memory_size": memory_gb * 1024 * 1024 * 1024,  // Convert GB to bytes
+        "type": "redis",
+        "replication": false,
+    });
+    if let Some(version) = redis_version {
+        payload["redis_version"] = json!(version);
+    }
+    payload
+}
+
 async fn select_database_redis_version(
     client: &EnterpriseClient,
     requested: Option<&str>,
-) -> Result<String> {
+) -> Result<DatabaseVersion> {
+    select_database_redis_version_with_retry(
+        client,
+        requested,
+        VERSION_DISCOVERY_ATTEMPTS,
+        VERSION_DISCOVERY_RETRY_DELAY,
+    )
+    .await
+}
+
+/// An explicit version is strict; otherwise discovery is best-effort and falls back to the
+/// cluster default after `attempts` tries, `retry_delay` apart.
+async fn select_database_redis_version_with_retry(
+    client: &EnterpriseClient,
+    requested: Option<&str>,
+    attempts: u32,
+    retry_delay: Duration,
+) -> Result<DatabaseVersion> {
     if let Some(requested) = requested {
-        return normalize_major_minor(requested).with_context(|| {
-            format!("Invalid database Redis version '{requested}'; expected MAJOR.MINOR")
-        });
+        return normalize_major_minor(requested)
+            .map(DatabaseVersion::Selected)
+            .with_context(|| {
+                format!("Invalid database Redis version '{requested}'; expected MAJOR.MINOR")
+            });
     }
 
+    let mut reason = String::from("no discovery attempt was made");
+    for attempt in 1..=attempts {
+        match discover_database_redis_version(client).await {
+            Ok(version) => return Ok(DatabaseVersion::Selected(version)),
+            Err(error) => reason = error,
+        }
+        if attempt < attempts {
+            // The API can still be settling right after bootstrap.
+            sleep(retry_delay).await;
+        }
+    }
+    Ok(DatabaseVersion::ClusterDefault { reason })
+}
+
+/// One discovery pass: the cluster default first, then the highest version nodes advertise.
+async fn discover_database_redis_version(
+    client: &EnterpriseClient,
+) -> std::result::Result<String, String> {
     if let Ok(cluster) = client.get_raw("/v1/cluster").await
         && let Some(version) = cluster
             .get("default_provisioned_redis_version")
@@ -302,7 +372,7 @@ async fn select_database_redis_version(
     let nodes = client
         .get_raw("/v1/nodes")
         .await
-        .context("Failed to discover supported database Redis versions")?;
+        .map_err(|error| format!("GET /v1/nodes failed: {error}"))?;
     let mut versions = nodes
         .as_array()
         .into_iter()
@@ -312,9 +382,9 @@ async fn select_database_redis_version(
         .collect::<Vec<_>>();
     versions.sort_by_key(|version| version_tuple(version));
     versions.dedup();
-    versions.pop().context(
-        "Cluster did not advertise a supported database Redis version; pass --database-redis-version MAJOR.MINOR",
-    )
+    versions
+        .pop()
+        .ok_or_else(|| "nodes did not advertise supported_database_versions".to_string())
 }
 
 fn extract_supported_versions(value: &Value) -> Vec<String> {
@@ -480,21 +550,142 @@ mod tests {
             .await;
 
         let client = client(&server);
-        let version = select_database_redis_version(&client, None).await.unwrap();
-        let result = create_database_strict(
-            &client,
-            serde_json::json!({
+        let selection = select_database_redis_version(&client, None).await.unwrap();
+        let version = match selection {
+            DatabaseVersion::Selected(version) => version,
+            other => panic!("expected a discovered version, got {other:?}"),
+        };
+        let result =
+            create_database_strict(&client, database_payload("default-db", 1, Some(&version)))
+                .await
+                .unwrap();
+
+        assert_eq!(result["uid"], 1);
+    }
+
+    #[tokio::test]
+    async fn failed_node_discovery_falls_back_to_cluster_default() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/cluster"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/nodes"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/bdbs"))
+            .and(body_json(serde_json::json!({
+                "name": "default-db",
+                "memory_size": 1_073_741_824_u64,
+                "type": "redis",
+                "replication": false
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"uid": 1})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = client(&server);
+        let selection = select_database_redis_version_with_retry(&client, None, 2, Duration::ZERO)
+            .await
+            .unwrap();
+        let reason = match selection {
+            DatabaseVersion::ClusterDefault { reason } => reason,
+            other => panic!("expected the cluster default fallback, got {other:?}"),
+        };
+        assert!(reason.contains("/v1/nodes"));
+
+        let result = create_database_strict(&client, database_payload("default-db", 1, None))
+            .await
+            .unwrap();
+        assert_eq!(result["uid"], 1);
+    }
+
+    #[tokio::test]
+    async fn nodes_without_supported_versions_fall_back_to_cluster_default() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/cluster"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/nodes"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([{"uid": 1}])))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/bdbs"))
+            .and(body_json(serde_json::json!({
+                "name": "default-db",
+                "memory_size": 1_073_741_824_u64,
+                "type": "redis",
+                "replication": false
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"uid": 1})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = client(&server);
+        let selection = select_database_redis_version_with_retry(&client, None, 2, Duration::ZERO)
+            .await
+            .unwrap();
+        assert!(matches!(selection, DatabaseVersion::ClusterDefault { .. }));
+
+        let result = create_database_strict(&client, database_payload("default-db", 1, None))
+            .await
+            .unwrap();
+        assert_eq!(result["uid"], 1);
+    }
+
+    #[tokio::test]
+    async fn explicit_version_is_sent_without_discovery() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/nodes"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/bdbs"))
+            .and(body_json(serde_json::json!({
                 "name": "default-db",
                 "memory_size": 1_073_741_824_u64,
                 "type": "redis",
                 "replication": false,
-                "redis_version": version,
-            }),
-        )
-        .await
-        .unwrap();
+                "redis_version": "7.4"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"uid": 1})))
+            .expect(1)
+            .mount(&server)
+            .await;
 
+        let client = client(&server);
+        let selection = select_database_redis_version(&client, Some("7.4.2"))
+            .await
+            .unwrap();
+        assert_eq!(selection, DatabaseVersion::Selected("7.4".to_string()));
+
+        let result =
+            create_database_strict(&client, database_payload("default-db", 1, Some("7.4")))
+                .await
+                .unwrap();
         assert_eq!(result["uid"], 1);
+    }
+
+    #[tokio::test]
+    async fn invalid_explicit_version_is_still_an_error() {
+        let server = MockServer::start().await;
+        let error = select_database_redis_version(&client(&server), Some("latest"))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("expected MAJOR.MINOR"));
     }
 
     #[tokio::test]
