@@ -125,15 +125,16 @@ and keeps that command's exit codes.
 
 ## Telemetry
 
-When a telemetry key is configured, each run sends one anonymous usage event: which paths get used (flags as booleans,
-outcome, duration) - never paths, names, URLs, or credentials. The device id is a
-random UUID in `~/.cache/redisctl/id`: it links the runs from one machine and nothing
-else. A notice prints on
-first send. Opt out with `--no-telemetry`, `REDISCTL_INIT_TELEMETRY=0`, or
-`DO_NOT_TRACK=1`. The Amplitude key is read from `REDISCTL_INIT_AMPLITUDE_KEY` at
-runtime, or from the build environment at compile time; a build without one sends
-nothing. `REDISCTL_INIT_TELEMETRY_DEBUG=1` prints the event body and send outcome to
-stderr, or that nothing was shared when no key is set.
+When a telemetry key is configured, the first run on a machine prints a notice and
+sends nothing. From the next run on, each run sends one anonymous usage event to
+Amplitude: which paths get used (flags as booleans, outcome, duration) - never paths,
+names, URLs, or credentials. The device id is a random UUID in
+`~/.cache/redisctl/id`: it links the runs from one machine and nothing else, and a
+machine that cannot save it sends nothing. Opt out with `--no-telemetry`,
+`REDISCTL_INIT_TELEMETRY=0`, or `DO_NOT_TRACK=1`. The Amplitude key is read from
+`REDISCTL_INIT_AMPLITUDE_KEY` at runtime, or from the build environment at compile
+time; a build without one sends nothing. `REDISCTL_INIT_TELEMETRY_DEBUG=1` prints the
+event body and send outcome to stderr, or why nothing was shared.
 
 ## Iris products
 
