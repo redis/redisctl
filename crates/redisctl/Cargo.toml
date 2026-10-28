@@ -20,7 +20,7 @@ path = "src/main.rs"
 
 
 [dependencies]
-redisctl-core = { version = "0.12.1", path = "../redisctl-core" }
+redisctl-core = { version = "0.13.0", path = "../redisctl-core" }
 redis-cloud = { workspace = true, features = ["tower-integration"] }
 redis-enterprise = { workspace = true, features = ["tower-integration"] }
 files-sdk = { workspace = true, optional = true }
@@ -35,10 +35,12 @@ futures = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
+# A user's MCP config keeps its key order when init edits it.
+serde_json = { workspace = true, features = ["preserve_order"] }
 chrono = { workspace = true }
 rpassword = { workspace = true }
 url = { workspace = true }
+hickory-resolver = { workspace = true }
 urlencoding = { workspace = true }
 dialoguer = "0.11"
 colored = "2.1"
@@ -51,7 +53,7 @@ flate2 = { workspace = true }
 
 # Shared utility dependencies
 thiserror = { workspace = true }
-serde_yaml = { workspace = true }
+serde_norway = { workspace = true }
 jpx-core = { workspace = true }
 config = { workspace = true }
 
@@ -62,8 +64,10 @@ keyring = { workspace = true, optional = true }
 tower = { workspace = true }
 tower-resilience = { version = "0.1", features = ["circuitbreaker", "retry", "ratelimiter"] }
 regex = "1.12.2"
-zip = "6.0.0"
+zip = "9"
 which = "7"
+uuid = { version = "1", features = ["v4"] }
+reqwest = { workspace = true }
 redis = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]

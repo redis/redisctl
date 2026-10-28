@@ -40,7 +40,7 @@ fn assert_path(mut command: Command, path: &Path, format: &str) {
         let report: Value = if format == "json" {
             serde_json::from_slice(bytes).unwrap()
         } else {
-            serde_yaml::from_slice(bytes).unwrap()
+            serde_norway::from_slice(bytes).unwrap()
         };
         assert_eq!(report, serde_json::json!({"config_path": path.to_str()}));
     }

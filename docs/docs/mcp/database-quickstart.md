@@ -7,6 +7,10 @@ Get up and running with MCP for Redis database operations in 5 minutes. No Redis
 - A running Redis instance (local, Docker, or remote)
 - redisctl installed ([Installation Guide](../getting-started/installation.md))
 
+For a first agent conversation without customer data, try the
+[synthetic connect and explore demo](demo/index.md). It uses a
+disposable local fixture and an explicit read-only policy.
+
 ## Step 1: Create a Database Profile
 
 === "Profile (Recommended)"

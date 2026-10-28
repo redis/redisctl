@@ -14,6 +14,10 @@ For another version, choose its `redisctl-mcp-v<VERSION>` release and matching
 installer. Avoid the repository-wide "latest" link: the CLI and MCP server are
 released separately, so "latest" may contain only CLI assets.
 
+These are pinned, published-release examples, not automatically updated "latest"
+commands. Maintainers check both installation pages using the
+[release checklist](../developer/contributing.md#installation-documentation-release-checklist).
+
 ```bash
 # macOS / Linux
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/redis/redisctl/releases/download/redisctl-mcp-v0.12.1/redisctl-mcp-installer.sh | sh

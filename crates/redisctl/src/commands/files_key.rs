@@ -94,30 +94,13 @@ pub async fn handle_get(profile: Option<String>) -> Result<()> {
                             .context("Failed to access system keyring")?;
                         match entry.get_password() {
                             Ok(actual_key) => {
-                                println!(
-                                    "Key retrieved: {}...{}",
-                                    &actual_key[..8.min(actual_key.len())],
-                                    if actual_key.len() > 8 {
-                                        &actual_key[actual_key.len() - 4..]
-                                    } else {
-                                        ""
-                                    }
-                                );
+                                println!("Key retrieved: {}", mask_files_key(&actual_key));
                             }
                             Err(e) => println!("⚠️  Failed to retrieve from keyring: {}", e),
                         }
                     }
                 } else {
-                    println!(
-                        "Profile '{}' key: {}...{}",
-                        profile_name,
-                        &key[..8.min(key.len())],
-                        if key.len() > 8 {
-                            &key[key.len() - 4..]
-                        } else {
-                            ""
-                        }
-                    );
+                    println!("Profile '{}' key: {}", profile_name, mask_files_key(key));
                 }
                 return Ok(());
             } else {
@@ -140,29 +123,13 @@ pub async fn handle_get(profile: Option<String>) -> Result<()> {
                     .context("Failed to access system keyring")?;
                 match entry.get_password() {
                     Ok(actual_key) => {
-                        println!(
-                            "Key retrieved: {}...{}",
-                            &actual_key[..8.min(actual_key.len())],
-                            if actual_key.len() > 8 {
-                                &actual_key[actual_key.len() - 4..]
-                            } else {
-                                ""
-                            }
-                        );
+                        println!("Key retrieved: {}", mask_files_key(&actual_key));
                     }
                     Err(e) => println!("⚠️  Failed to retrieve from keyring: {}", e),
                 }
             }
         } else {
-            println!(
-                "Global key: {}...{}",
-                &key[..8.min(key.len())],
-                if key.len() > 8 {
-                    &key[key.len() - 4..]
-                } else {
-                    ""
-                }
-            );
+            println!("Global key: {}", mask_files_key(key));
         }
         return Ok(());
     }
@@ -173,15 +140,7 @@ pub async fn handle_get(profile: Option<String>) -> Result<()> {
         let entry = keyring::Entry::new("redisctl", "files-api-key")
             .context("Failed to access system keyring")?;
         if let Ok(key) = entry.get_password() {
-            println!(
-                "Key found in keyring: {}...{}",
-                &key[..8.min(key.len())],
-                if key.len() > 8 {
-                    &key[key.len() - 4..]
-                } else {
-                    ""
-                }
-            );
+            println!("Key found in keyring: {}", mask_files_key(&key));
             return Ok(());
         }
     }
@@ -193,6 +152,36 @@ pub async fn handle_get(profile: Option<String>) -> Result<()> {
     println!("  redisctl files-key set <key> --profile <name>");
 
     Ok(())
+}
+
+/// Mask a resolved Files.com API key value for display.
+///
+/// Mirrors the MCP profile credential mask policy for literal values: an
+/// empty value renders as `(not set)`, a value of eight or fewer Unicode
+/// scalar values renders as `****`, and a longer value shows its first two
+/// and last two scalar values separated by `...`.
+///
+/// Counting and slicing are done per `char`, never by byte offset, so
+/// multibyte input cannot panic or split a code point. The input must already
+/// be a resolved value; `keyring:` and other references are interpreted by
+/// the caller before the value reaches this function.
+fn mask_files_key(value: &str) -> String {
+    if value.is_empty() {
+        return "(not set)".to_string();
+    }
+    if value.chars().count() <= 8 {
+        return "****".to_string();
+    }
+    let prefix: String = value.chars().take(2).collect();
+    let suffix: String = value
+        .chars()
+        .rev()
+        .take(2)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{prefix}...{suffix}")
 }
 
 /// Handle the files-key remove command
@@ -256,4 +245,99 @@ pub async fn handle_remove(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mask_files_key;
+
+    #[test]
+    fn masks_empty_value_as_not_set() {
+        assert_eq!(mask_files_key(""), "(not set)");
+    }
+
+    #[test]
+    fn masks_short_ascii_values_fully() {
+        for value in ["a", "abc", "abcdefg", "abcdefgh"] {
+            assert_eq!(mask_files_key(value), "****", "value: {value:?}");
+        }
+    }
+
+    #[test]
+    fn masks_ascii_length_boundaries_by_scalar_count() {
+        for (value, expected) in [
+            ("abcdefgh", "****"),
+            ("abcdefghi", "ab...hi"),
+            ("abcdefghijkl", "ab...kl"),
+            ("abcdefghijklm", "ab...lm"),
+        ] {
+            assert_eq!(mask_files_key(value), expected, "value: {value:?}");
+        }
+    }
+
+    #[test]
+    fn masks_multibyte_prefixes_and_suffixes_by_scalar() {
+        for (value, expected) in [
+            ("🔒password", "🔒p...rd"),
+            ("password🔒", "pa...d🔒"),
+            ("épassword", "ép...rd"),
+            ("passwordé", "pa...dé"),
+            ("密碼abcdefgh密碼", "密碼...密碼"),
+        ] {
+            assert_eq!(mask_files_key(value), expected, "value: {value:?}");
+        }
+    }
+
+    #[test]
+    fn masks_short_values_whose_byte_length_exceeds_eight() {
+        // Each of these is more than 8 bytes but at most 8 scalar values, so
+        // the old byte-offset slice would have panicked or leaked; the mask
+        // must treat them as short.
+        for value in ["🔒🔒🔒", "密碼密碼密", "éééééééé", "🔒🔒🔒🔒🔒🔒🔒🔒"]
+        {
+            assert!(value.len() > 8, "value: {value:?}");
+            assert!(value.chars().count() <= 8, "value: {value:?}");
+            assert_eq!(mask_files_key(value), "****", "value: {value:?}");
+        }
+    }
+
+    #[test]
+    fn counts_combining_scalars_individually() {
+        // 'e' followed by U+0301 COMBINING ACUTE ACCENT is two scalar values.
+        let eight_scalars = "e\u{301}".repeat(4);
+        assert_eq!(eight_scalars.chars().count(), 8);
+        assert_eq!(mask_files_key(&eight_scalars), "****");
+
+        let nine_scalars = format!("{eight_scalars}x");
+        assert_eq!(mask_files_key(&nine_scalars), "e\u{301}...\u{301}x");
+
+        assert_eq!(mask_files_key("e\u{301}abcdefgh"), "e\u{301}...gh");
+        assert_eq!(mask_files_key("abcdefghe\u{301}"), "ab...e\u{301}");
+    }
+
+    #[test]
+    fn long_mask_shows_exactly_two_scalars_on_each_side() {
+        assert_eq!(mask_files_key("abcdefghijklmnopqrstuvwxyz"), "ab...yz");
+    }
+
+    #[test]
+    fn never_reveals_full_nonempty_input() {
+        for value in [
+            "a",
+            "abcdefgh",
+            "abcdefghi",
+            "abcdefghijklm",
+            "🔒password",
+            "密碼密碼密",
+            "e\u{301}abcdefgh",
+            "sk-live-0123456789abcdef",
+        ] {
+            let masked = mask_files_key(value);
+            assert!(!masked.is_empty(), "value: {value:?}");
+            assert!(
+                !masked.contains(value),
+                "value: {value:?}, masked: {masked:?}"
+            );
+        }
+    }
 }

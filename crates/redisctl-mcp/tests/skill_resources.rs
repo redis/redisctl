@@ -31,7 +31,8 @@ async fn bundled_resource_index_matches_prompts_and_readable_markdown() {
         serde_json::from_str(result.contents[0].text.as_ref().unwrap()).unwrap();
     assert_eq!(index["schema_version"], 1);
     let skills = index["skills"].as_array().unwrap();
-    assert_eq!(skills.len(), 11);
+    assert_eq!(skills.len(), 12);
+    assert!(skills.iter().any(|s| s["name"] == "expert-search"));
     let prompts = client.list_prompts().await;
     for skill in skills {
         let name = skill["name"].as_str().unwrap();
@@ -46,6 +47,29 @@ async fn bundled_resource_index_matches_prompts_and_readable_markdown() {
         let prompt_json = serde_json::to_string(&prompt).unwrap();
         assert!(prompt_json.contains("redisctl://skills"));
     }
+}
+
+#[tokio::test]
+async fn search_expertise_is_readable_without_search_tools_or_write_permissions() {
+    let mut policy = PolicyConfig::default();
+    policy.tier = SafetyTier::ReadOnly;
+    let mut client = client(policy, &["app"]).await;
+    assert!(
+        client
+            .list_tools()
+            .await
+            .iter()
+            .all(|t| { !t["name"].as_str().unwrap().starts_with("redis_ft_") })
+    );
+    let resource = client
+        .read_resource("redisctl://skills/expert-search")
+        .await;
+    let markdown = resource.contents[0].text.as_ref().unwrap();
+    assert!(markdown.contains("advice only"));
+    let prompt = client.get_prompt("expert-search", Default::default()).await;
+    let prompt = serde_json::to_string(&prompt).unwrap();
+    assert!(prompt.contains("never invoke unavailable"));
+    assert!(prompt.contains("do not run"));
 }
 
 #[tokio::test]

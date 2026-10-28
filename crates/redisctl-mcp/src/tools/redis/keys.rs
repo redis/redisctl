@@ -3,7 +3,9 @@
 //! unlink, copy, dump, restore, randomkey, touch, incr, decr, append, strlen, getrange, setrange,
 //! setnx)
 
-use tower_mcp::{CallToolResult, ResultExt};
+use tower_mcp::CallToolResult;
+
+use super::RedisResultExt;
 
 use super::format_value;
 use crate::serde_helpers;
@@ -444,14 +446,22 @@ database_tool!(destructive, del, "redis_del",
 );
 
 database_tool!(write, expire, "redis_expire",
-    "Set a timeout on a key in seconds. Key auto-deletes after expiry.",
+    "Set a timeout on a key in seconds. Key auto-deletes after expiry. \
+     TTL must be positive; 0 or less is refused because Redis would delete the key immediately.",
     {
         /// Key to set expiry on
         pub key: String,
-        /// TTL in seconds
+        /// TTL in seconds (must be positive)
         #[serde(deserialize_with = "serde_helpers::string_or_i64::deserialize")]
         pub seconds: i64,
     } => |conn, input| {
+        super::require_positive_ttl(
+            input.seconds,
+            "the key",
+            "Use redis_del to delete the key or redis_persist to remove an expiry.",
+        )
+        .map_err(tower_mcp::Error::tool)?;
+
         let result: bool = redis::cmd("EXPIRE")
             .arg(&input.key)
             .arg(input.seconds)
@@ -855,7 +865,11 @@ database_tool!(read_only, getrange, "redis_getrange",
             .await
             .tool_context("GETRANGE failed")?;
 
-        Ok(CallToolResult::text(value))
+        Ok(CallToolResult::text(if value.is_empty() {
+            "(empty string)".to_string()
+        } else {
+            value
+        }))
     }
 );
 

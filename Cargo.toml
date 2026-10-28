@@ -15,7 +15,7 @@ default-members = [
 version = "0.4.1"
 
 [workspace.package]
-version = "0.12.1"
+version = "0.13.0"
 edition = "2024"
 rust-version = "1.90"
 authors = ["Josh Rotenberg <josh.rotenberg@redis.com>"]
@@ -76,6 +76,7 @@ rustls = { version = "0.23.32", default-features = false, features = ["aws_lc_rs
 # Standards-compliant OAuth2/OIDC (device grant, auth-code+PKCE, refresh); rustls to match reqwest.
 oauth2 = { version = "5", default-features = false, features = ["reqwest", "rustls-tls"] }
 url = "2.5"
+hickory-resolver = "0.26"
 base64 = "0.22"
 urlencoding = "2.1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -86,7 +87,7 @@ toml = "0.9"
 directories = "6.0"
 
 # Terminal and output
-serde_yaml = "0.9"
+serde_norway = "0.9"
 csv = "1.3"
 jpx-core = "0.2.1"
 
