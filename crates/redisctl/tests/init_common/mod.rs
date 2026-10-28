@@ -114,6 +114,11 @@ pub fn hermetic_redisctl() -> Hermetic {
 }
 
 impl Hermetic {
+    /// The throwaway HOME the run sees.
+    pub fn home(&self) -> &std::path::Path {
+        self.home.path()
+    }
+
     /// The fakes' directory, for a test that sets its own PATH.
     pub fn downloaders(&self) -> std::path::PathBuf {
         self.home.path().join("downloaders")
