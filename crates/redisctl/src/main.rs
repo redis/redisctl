@@ -1292,7 +1292,9 @@ async fn handle_enterprise_workflow_command(
                     .execute(context, args)
                     .await
                     .map_err(|e| RedisCtlError::ApiError {
-                        message: e.to_string(),
+                        // Alternate formatting keeps the cause chain (for example the 401
+                        // behind a discovery failure) instead of only the outermost context.
+                        message: format!("{e:#}"),
                     })?;
 
             if !result.success {
