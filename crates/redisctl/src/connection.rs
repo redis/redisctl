@@ -37,6 +37,15 @@ impl ConnectionManager {
         }
     }
 
+    /// Return the selected configuration path, or the platform default when none was selected.
+    /// Keep the path as supplied: reporting does not require the file to exist.
+    pub fn resolved_config_path(&self) -> CliResult<std::path::PathBuf> {
+        match &self.config_path {
+            Some(path) => Ok(path.clone()),
+            None => Config::config_path().map_err(Into::into),
+        }
+    }
+
     /// Resolve Cloud connection info without creating an HTTP client.
     pub fn resolve_cloud_connection(
         &self,

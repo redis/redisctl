@@ -1,6 +1,8 @@
 //! RediSearch module tools (FT.CREATE, FT.SEARCH, FT.AGGREGATE, FT.INFO, etc.)
 
-use tower_mcp::{CallToolResult, Error as McpError, ResultExt};
+use tower_mcp::{CallToolResult, Error as McpError};
+
+use super::RedisResultExt;
 
 use super::format_value;
 use crate::serde_helpers;

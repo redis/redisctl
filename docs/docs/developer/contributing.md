@@ -153,6 +153,16 @@ async fn test_database_list() {
 
 ## Documentation
 
+### Installation Documentation Release Checklist
+
+The CLI and MCP installation pages contain explicit published-release examples.
+Release-plz does not rewrite those version pins. When reviewing a release PR,
+follow the [installation documentation release checklist](https://github.com/redis/redisctl/blob/main/CONTRIBUTING.md#installation-documentation-release-checklist)
+for both pages, including application-specific tags, asset availability,
+platform guidance and expected version output. Keep the last-verified published
+examples until replacement assets exist; do not change links to an unpublished
+version just because the workspace version has increased.
+
 - User docs: `docs/docs/`
 - API docs: Inline rustdoc comments
 - Build docs: `cargo doc --workspace`

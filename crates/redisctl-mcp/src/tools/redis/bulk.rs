@@ -2,7 +2,9 @@
 
 use std::time::Instant;
 
-use tower_mcp::{CallToolResult, ResultExt};
+use tower_mcp::CallToolResult;
+
+use super::RedisResultExt;
 
 use crate::policy::ToolSafety;
 use crate::serde_helpers;

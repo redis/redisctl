@@ -41,13 +41,21 @@ required-features = ["database", "test-support"]
 name = "redis_tools"
 required-features = ["database", "test-support"]
 
+[[test]]
+name = "empty_read_replies"
+required-features = ["database", "test-support"]
+
+[[test]]
+name = "expire_ttl_guard"
+required-features = ["database", "test-support"]
+
 [dependencies]
 # MCP framework
 tower-mcp = { version = "0.23.2", features = ["http", "dynamic-tools"] }
 schemars = "1.2"
 
 # Internal crates
-redisctl-core = { version = "0.12.1", path = "../redisctl-core" }
+redisctl-core = { version = "0.13.0", path = "../redisctl-core" }
 
 # External API clients (optional, gated by features)
 redis-cloud = { workspace = true, optional = true }
@@ -57,8 +65,9 @@ redis-enterprise = { workspace = true, optional = true }
 redis = { workspace = true, optional = true }
 urlencoding = { workspace = true, optional = true }
 
-# Experimental host integration; immutable revision for coordinated development.
-redis-mcp = { git = "https://github.com/redis-developer/redis-database-mcp-rs", rev = "8eff8240679d38157ee08b9d5e5eaeb656ce7550", default-features = false, features = ["keyspace", "strings"], optional = true }
+# Experimental host integration (the opt-in database-mcp-pilot feature). 0.1.0 is
+# the first release with `validate_redis_target_url` (redis-database-mcp-rs#126).
+redis-mcp = { version = "0.1.0", default-features = false, features = ["keyspace", "strings"], optional = true }
 
 # Policy configuration
 toml = { workspace = true }

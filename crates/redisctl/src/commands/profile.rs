@@ -21,7 +21,7 @@ pub async fn handle_profile_command(
 
     match profile_cmd {
         List { tags } => handle_list(conn_mgr, output_format, tags).await,
-        Path => handle_path(output_format).await,
+        Path => handle_path(conn_mgr, output_format).await,
         Current { r#type } => handle_current(conn_mgr, r#type).await,
         Show { name } => handle_show(conn_mgr, name, output_format).await,
         Set {
@@ -93,15 +93,14 @@ async fn handle_list(
 
     match output_format {
         OutputFormat::Json | OutputFormat::Yaml => {
-            let config_path = conn_mgr
-                .config_path
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string())
-                .or_else(|| {
-                    Config::config_path()
-                        .ok()
-                        .and_then(|p| p.to_str().map(String::from))
-                });
+            let config_path = conn_mgr.resolved_config_path().ok().and_then(|path| {
+                // Preserve legacy output: selected paths are lossy, default paths are strict UTF-8.
+                if conn_mgr.config_path.is_some() {
+                    Some(path.to_string_lossy().to_string())
+                } else {
+                    path.to_str().map(String::from)
+                }
+            });
 
             let profile_list: Vec<serde_json::Value> = profiles
                 .iter()
@@ -166,10 +165,7 @@ async fn handle_list(
         }
         _ => {
             // Show config file path at the top
-            if let Some(ref path) = conn_mgr.config_path {
-                println!("Configuration file: {}", path.display());
-                println!();
-            } else if let Ok(config_path) = Config::config_path() {
+            if let Ok(config_path) = conn_mgr.resolved_config_path() {
                 println!("Configuration file: {}", config_path.display());
                 println!();
             }
@@ -288,8 +284,11 @@ async fn handle_list(
     Ok(())
 }
 
-async fn handle_path(output_format: OutputFormat) -> Result<(), RedisCtlError> {
-    let config_path = Config::config_path()?;
+async fn handle_path(
+    conn_mgr: &ConnectionManager,
+    output_format: OutputFormat,
+) -> Result<(), RedisCtlError> {
+    let config_path = conn_mgr.resolved_config_path()?;
 
     match output_format {
         OutputFormat::Json | OutputFormat::Yaml => {
@@ -1650,10 +1649,7 @@ async fn handle_validate(
 ) -> Result<(), RedisCtlError> {
     debug!("Validating configuration (connect={})", connect);
 
-    let config_path = match &conn_mgr.config_path {
-        Some(path) => path.clone(),
-        None => Config::config_path()?,
-    };
+    let config_path = conn_mgr.resolved_config_path()?;
     let config_exists = config_path.exists();
     let config_path_str = config_path.display().to_string();
 

@@ -27,6 +27,7 @@ use tower_mcp::Tool;
 
 use redisctl_mcp::AppState;
 use redisctl_mcp::tools::redis;
+use support::docker_fixture::{FixtureStage, fixture_error};
 use support::{database_state_full, database_state_readonly, database_state_write};
 
 // ============================================================================
@@ -59,12 +60,12 @@ async fn get_redis() -> anyhow::Result<&'static RedisTestContext> {
                 .stop_timeout(Duration::from_secs(10))
                 .start()
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to start container: {}", e))?;
+                .map_err(|e| fixture_error(FixtureStage::RedisStart, e))?;
 
             let port = guard
                 .host_port(6379)
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to get port: {}", e))?;
+                .map_err(|e| fixture_error(FixtureStage::RedisPort, e))?;
 
             Ok(RedisTestContext {
                 _guard: guard,
@@ -1304,6 +1305,24 @@ async fn test_stream_tools() {
         json!({"key": format!("{p}s"), "fields": {"name": "bob", "action": "logout"}}),
     )
     .await;
+
+    // redis_xadd with nomkstream on a missing stream returns nil from Redis;
+    // the tool must report that rather than fail on the reply type.
+    let result = redis::xadd(rw_state.clone())
+        .call(json!({"key": format!("{p}missing"), "nomkstream": true, "fields": {"a": "b"}}))
+        .await;
+    let text = result
+        .content
+        .first()
+        .and_then(|c: &tower_mcp::Content| c.as_text())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        !result.is_error,
+        "xadd nomkstream should not error: {}",
+        text
+    );
+    assert!(text.contains("No entry added"), "xadd nomkstream: {}", text);
 
     // redis_xlen
     let text = call_tool_text(&redis::xlen(state.clone()), json!({"key": format!("{p}s")})).await;

@@ -32,6 +32,10 @@ pub enum SupportPackageCommands {
         #[arg(long)]
         skip_checks: bool,
 
+        /// Overwrite an existing output file without prompting; retain other pre-flight checks
+        #[arg(long)]
+        force: bool,
+
         /// Optimize package size by truncating logs and removing redundant data
         #[arg(long)]
         optimize: bool,
@@ -76,6 +80,10 @@ pub enum SupportPackageCommands {
         #[arg(long)]
         skip_checks: bool,
 
+        /// Overwrite an existing output file without prompting; retain other pre-flight checks
+        #[arg(long)]
+        force: bool,
+
         /// Optimize package size by truncating logs and removing redundant data
         #[arg(long)]
         optimize: bool,
@@ -119,6 +127,10 @@ pub enum SupportPackageCommands {
         /// Skip pre-flight checks
         #[arg(long)]
         skip_checks: bool,
+
+        /// Overwrite an existing output file without prompting; retain other pre-flight checks
+        #[arg(long)]
+        force: bool,
 
         /// Optimize package size by truncating logs and removing redundant data
         #[arg(long)]
@@ -179,6 +191,7 @@ pub async fn handle_support_package_command(
         SupportPackageCommands::Cluster {
             file,
             skip_checks,
+            force,
             optimize,
             no_optimize: _,
             log_lines,
@@ -195,7 +208,7 @@ pub async fn handle_support_package_command(
             });
 
             if !skip_checks {
-                perform_preflight_checks(&output_path, output_format)?;
+                perform_preflight_checks(&output_path, output_format, force)?;
             }
 
             let optimization_opts = if optimize {
@@ -228,6 +241,7 @@ pub async fn handle_support_package_command(
             uid,
             file,
             skip_checks,
+            force,
             optimize,
             no_optimize: _,
             log_lines,
@@ -247,7 +261,7 @@ pub async fn handle_support_package_command(
             });
 
             if !skip_checks {
-                perform_preflight_checks(&output_path, output_format)?;
+                perform_preflight_checks(&output_path, output_format, force)?;
             }
 
             let optimization_opts = if optimize {
@@ -281,6 +295,7 @@ pub async fn handle_support_package_command(
             uid,
             file,
             skip_checks,
+            force,
             optimize,
             no_optimize: _,
             log_lines,
@@ -302,7 +317,7 @@ pub async fn handle_support_package_command(
             });
 
             if !skip_checks {
-                perform_preflight_checks(&output_path, output_format)?;
+                perform_preflight_checks(&output_path, output_format, force)?;
             }
 
             let optimization_opts = if optimize {
@@ -335,14 +350,18 @@ pub async fn handle_support_package_command(
 }
 
 /// Perform pre-flight checks before generating support package
-fn perform_preflight_checks(output_path: &Path, output_format: OutputFormat) -> CliResult<()> {
+fn perform_preflight_checks(
+    output_path: &Path,
+    output_format: OutputFormat,
+    force: bool,
+) -> CliResult<()> {
     // Check if output file already exists
-    if output_path.exists() {
+    if output_path.exists() && !force {
         let cancelled = || RedisCtlError::OverwriteCancelled {
             path: output_path.display().to_string(),
         };
         // Never consume piped consent or contaminate a structured error with a prompt.
-        // Human-mode terminal confirmation and explicit --skip-checks remain available.
+        // Human-mode terminal confirmation and explicit --force remain available.
         if !std::io::stdin().is_terminal()
             || matches!(output_format, OutputFormat::Json | OutputFormat::Yaml)
         {
@@ -376,7 +395,9 @@ fn perform_preflight_checks(output_path: &Path, output_format: OutputFormat) -> 
     if let Ok(metadata) = fs::metadata(parent_dir) {
         use std::os::unix::fs::MetadataExt;
         // Basic check - would need proper disk space checking
-        if metadata.blocks() < 1000000 {
+        if metadata.blocks() < 1000000
+            && !matches!(output_format, OutputFormat::Json | OutputFormat::Yaml)
+        {
             eprintln!("Warning: Low disk space detected");
         }
     }
