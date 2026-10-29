@@ -127,6 +127,11 @@ jobs:
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
             echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           fi
+      - name: "Build in the init telemetry key"
+        run: "echo \"REDISCTL_INIT_AMPLITUDE_KEY=$KEY\" >> \"$GITHUB_ENV\""
+        shell: "bash"
+        env:
+          "KEY": "${{ secrets.REDISCTL_INIT_AMPLITUDE_KEY }}"
       - name: Install dist
         run: ${{ matrix.install_dist.run }}
       # Get the dist-manifest

@@ -22,6 +22,12 @@ use crate::workflows::init::engine::SKILLS_DIR;
 
 const LOCK_FILE: &str = "skills-lock.json";
 
+/// Marks a skill dir as a checkout copy redisctl init made, so a re-run may replace
+/// it. A same-named dir without it, and not in the skills CLI's lock, is the user's
+/// own and stays as it is.
+const COPY_MARKER: &str = ".redisctl-init";
+const MARKER_TEXT: &str = "redisctl init copied this skill from a local redis/agent-skills checkout and replaces it on the next run. Delete this file to keep your own edits.\n";
+
 /// The skills CLI's identifiers for the agents redisctl init supports; passing them
 /// explicitly (instead of `--agent '*'`) keeps the layout to the directories the
 /// chosen agents actually read.
@@ -209,8 +215,13 @@ fn dirs_equal(a: &Path, b: &Path) -> bool {
     if !a.exists() || !b.exists() {
         return false;
     }
-    let files_a = sorted_files(a);
-    if files_a != sorted_files(b) {
+    let skill_files = |dir: &Path| {
+        let mut files = sorted_files(dir);
+        files.retain(|rel| rel != Path::new(COPY_MARKER));
+        files
+    };
+    let files_a = skill_files(a);
+    if files_a != skill_files(b) {
         return false;
     }
     files_a
@@ -355,10 +366,7 @@ impl SkillsAction {
     pub(crate) fn planned_installed(&self, cwd: &Path) -> Vec<String> {
         match &self.repo {
             _ if self.skip => Vec::new(),
-            Some(repo) => self
-                .copy_steps(cwd, repo)
-                .map(|steps| steps.into_iter().map(|step| step.name).collect())
-                .unwrap_or_default(),
+            Some(repo) => self.copied(cwd, repo),
             None if !has_bin("npx") => Vec::new(),
             None => read_lock_hashes(cwd).into_keys().collect(),
         }
@@ -369,12 +377,22 @@ impl SkillsAction {
     pub(crate) fn claude_links(&self, cwd: &Path) -> Vec<String> {
         let shared = fallback_dir(cwd, self.global, &self.agents) == cwd.join(SKILLS_DIR);
         match &self.repo {
-            Some(repo) if shared && !self.skip => self
-                .copy_steps(cwd, repo)
-                .map(|steps| steps.into_iter().map(|step| step.name).collect())
-                .unwrap_or_default(),
+            Some(repo) if shared && !self.skip => self.copied(cwd, repo),
             _ => Vec::new(),
         }
+    }
+
+    /// The checkout skills a copy installs: all but a same-named dir it keeps.
+    fn copied(&self, cwd: &Path, repo: &Path) -> Vec<String> {
+        self.copy_steps(cwd, repo)
+            .map(|steps| {
+                steps
+                    .into_iter()
+                    .filter(|step| step.change.status != Status::Kept)
+                    .map(|step| step.name)
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// What a checkout copy does per skill, decided the same way for the preview
@@ -389,6 +407,15 @@ impl SkillsAction {
             )));
         }
         let destination = fallback_dir(cwd, self.global, &self.agents);
+        let managed: BTreeSet<String> = if self.global {
+            read_global_lock_names().unwrap_or_default()
+        } else {
+            read_lock_hashes(cwd).into_keys().collect()
+        };
+        let checkout_note = format!(
+            "redis/agent-skills (local checkout; run npx -y {} add redis/agent-skills to adopt standard management)",
+            pins::SKILLS_CLI
+        );
         let steps: Vec<CopyStep> = skill_dirs(&source)
             .into_iter()
             .map(|name| {
@@ -401,18 +428,19 @@ impl SkillsAction {
                 };
                 let change = if dirs_equal(&src, &dst) {
                     Change::new(subject, Status::Unchanged, "")
+                } else if !dst.exists() {
+                    Change::new(subject, Status::Created, checkout_note.clone())
+                } else if dst.join(COPY_MARKER).exists() || managed.contains(&name) {
+                    Change::new(
+                        subject,
+                        Status::Updated,
+                        format!("replaces the existing copy - {checkout_note}"),
+                    )
                 } else {
                     Change::new(
                         subject,
-                        if dst.exists() {
-                            Status::Updated
-                        } else {
-                            Status::Created
-                        },
-                        format!(
-                            "redis/agent-skills (local checkout; run npx -y {} add redis/agent-skills to adopt standard management)",
-                            pins::SKILLS_CLI
-                        ),
+                        Status::Kept,
+                        "not copied by redisctl init or the skills CLI - left as is; delete it to adopt the official copy",
                     )
                 };
                 CopyStep {
@@ -611,12 +639,25 @@ impl SkillsAction {
         let mut changes = Vec::new();
         let mut installed = Vec::new();
         for step in steps {
-            if step.change.status != Status::Unchanged {
-                let _ = std::fs::remove_dir_all(&step.dst);
-                copy_dir(&step.src, &step.dst).map_err(|e| InitError::WriteFailed {
-                    rel: step.dst.display().to_string(),
-                    message: e.to_string(),
-                })?;
+            match step.change.status {
+                Status::Kept => {
+                    changes.push(step.change);
+                    continue;
+                }
+                Status::Unchanged => {}
+                _ => {
+                    let failed = |e: std::io::Error| InitError::WriteFailed {
+                        rel: step.dst.display().to_string(),
+                        message: e.to_string(),
+                    };
+                    if let Err(e) = std::fs::remove_dir_all(&step.dst)
+                        && e.kind() != std::io::ErrorKind::NotFound
+                    {
+                        return Err(failed(e));
+                    }
+                    copy_dir(&step.src, &step.dst).map_err(failed)?;
+                    std::fs::write(step.dst.join(COPY_MARKER), MARKER_TEXT).map_err(failed)?;
+                }
             }
             changes.push(step.change);
             installed.push(step.name);
@@ -885,6 +926,76 @@ mod tests {
                 .unwrap(),
             "# redis-basics\n"
         );
+    }
+
+    #[test]
+    fn a_dir_the_lock_tracks_is_replaced_and_an_untracked_one_is_kept() {
+        let repo = fake_checkout(&["redis-basics", "redis-search"]);
+        let project = tempfile::tempdir().unwrap();
+        for name in ["redis-basics", "redis-search"] {
+            let dir = project.path().join(".agents/skills").join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("SKILL.md"), "older\n").unwrap();
+        }
+        std::fs::write(
+            project.path().join(LOCK_FILE),
+            r#"{"skills":{"redis-search":{"computedHash":"h"}}}"#,
+        )
+        .unwrap();
+        let outcome = action(repo.path())
+            .perform(project.path(), &mut |_| {})
+            .unwrap();
+        let summary: Vec<_> = outcome
+            .changes
+            .iter()
+            .map(|c| (c.subject.as_str(), c.status))
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                (".agents/skills/redis-basics/", Status::Kept),
+                (".agents/skills/redis-search/", Status::Updated),
+            ]
+        );
+        assert_eq!(outcome.installed, vec!["redis-search"]);
+        let read = |name: &str| {
+            std::fs::read_to_string(
+                project
+                    .path()
+                    .join(".agents/skills")
+                    .join(name)
+                    .join("SKILL.md"),
+            )
+            .unwrap()
+        };
+        assert_eq!(read("redis-basics"), "older\n");
+        assert_eq!(read("redis-search"), "# redis-search\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_removal_stops_the_copy() {
+        use std::os::unix::fs::PermissionsExt;
+        let repo = fake_checkout(&["redis-basics"]);
+        let project = tempfile::tempdir().unwrap();
+        action(repo.path())
+            .perform(project.path(), &mut |_| {})
+            .unwrap();
+        let stuck = project.path().join(".agents/skills/redis-basics/refs");
+        std::fs::create_dir(&stuck).unwrap();
+        std::fs::write(stuck.join("old.md"), "x").unwrap();
+        std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o500)).unwrap();
+        std::fs::write(
+            repo.path().join("skills/redis-basics/SKILL.md"),
+            "# newer\n",
+        )
+        .unwrap();
+        let result = action(repo.path()).perform(project.path(), &mut |_| {});
+        std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let Err(InitError::WriteFailed { rel, .. }) = result else {
+            panic!("a failed removal must stop the copy");
+        };
+        assert!(rel.ends_with("redis-basics"), "{rel}");
     }
 
     #[test]

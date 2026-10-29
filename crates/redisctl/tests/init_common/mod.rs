@@ -14,6 +14,14 @@ pub fn skills_fixture() -> TempDir {
     repo
 }
 
+/// A device id in `home`, so the next run counts as one that has shown the
+/// telemetry notice and sends its event.
+pub fn telemetry_notice_seen(home: &std::path::Path) {
+    let cache = home.join(".cache/redisctl");
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(cache.join("id"), "test-device\n").unwrap();
+}
+
 /// Just enough RESP to pass init's validation (AUTH, PING, SET, GET, DEL).
 /// Returns the loopback port it serves on.
 pub fn fake_redis() -> u16 {
@@ -114,6 +122,11 @@ pub fn hermetic_redisctl() -> Hermetic {
 }
 
 impl Hermetic {
+    /// The throwaway HOME the run sees.
+    pub fn home(&self) -> &std::path::Path {
+        self.home.path()
+    }
+
     /// The fakes' directory, for a test that sets its own PATH.
     pub fn downloaders(&self) -> std::path::PathBuf {
         self.home.path().join("downloaders")
