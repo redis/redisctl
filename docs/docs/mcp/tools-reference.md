@@ -314,6 +314,9 @@ Full-text and vector search via RediSearch -- index management, aliases, diction
 | `redis_ft_profile` | Profile query execution |
 | `redis_ft_aliasupdate` | Atomically repoint an index alias *(write)* |
 
+For structured aggregation inputs, stage ordering, raw token escape hatches and the pre-1.0
+strict-input change, see the [migration guidance](compatibility.md#pre-10-migration-strict-tool-inputs-and-aggregation).
+
 ### `database:aliases` (4 tools)
 
 Session-scoped command aliases -- save, list, run, and delete named command sequences for repeatable workflows.

@@ -54,6 +54,7 @@ fn default_subscription_timeout() -> u64 {
 
 /// Input for a maintenance window specification
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct MaintenanceWindowInput {
     /// Start hour (0-23 UTC)
     pub start_hour: i32,
@@ -65,6 +66,7 @@ pub struct MaintenanceWindowInput {
 
 /// Input for a region to delete from an Active-Active subscription
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ActiveActiveRegionToDeleteInput {
     /// Region name to delete (e.g., "us-east-1")
     pub region: String,
@@ -72,6 +74,7 @@ pub struct ActiveActiveRegionToDeleteInput {
 
 /// Input for a tag key-value pair
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TagInput {
     /// Tag key
     pub key: String,
