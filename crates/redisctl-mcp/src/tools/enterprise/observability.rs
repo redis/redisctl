@@ -2,7 +2,6 @@
 
 use std::collections::BTreeMap;
 
-use redis_enterprise::alerts::{AlertHandler, ClusterAlertState};
 use redis_enterprise::logs::{LogsHandler, LogsQuery};
 use tower_mcp::{CallToolResult, ResultExt};
 
@@ -31,19 +30,19 @@ mcp_module! {
 enterprise_tool!(read_only, list_alerts, "list_alerts",
     "List cluster-level alert states (GET /v1/cluster/alerts), keyed by alert name. \
      Each entry reports whether the alert is enabled, whether it is currently triggered \
-     (`state: true`), and its severity. `active_count` is the number of triggered alerts.",
+     (`state: true`), and its severity. `active_count` is the number of triggered alerts, \
+     including alerts that are not enabled.",
     {} => |client, _input| {
-        // Redis Enterprise has no `/v1/alerts` route (it returns 404). Cluster-wide
-        // alerts live at `/v1/cluster/alerts` and come back as a map keyed by alert
-        // name, not as a list of `Alert` objects.
-        let handler = AlertHandler::new(client);
-        let alerts: BTreeMap<String, ClusterAlertState> = handler
-            .list_cluster_alerts()
+        // Plain JSON rather than a typed state: an alert that has not been evaluated
+        // yet can report `state: null` without a severity.
+        let alerts: BTreeMap<String, serde_json::Value> = client
+            .get("/v1/cluster/alerts")
             .await
-            .tool_context("Failed to list cluster alerts")?
-            .into_iter()
-            .collect();
-        let active_count = alerts.values().filter(|alert| alert.state).count();
+            .tool_context("Failed to list cluster alerts")?;
+        let active_count = alerts
+            .values()
+            .filter(|alert| alert["state"] == serde_json::Value::Bool(true))
+            .count();
 
         CallToolResult::from_serialize(&serde_json::json!({
             "count": alerts.len(),

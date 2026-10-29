@@ -432,6 +432,10 @@ async fn test_list_alerts() {
                 "enabled": true,
                 "state": false,
                 "severity": "WARNING"
+            },
+            "cluster_ram_overcommit": {
+                "enabled": false,
+                "state": null
             }
         })))
         .expect(1)
@@ -444,15 +448,17 @@ async fn test_list_alerts() {
 
     let result = call_tool_json(&tool, json!({})).await;
 
-    assert_eq!(result["count"], 2);
+    assert_eq!(result["count"], 3);
     assert_eq!(result["active_count"], 1);
     let alerts = result["alerts"]
         .as_object()
         .expect("alerts should be a map keyed by alert name");
-    assert_eq!(alerts.len(), 2);
+    assert_eq!(alerts.len(), 3);
     assert_eq!(alerts["cluster_node_down"]["state"], true);
     assert_eq!(alerts["cluster_node_down"]["severity"], "ERROR");
     assert_eq!(alerts["cluster_license_about_to_expire"]["state"], false);
+    // Not evaluated yet: no state, no severity, and the tool still answers.
+    assert!(alerts["cluster_ram_overcommit"]["state"].is_null());
 
     server.inner().verify().await;
 }
@@ -479,6 +485,8 @@ async fn test_list_alerts_surfaces_server_error() {
         result.is_error,
         "a 404 from the cluster alerts route should surface as a tool error"
     );
+    let text = result.content[0].as_text().unwrap_or_default();
+    assert!(text.contains("Failed to list cluster alerts"), "{text}");
 }
 
 #[tokio::test]
