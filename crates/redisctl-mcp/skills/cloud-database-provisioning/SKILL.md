@@ -39,7 +39,6 @@ Call `list_fixed_plans` to see available plan tiers. Present the options as a ta
 Call `create_fixed_subscription` with:
 - `name`: descriptive name (e.g. `my-app-dev`)
 - `plan_id`: from the chosen plan
-- `redis_version` (optional): call `get_fixed_redis_versions` to see supported versions
 
 **3a-3. Verify subscription is active**
 
@@ -51,6 +50,7 @@ Call `create_fixed_database` with:
 - `subscription_id`: from step 3a-2
 - `name`: database name (e.g. `my-app-db`)
 - `password` (optional): set a password, or omit for the default
+- `redis_version` (optional): call `get_fixed_redis_versions` to see supported versions
 
 **3a-5. Retrieve connection info**
 

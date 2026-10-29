@@ -18,6 +18,7 @@ use crate::tools::macros::{cloud_tool, mcp_module};
 
 /// Database specification for ACL role assignment
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DatabaseSpec {
     /// Subscription ID for the database
     pub subscription_id: i32,
@@ -30,6 +31,7 @@ pub struct DatabaseSpec {
 
 /// Redis rule specification for role creation/update
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RedisRuleSpec {
     /// Redis ACL rule name. Use list_redis_rules to get available rules.
     pub rule_name: String,
