@@ -192,12 +192,20 @@ fn check_skill(markdown: &str, tools: &Tools) -> Vec<String> {
             .map(|param| (number, param))
             .collect();
         if line.trim_end().ends_with("with:") {
+            // Markdown wants a blank line before a list (MD032), so skip any
+            // blank lines between the intro and its first item.
+            let first = index
+                + 1
+                + lines[index + 1..]
+                    .iter()
+                    .take_while(|line| line.trim().is_empty())
+                    .count();
             params.extend(
-                lines[index + 1..]
+                lines[first..]
                     .iter()
                     .map_while(|item| list_item_name(item))
                     .enumerate()
-                    .map(|(offset, param)| (number + 1 + offset, param)),
+                    .map(|(offset, param)| (first + 1 + offset, param)),
             );
         }
         for (at, param) in params {
@@ -319,6 +327,15 @@ fn catches_the_shapes_that_shipped_broken() {
                         - `redis_version` (optional): call `get_fixed_redis_versions` first\n";
     assert_eq!(
         check_skill(subscription, &tools),
+        ["4: `create_fixed_subscription` has no `redis_version` input"]
+    );
+    // The same list with the blank line markdownlint's MD032 asks for.
+    let spaced = "Call `create_fixed_subscription` with:\n\
+                  \n\
+                  - `name`: descriptive name\n\
+                  - `redis_version` (optional)\n";
+    assert_eq!(
+        check_skill(spaced, &tools),
         ["4: `create_fixed_subscription` has no `redis_version` input"]
     );
     assert_eq!(
