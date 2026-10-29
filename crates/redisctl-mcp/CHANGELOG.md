@@ -7,21 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- **Pre-1.0 input compatibility change:** application tool inputs and typed nested arguments now
-  reject unknown properties instead of ignoring them. Arbitrary JSON payloads and declared user
-  maps remain supported. Refresh client schemas and remove undeclared argument metadata; see the
-  [migration guidance](../../docs/docs/mcp/compatibility.md#pre-10-migration-strict-tool-inputs-and-aggregation).
-- `redis_ft_aggregate` gains structured grouping, reducers and sorting, requires a pipeline, and
-  labels its returned row count `Results: N` rather than `Total results: N`. Reducers use one
-  specification per string; raw argument arrays remain available for exact token control.
-
-### Fixed
-
-- Preserve keyword-named aggregation properties and serialize `SORTBY ... MAX` with the correct
-  argument count and numeric operand.
-
 ## [0.12.1](https://github.com/redis/redisctl/compare/redisctl-mcp-v0.12.0...redisctl-mcp-v0.12.1) - 2026-10-01
 
 ### Fixed
