@@ -30,6 +30,8 @@ documentation = "https://docs.rs/redisctl"
 cargo-dist-version = "0.32.0"
 # CI backends to support
 ci = "github"
+# Steps to run before `dist build`, relative to .github/workflows
+github-build-setup = "../build-setup.yml"
 # The installers to generate for each app
 installers = ["shell", "powershell"]
 # Target platforms to build apps for (Rust target-triple syntax)
