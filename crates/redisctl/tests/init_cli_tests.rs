@@ -863,6 +863,68 @@ fn an_explicit_checkout_installs_skills_offline() {
 }
 
 #[test]
+fn a_same_named_skill_dir_init_did_not_copy_is_kept() {
+    let repo = skills_fixture();
+    for (global, agents, root) in [
+        (true, "claude", ".claude/skills"),
+        (false, "claude", ".claude/skills"),
+        (false, "claude,codex", ".agents/skills"),
+    ] {
+        let project = tempfile::tempdir().unwrap();
+        let mut cmd = redisctl();
+        let base = if global { cmd.home() } else { project.path() }.to_path_buf();
+        let mine = base.join(root).join("redis-basics");
+        std::fs::create_dir_all(mine.join("notes")).unwrap();
+        std::fs::write(mine.join("SKILL.md"), "# my own redis-basics\n").unwrap();
+        std::fs::write(mine.join("notes/mine.md"), "keep me\n").unwrap();
+        let mut args = vec![
+            "init",
+            "--no-install-cli",
+            "--url",
+            "redis://127.0.0.1:9",
+            "--agent",
+            agents,
+            "--skills-repo",
+            repo.path().to_str().unwrap(),
+        ];
+        if global {
+            args.push("--skills-global");
+        }
+        let out = cmd
+            .current_dir(project.path())
+            .args(&args)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(out.status.code(), Some(10), "{stdout}");
+        let line = stdout
+            .lines()
+            .find(|line| line.contains("redis-basics/"))
+            .unwrap_or_else(|| panic!("no redis-basics line: {stdout}"));
+        assert!(line.contains("kept"), "{global} {agents}: {line}");
+        assert!(
+            line.contains("delete it to adopt the official copy"),
+            "{line}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(mine.join("SKILL.md")).unwrap(),
+            "# my own redis-basics\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(mine.join("notes/mine.md")).unwrap(),
+            "keep me\n"
+        );
+        assert!(
+            !project
+                .path()
+                .join(".claude/skills/redis-basics")
+                .is_symlink(),
+            "{global} {agents}: no link to a dir init did not copy"
+        );
+    }
+}
+
+#[test]
 fn preexisting_agents_and_claude_md_stay_byte_identical() {
     let dir = tempfile::tempdir().unwrap();
     let repo = skills_fixture();

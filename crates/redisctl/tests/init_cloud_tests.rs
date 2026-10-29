@@ -5,7 +5,7 @@
 mod init_common;
 
 use assert_cmd::Command;
-use init_common::{fake_redis, skills_fixture};
+use init_common::{fake_redis, skills_fixture, telemetry_notice_seen};
 use predicates::prelude::*;
 use serde_json::json;
 use tempfile::TempDir;
@@ -533,6 +533,7 @@ async fn a_dry_run_reports_the_planned_database_to_telemetry() {
         .respond_with(ResponseTemplate::new(200))
         .mount(&amplitude)
         .await;
+    telemetry_notice_seen(cfg.path());
     run_init_cloud(&cfg, project.path(), &repo, &["--dry-run"])
         .env("REDISCTL_INIT_AMPLITUDE_KEY", "test-key")
         .env(
