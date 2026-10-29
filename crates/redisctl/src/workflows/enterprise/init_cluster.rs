@@ -286,8 +286,10 @@ async fn create_database_with_retry_delay(
     }
 }
 
-/// Attempts made to discover the supported Redis version right after bootstrap.
-const VERSION_DISCOVERY_ATTEMPTS: u32 = 3;
+/// Attempts made to discover the supported Redis version right after bootstrap. Together with
+/// [`VERSION_DISCOVERY_RETRY_DELAY`] this gives the API about 30 seconds to start accepting the
+/// new credentials; on Redis Enterprise 8.0.10 the 401 window after bootstrap lasts a few seconds.
+const VERSION_DISCOVERY_ATTEMPTS: u32 = 15;
 /// Delay between discovery attempts while the API settles.
 const VERSION_DISCOVERY_RETRY_DELAY: Duration = Duration::from_secs(2);
 
@@ -296,8 +298,41 @@ const VERSION_DISCOVERY_RETRY_DELAY: Duration = Duration::from_secs(2);
 enum DatabaseVersion {
     /// An explicit or discovered MAJOR.MINOR version to send as `redis_version`.
     Selected(String),
-    /// Nothing usable was discovered; omit `redis_version` and let the cluster choose.
+    /// The cluster answered but advertised no usable version; omit `redis_version` and let the
+    /// cluster choose.
     ClusterDefault { reason: String },
+}
+
+/// Why one discovery pass did not produce a version.
+#[derive(Debug)]
+enum DiscoveryFailure {
+    /// The API answered and advertised nothing usable; retrying would not change that.
+    NotAdvertised(String),
+    /// The API refused or failed in a way that clears once the cluster settles (401/403 right
+    /// after bootstrap, busy, rate limited, 5xx, timeouts, transport errors). Worth retrying.
+    Transient(String),
+    /// A definite API failure that neither retrying nor the cluster default would fix.
+    Fatal(String),
+}
+
+/// Errors that clear once the cluster finishes settling after bootstrap: the REST API answers
+/// 401 for a few seconds while authentication comes up, and can be busy, rate limited, timing
+/// out or returning 5xx while its services start.
+fn is_transient_discovery_error(error: &redis_enterprise::RestError) -> bool {
+    use redis_enterprise::RestError;
+    error.is_unauthorized()
+        || error.is_server_error()
+        || matches!(
+            error,
+            RestError::ApiError {
+                code: 403 | 408 | 425 | 429,
+                ..
+            } | RestError::RequestFailed(_)
+                | RestError::ConnectionError(_)
+                | RestError::Timeout
+                | RestError::RateLimited { .. }
+                | RestError::ClusterBusy
+        )
 }
 
 fn database_payload(name: &str, memory_gb: i64, redis_version: Option<&str>) -> Value {
@@ -326,8 +361,11 @@ async fn select_database_redis_version(
     .await
 }
 
-/// An explicit version is strict; otherwise discovery is best-effort and falls back to the
-/// cluster default after `attempts` tries, `retry_delay` apart.
+/// An explicit version is strict. Otherwise discovery retries transient refusals (the API answers
+/// 401 for a few seconds after bootstrap) up to `attempts` times, `retry_delay` apart, and then
+/// fails rather than guessing: falling back on a refusal would only move the failure to the
+/// database creation request. The cluster default is used only when the API answers and
+/// advertises no supported version.
 async fn select_database_redis_version_with_retry(
     client: &EnterpriseClient,
     requested: Option<&str>,
@@ -342,37 +380,73 @@ async fn select_database_redis_version_with_retry(
             });
     }
 
-    let mut reason = String::from("no discovery attempt was made");
+    let mut last_refusal = String::from("no discovery attempt was made");
     for attempt in 1..=attempts {
         match discover_database_redis_version(client).await {
             Ok(version) => return Ok(DatabaseVersion::Selected(version)),
-            Err(error) => reason = error,
+            Err(DiscoveryFailure::NotAdvertised(reason)) => {
+                return Ok(DatabaseVersion::ClusterDefault { reason });
+            }
+            Err(DiscoveryFailure::Fatal(reason)) => anyhow::bail!(
+                "Could not discover the supported database Redis versions: {reason}. \
+                 Pass --database-redis-version MAJOR.MINOR to pin one."
+            ),
+            Err(DiscoveryFailure::Transient(reason)) => last_refusal = reason,
         }
         if attempt < attempts {
-            // The API can still be settling right after bootstrap.
+            // Right after bootstrap the API refuses the new credentials for a few seconds and
+            // can be busy while its services start.
             sleep(retry_delay).await;
         }
     }
-    Ok(DatabaseVersion::ClusterDefault { reason })
+    let waited = retry_delay
+        .saturating_mul(attempts.saturating_sub(1))
+        .as_secs();
+    anyhow::bail!(
+        "Could not discover the supported database Redis versions: the cluster API kept refusing \
+         for about {waited}s after bootstrap (last error: {last_refusal}). The cluster is \
+         initialized; re-run the database creation once the API accepts the credentials, or pass \
+         --database-redis-version MAJOR.MINOR."
+    )
 }
 
 /// One discovery pass: the cluster default first, then the highest version nodes advertise.
 async fn discover_database_redis_version(
     client: &EnterpriseClient,
-) -> std::result::Result<String, String> {
-    if let Ok(cluster) = client.get_raw("/v1/cluster").await
-        && let Some(version) = cluster
-            .get("default_provisioned_redis_version")
-            .and_then(Value::as_str)
-            .and_then(normalize_major_minor)
-    {
-        return Ok(version);
+) -> std::result::Result<String, DiscoveryFailure> {
+    match client.get_raw("/v1/cluster").await {
+        Ok(cluster) => {
+            if let Some(version) = cluster
+                .get("default_provisioned_redis_version")
+                .and_then(Value::as_str)
+                .and_then(normalize_major_minor)
+            {
+                return Ok(version);
+            }
+        }
+        Err(error) if is_transient_discovery_error(&error) => {
+            return Err(DiscoveryFailure::Transient(format!(
+                "GET /v1/cluster failed: {error}"
+            )));
+        }
+        // Anything else here (for example a release without this field or route) is not
+        // decisive: the nodes listing below is the authoritative source.
+        Err(_) => {}
     }
 
-    let nodes = client
-        .get_raw("/v1/nodes")
-        .await
-        .map_err(|error| format!("GET /v1/nodes failed: {error}"))?;
+    let nodes = match client.get_raw("/v1/nodes").await {
+        Ok(nodes) => nodes,
+        Err(error) if is_transient_discovery_error(&error) => {
+            return Err(DiscoveryFailure::Transient(format!(
+                "GET /v1/nodes failed: {error}"
+            )));
+        }
+        Err(error) => {
+            return Err(DiscoveryFailure::Fatal(format!(
+                "GET /v1/nodes failed: {error}"
+            )));
+        }
+    };
     let mut versions = nodes
         .as_array()
         .into_iter()
@@ -382,9 +456,11 @@ async fn discover_database_redis_version(
         .collect::<Vec<_>>();
     versions.sort_by_key(|version| version_tuple(version));
     versions.dedup();
-    versions
-        .pop()
-        .ok_or_else(|| "nodes did not advertise supported_database_versions".to_string())
+    versions.pop().ok_or_else(|| {
+        DiscoveryFailure::NotAdvertised(
+            "nodes did not advertise supported_database_versions".to_string(),
+        )
+    })
 }
 
 fn extract_supported_versions(value: &Value) -> Vec<String> {
@@ -563,8 +639,10 @@ mod tests {
         assert_eq!(result["uid"], 1);
     }
 
+    /// Right after bootstrap the API answers 401 for a few seconds, then the nodes advertise
+    /// their versions. The retry has to carry the workflow across that window.
     #[tokio::test]
-    async fn failed_node_discovery_falls_back_to_cluster_default() {
+    async fn unauthorized_window_is_retried_until_nodes_advertise_versions() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/v1/cluster"))
@@ -573,38 +651,114 @@ mod tests {
             .await;
         Mock::given(method("GET"))
             .and(path("/v1/nodes"))
-            .respond_with(ResponseTemplate::new(503))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                "error_code": "unauthorized"
+            })))
+            .up_to_n_times(1)
+            .with_priority(1)
+            .expect(1)
             .mount(&server)
             .await;
-        Mock::given(method("POST"))
-            .and(path("/v1/bdbs"))
-            .and(body_json(serde_json::json!({
-                "name": "default-db",
-                "memory_size": 1_073_741_824_u64,
-                "type": "redis",
-                "replication": false
-            })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"uid": 1})))
+        Mock::given(method("GET"))
+            .and(path("/v1/nodes"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                    "uid": 1,
+                    "supported_database_versions": [
+                        {"version": "7.4.2"},
+                        {"version": "8.0.1"}
+                    ]
+                }])),
+            )
             .expect(1)
             .mount(&server)
             .await;
 
-        let client = client(&server);
-        let selection = select_database_redis_version_with_retry(&client, None, 2, Duration::ZERO)
-            .await
-            .unwrap();
-        let reason = match selection {
-            DatabaseVersion::ClusterDefault { reason } => reason,
-            other => panic!("expected the cluster default fallback, got {other:?}"),
-        };
-        assert!(reason.contains("/v1/nodes"));
-
-        let result = create_database_strict(&client, database_payload("default-db", 1, None))
-            .await
-            .unwrap();
-        assert_eq!(result["uid"], 1);
+        let selection =
+            select_database_redis_version_with_retry(&client(&server), None, 5, Duration::ZERO)
+                .await
+                .unwrap();
+        assert_eq!(selection, DatabaseVersion::Selected("8.0".to_string()));
     }
 
+    /// The companion of the test above: with a single attempt the same 401 window is a hard
+    /// error, so the retry is what makes the workflow succeed, not a fallback.
+    #[tokio::test]
+    async fn single_attempt_does_not_survive_the_unauthorized_window() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/cluster"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/nodes"))
+            .respond_with(ResponseTemplate::new(401))
+            .up_to_n_times(1)
+            .with_priority(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/nodes"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                    "uid": 1,
+                    "supported_database_versions": [{"version": "8.0.1"}]
+                }])),
+            )
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let error =
+            select_database_redis_version_with_retry(&client(&server), None, 1, Duration::ZERO)
+                .await
+                .unwrap_err();
+        let text = error.to_string().to_ascii_lowercase();
+        assert!(text.contains("kept refusing"), "{error}");
+        // The client reports 401 as a typed unauthorized/authentication error; the exact
+        // wording is its own, so only check that the refusal is what was reported.
+        assert!(
+            text.contains("unauthori") || text.contains("authentication") || text.contains("401"),
+            "{error}"
+        );
+    }
+
+    /// A cluster that keeps refusing is reported, not papered over: falling back on a 401 would
+    /// only move the failure to the database creation request.
+    #[tokio::test]
+    async fn persistent_unauthorized_discovery_is_an_error_not_a_fallback() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/cluster"))
+            .respond_with(ResponseTemplate::new(401))
+            .expect(3)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/nodes"))
+            .respond_with(ResponseTemplate::new(401))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/bdbs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"uid": 1})))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let error =
+            select_database_redis_version_with_retry(&client(&server), None, 3, Duration::ZERO)
+                .await
+                .unwrap_err();
+        assert!(error.to_string().contains("kept refusing"), "{error}");
+        assert!(error.to_string().contains("/v1/cluster"), "{error}");
+    }
+
+    /// Only a cluster that answers and advertises nothing gets the cluster default, and it gets
+    /// it on the first pass: there is nothing a retry could change.
     #[tokio::test]
     async fn nodes_without_supported_versions_fall_back_to_cluster_default() {
         let server = MockServer::start().await;
@@ -616,6 +770,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/v1/nodes"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([{"uid": 1}])))
+            .expect(1)
             .mount(&server)
             .await;
         Mock::given(method("POST"))
@@ -632,7 +787,7 @@ mod tests {
             .await;
 
         let client = client(&server);
-        let selection = select_database_redis_version_with_retry(&client, None, 2, Duration::ZERO)
+        let selection = select_database_redis_version_with_retry(&client, None, 5, Duration::ZERO)
             .await
             .unwrap();
         assert!(matches!(selection, DatabaseVersion::ClusterDefault { .. }));
