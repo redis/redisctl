@@ -15,6 +15,7 @@ use crate::tools::macros::{database_tool, mcp_module};
 
 /// A score-member pair for sorted set operations
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ScoreMember {
     /// Score value
     #[serde(deserialize_with = "serde_helpers::string_or_f64::deserialize")]
@@ -138,8 +139,8 @@ database_tool!(read_only, lrange, "redis_lrange",
 
         if result.is_empty() {
             return Ok(CallToolResult::text(format!(
-                "(empty list or key '{}' not found)",
-                input.key
+                "No list elements returned for '{}' in range [{}, {}]",
+                input.key, input.start, input.stop
             )));
         }
 
@@ -327,7 +328,10 @@ database_tool!(read_only, xrange, "redis_xrange",
         // Format stream entries
         let formatted = match &result {
             redis::Value::Array(entries) if entries.is_empty() => {
-                format!("(empty stream or key '{}' not found)", input.key)
+                format!(
+                    "No stream entries returned for '{}' in range [{}, {}]",
+                    input.key, input.start, input.end
+                )
             }
             redis::Value::Array(entries) => {
                 let mut output =
@@ -841,6 +845,12 @@ database_tool!(read_only, zrangebyscore, "redis_zrangebyscore",
         #[serde(default, deserialize_with = "serde_helpers::string_or_opt_i64::deserialize")]
         pub count: Option<i64>,
     } => |conn, input| {
+        if input.offset.is_some() != input.count.is_some() {
+            return Err(tower_mcp::Error::tool(
+                "offset and count must be provided together for pagination",
+            ));
+        }
+
         let mut cmd = redis::cmd("ZRANGEBYSCORE");
         cmd.arg(&input.key).arg(&input.min).arg(&input.max);
 

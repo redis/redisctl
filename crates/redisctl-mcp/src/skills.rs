@@ -58,6 +58,10 @@ const BUNDLED: &[(&str, &str)] = &[
         "redisctl-setup",
         include_str!("../skills/redisctl-setup/SKILL.md"),
     ),
+    (
+        "redisctl-tour",
+        include_str!("../skills/redisctl-tour/SKILL.md"),
+    ),
 ];
 
 struct Entry {
@@ -309,8 +313,7 @@ mod tests {
                 ("redis_ft_search", "dialect"),
                 ("redis_ft_search", "params"),
                 ("redis_ft_search", "timeout"),
-                ("redis_ft_aggregate", "group_by"),
-                ("redis_ft_aggregate", "reduce"),
+                ("redis_ft_aggregate", "groupby"),
                 ("redis_ft_explain", "dialect"),
                 ("redis_ft_profile", "limit_num"),
             ] {
@@ -332,6 +335,20 @@ mod tests {
             ] {
                 assert!(validate_example(&example).is_err(), "{example}");
             }
+        }
+
+        #[test]
+        fn structured_aggregate_stages_named_in_the_guide_are_declared_inputs() {
+            validate_example(&json!({"name":"redis_ft_aggregate", "arguments":{
+                "index":"idx:expert_demo",
+                "query":"@price:[50 200]",
+                "group_by":["@category"],
+                "reduce":["COUNT 0 AS count"],
+                "sort_by":["@count","DESC"],
+                "limit_offset":0,
+                "limit_num":5
+            }}))
+            .unwrap();
         }
 
         #[test]

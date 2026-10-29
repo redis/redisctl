@@ -128,6 +128,11 @@ jobs:
           cargo test -p redisctl-mcp --test redis_stack_tools --all-features test_bulk_seed_tools -- --ignored --test-threads=1
           cargo test -p redisctl-mcp --test redis_stack_tools --all-features test_alias_tools -- --ignored --test-threads=1
 
+      - name: Run Redis MCP Search integration tests
+        env:
+          REUSE_CONTAINERS: "1"
+        run: cargo test -p redisctl-mcp --test redis_stack_tools --all-features test_search_tools -- --ignored --test-threads=1
+
   # Platform builds - only required for main branch and releases
   build-platforms:
     name: Build - ${{ matrix.os }}

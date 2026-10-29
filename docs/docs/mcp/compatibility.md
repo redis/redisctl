@@ -5,11 +5,11 @@ documented feature set. The all-features catalog is recorded in
 [`mcp-catalog-v1.json`](https://github.com/redis/redisctl/blob/main/crates/redisctl-mcp/tests/fixtures/mcp-catalog-v1.json)
 and checked in CI.
 
-The current all-features baseline contains 375 tools:
+The current all-features baseline contains 377 tools:
 
 | Toolset | Tools |
 | --- | ---: |
-| Cloud | 148 |
+| Cloud | 150 |
 | Enterprise | 85 |
 | Database | 132 |
 | App/profile | 8 |
@@ -85,6 +85,57 @@ Both additive and breaking differences fail the snapshot test. This prevents a n
 from entering the stable catalog merely because it compiles. The failure explains the detected
 classification so the pull request can apply the appropriate SemVer, documentation, and migration
 treatment.
+
+### Pre-1.0 migration: strict tool inputs and aggregation
+
+The change in [PR #1225](https://github.com/redis/redisctl/pull/1225) intentionally
+tightens input acceptance before 1.0. Unknown properties in application tool inputs and typed
+nested argument objects now produce an `Invalid input: unknown field ...` error instead of being
+silently ignored. This is a breaking input-acceptance change, not merely an additive schema
+refresh. It affects 375 application/tool inputs in this baseline; the two system tools are
+unchanged. It does not change safety tiers or authorize additional operations.
+
+Clients adopting a build with this change should:
+
+1. Refresh MCP `tools/list` schemas and validate arguments against the tools actually exposed.
+   Correct misspelled fields such as `groupby` to `group_by`; do not retry the same invalid input.
+2. Keep tracing labels and other client metadata outside tool arguments. Remove undeclared
+   properties from typed nested arguments too, such as entries in an alias's `commands` array.
+3. Preserve application data inside documented payload fields. Arbitrary JSON inside raw API
+   `body` values and arbitrary keys in declared string maps (for example `redis_hset.fields`)
+   remain data, not unknown tool arguments. Their existing value types and upstream validation
+   still apply. Do not move metadata into a data payload merely to evade input validation.
+
+`redis_ft_aggregate` also changes intentionally:
+
+- Calls with only `index` and `query` (including pagination-only calls) now fail with pipeline
+  guidance. Use `redis_ft_search` for a document search, or provide aggregation stages.
+- `reduce` takes **one reducer specification per string**, not one token per entry. For example:
+
+  ```json
+  {
+    "index": "idx:products",
+    "query": "*",
+    "group_by": ["@category"],
+    "reduce": ["COUNT 0 AS count"],
+    "sort_by": ["@count", "DESC", "MAX", "10"],
+    "limit_num": 10
+  }
+  ```
+
+- Structured stages run in this order: `LOAD`, `GROUPBY/REDUCE`, `raw_args`, `SORTBY`, `LIMIT`.
+  Reducer strings are whitespace-tokenized, not shell-quoted. For tokens containing whitespace,
+  or `APPLY`/`FILTER` stages needed before grouping, supply the complete ordered pipeline through
+  `raw_args` and omit the corresponding structured stages. Each raw array element is one token.
+- `sort_by` accepts properties with optional `ASC`/`DESC` and an optional trailing `MAX` count.
+  Use explicit `@max`, `@asc` or `@desc` for keyword-named sort properties to avoid ambiguity.
+- The text heading is now `Results: N`, counting rows returned, not all matched documents or an
+  unpaginated total. Clients that parse the previous heading must adapt. This does not add cursor
+  support or make free-form text a structured output schema.
+
+This pre-1.0 decision does not weaken the 1.x compatibility rules above. Released versions without
+the change keep their existing behavior; check the release notes and discovered schemas when
+upgrading.
 
 ### Security exception: arbitrary Redis command surfaces
 

@@ -22,6 +22,10 @@ name = "cloud_tools"
 required-features = ["cloud", "test-support"]
 
 [[test]]
+name = "empty_range_replies"
+required-features = ["database", "test-support"]
+
+[[test]]
 name = "enterprise_mcp_docker_integration_tests"
 required-features = ["enterprise", "test-support"]
 
@@ -34,6 +38,10 @@ name = "redis_stack_tools"
 required-features = ["database", "test-support"]
 
 [[test]]
+name = "strict_tool_inputs"
+required-features = ["test-support"]
+
+[[test]]
 name = "redis_tools"
 required-features = ["database", "test-support"]
 
@@ -43,6 +51,14 @@ required-features = ["database", "test-support"]
 
 [[test]]
 name = "expire_ttl_guard"
+required-features = ["database", "test-support"]
+
+[[test]]
+name = "json_empty_increment"
+required-features = ["database", "test-support"]
+
+[[test]]
+name = "zrange_pagination"
 required-features = ["database", "test-support"]
 
 [dependencies]

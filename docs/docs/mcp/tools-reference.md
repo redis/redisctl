@@ -166,7 +166,7 @@ Monitoring -- alerts, audit logs, aggregate stats for nodes/databases/shards, an
 
 | Representative Tools | Description |
 |---------------------|-------------|
-| `list_alerts` | List active alerts |
+| `list_alerts` | List cluster alert states keyed by alert name |
 | `acknowledge_enterprise_alert` | Acknowledge an alert *(write)* |
 | `list_logs` | Get cluster event logs |
 | `get_all_nodes_stats` | Get aggregate node statistics |
@@ -313,6 +313,9 @@ Full-text and vector search via RediSearch -- index management, aliases, diction
 | `redis_ft_explain` | Explain query execution plan |
 | `redis_ft_profile` | Profile query execution |
 | `redis_ft_aliasupdate` | Atomically repoint an index alias *(write)* |
+
+For structured aggregation inputs, stage ordering, raw token escape hatches and the pre-1.0
+strict-input change, see the [migration guidance](compatibility.md#pre-10-migration-strict-tool-inputs-and-aggregation).
 
 ### `database:aliases` (4 tools)
 

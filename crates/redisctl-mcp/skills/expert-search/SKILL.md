@@ -56,9 +56,10 @@ input fields. In this wrapper:
 
 - `redis_ft_search` has pagination, sorting and result-shaping inputs, but no
   `dialect`, `params` or `timeout` input.
-- `redis_ft_aggregate` accepts `raw_args` for pipeline tokens, not top-level
-  `group_by` or `reduce` inputs. Older builds can silently ignore unknown fields;
-  apparent success does not prove those fields were used.
+- `redis_ft_aggregate` accepts structured `group_by`, `reduce` and `sort_by`
+  stages, plus `raw_args` for exact pipeline tokens. It rejects a call that sets
+  no stage at all. Current builds reject unknown fields; older builds silently
+  ignored them, so apparent success there does not prove a field was used.
 - `redis_ft_explain` accepts `index` and `query`, without a dialect override.
 - `redis_ft_profile` requires `index`, `command` and `query`. Its command is
   `SEARCH` or `AGGREGATE`, not `HYBRID`. It exposes no pagination, timeout or
@@ -113,9 +114,14 @@ and then cap the output. Stage order changes the calculation. In this example,
 {"name":"redis_ft_aggregate","arguments":{"index":"idx:expert_demo","query":"@price:[50 200]","load_fields":["@category"],"raw_args":["GROUPBY","1","@category","REDUCE","COUNT","0","AS","count","SORTBY","2","@count","DESC"],"limit_offset":0,"limit_num":5}}
 ```
 
-Read the named `count` output as the per-group count. Do not interpret the
-wrapper's leading `Total results` label as a business count or proof the intended
-pipeline ran. If rows are blank or fields are missing, check the accepted inputs
+The structured stages express the same pipeline and are the preferred form:
+`"group_by":["@category"]`, `"reduce":["COUNT 0 AS count"]` and
+`"sort_by":["@count","DESC"]` in place of `raw_args`. Keep `raw_args` for stages
+the structured inputs cannot express, such as `APPLY` or `FILTER` before grouping.
+
+Read the named `count` output as the per-group count. The wrapper's leading
+`Results: N` label counts returned rows, not matched documents; do not read it as
+a business count or proof the intended pipeline ran. If rows are blank or fields are missing, check the accepted inputs
 and pipeline before drawing conclusions. Neither `LIMIT` nor loading one field
 makes aggregation cheap on a large dataset; avoid `LOAD *`.
 

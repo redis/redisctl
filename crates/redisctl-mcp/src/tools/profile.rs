@@ -44,6 +44,7 @@ pub fn tool_names() -> Vec<String> {
 
 /// Input for listing profiles (no required parameters)
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ListProfilesInput {}
 
 /// Profile summary for list output
@@ -125,6 +126,7 @@ pub fn list_profiles(state: Arc<AppState>) -> Tool {
 
 /// Input for showing a specific profile
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ShowProfileInput {
     /// Name of the profile to show
     pub name: String,
@@ -308,6 +310,7 @@ pub fn show_profile(state: Arc<AppState>) -> Tool {
 
 /// Input for getting config path (no required parameters)
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigPathInput {}
 
 /// Build the profile_path tool
@@ -336,6 +339,7 @@ pub fn config_path(state: Arc<AppState>) -> Tool {
 
 /// Input for validating config
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ValidateConfigInput {
     /// When true, test actual API/database connectivity for each profile in addition to structural checks
     #[serde(default)]
@@ -612,6 +616,7 @@ pub fn validate_config(state: Arc<AppState>) -> Tool {
 
 /// Input for setting default cloud profile
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SetDefaultCloudInput {
     /// Name of the profile to set as default cloud profile
     pub name: String,
@@ -664,6 +669,7 @@ pub fn set_default_cloud(state: Arc<AppState>) -> Tool {
 
 /// Input for setting default enterprise profile
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SetDefaultEnterpriseInput {
     /// Name of the profile to set as default enterprise profile
     pub name: String,
@@ -716,6 +722,7 @@ pub fn set_default_enterprise(state: Arc<AppState>) -> Tool {
 
 /// Input for deleting a profile
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DeleteProfileInput {
     /// Name of the profile to delete
     pub name: String,
@@ -757,6 +764,7 @@ pub fn delete_profile(state: Arc<AppState>) -> Tool {
 
 /// Input for creating a new profile
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CreateProfileInput {
     /// Name for the new profile
     pub name: String,

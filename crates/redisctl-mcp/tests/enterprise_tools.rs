@@ -6,8 +6,7 @@ mod support;
 use std::sync::Arc;
 
 use redis_enterprise::testing::{
-    AlertFixture, ClusterFixture, DatabaseFixture, LicenseFixture, MockEnterpriseServer,
-    NodeFixture, UserFixture,
+    ClusterFixture, DatabaseFixture, LicenseFixture, MockEnterpriseServer, NodeFixture, UserFixture,
 };
 use serde_json::json;
 use tower_mcp::Tool;
@@ -416,22 +415,30 @@ async fn test_get_enterprise_user() {
 async fn test_list_alerts() {
     let server = MockEnterpriseServer::start().await;
 
-    let alert1 = AlertFixture::new("alert-1", "high_memory_usage")
-        .severity("WARNING")
-        .description("Memory usage above 80%")
-        .build();
-
-    let alert2 = AlertFixture::new("alert-2", "node_cpu_critical")
-        .severity("CRITICAL")
-        .entity_type("node")
-        .entity_uid("1")
-        .build();
-
-    // The `mock_alerts_list` helper was removed upstream; the list_alerts tool
-    // now reads the cluster-wide alerts route directly.
+    // Redis Enterprise serves cluster-wide alerts at /v1/cluster/alerts as a map
+    // keyed by alert name; `/v1/alerts` does not exist (404). `expect(1)` fails
+    // the test if the tool queries any other path.
     Mock::given(method("GET"))
-        .and(path("/v1/alerts"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!([alert1, alert2])))
+        .and(path("/v1/cluster/alerts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "cluster_node_down": {
+                "enabled": true,
+                "state": true,
+                "severity": "ERROR",
+                "change_time": "2026-10-21T10:00:00Z",
+                "change_value": {"node_uid": "2"}
+            },
+            "cluster_license_about_to_expire": {
+                "enabled": true,
+                "state": false,
+                "severity": "WARNING"
+            },
+            "cluster_ram_overcommit": {
+                "enabled": false,
+                "state": null
+            }
+        })))
+        .expect(1)
         .mount(server.inner())
         .await;
 
@@ -441,11 +448,45 @@ async fn test_list_alerts() {
 
     let result = call_tool_json(&tool, json!({})).await;
 
-    assert_eq!(result["count"], 2);
-    let alerts = result["alerts"].as_array().unwrap();
-    assert_eq!(alerts.len(), 2);
-    assert_eq!(alerts[0]["name"], "high_memory_usage");
-    assert_eq!(alerts[1]["name"], "node_cpu_critical");
+    assert_eq!(result["count"], 3);
+    assert_eq!(result["active_count"], 1);
+    let alerts = result["alerts"]
+        .as_object()
+        .expect("alerts should be a map keyed by alert name");
+    assert_eq!(alerts.len(), 3);
+    assert_eq!(alerts["cluster_node_down"]["state"], true);
+    assert_eq!(alerts["cluster_node_down"]["severity"], "ERROR");
+    assert_eq!(alerts["cluster_license_about_to_expire"]["state"], false);
+    // Not evaluated yet: no state, no severity, and the tool still answers.
+    assert!(alerts["cluster_ram_overcommit"]["state"].is_null());
+
+    server.inner().verify().await;
+}
+
+#[tokio::test]
+async fn test_list_alerts_surfaces_server_error() {
+    let server = MockEnterpriseServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/cluster/alerts"))
+        .respond_with(ResponseTemplate::new(404).set_body_json(json!({
+            "error_code": "not_found",
+            "description": "Resource not found"
+        })))
+        .mount(server.inner())
+        .await;
+
+    let state = Arc::new(AppState::with_enterprise_client(server.client()));
+    let tool = enterprise::list_alerts(state);
+
+    let result = tool.call(json!({})).await;
+
+    assert!(
+        result.is_error,
+        "a 404 from the cluster alerts route should surface as a tool error"
+    );
+    let text = result.content[0].as_text().unwrap_or_default();
+    assert!(text.contains("Failed to list cluster alerts"), "{text}");
 }
 
 #[tokio::test]
