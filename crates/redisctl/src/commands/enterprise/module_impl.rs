@@ -832,7 +832,12 @@ async fn handle_inspect(file: &Path, verbose: bool, output_format: OutputFormat)
         let mut zip_entry = archive
             .by_index(i)
             .with_context(|| format!("Failed to read zip entry {}", i))?;
-        let name = zip_entry.name().to_string();
+        // zip 9 made `name()` fallible; fall back to the raw bytes so inspection
+        // still lists entries whose names are not valid UTF-8.
+        let name = match zip_entry.name() {
+            Ok(name) => name.into_owned(),
+            Err(_) => String::from_utf8_lossy(zip_entry.name_raw()).into_owned(),
+        };
         let size = zip_entry.size();
 
         files_info.push((name.clone(), size));
@@ -1095,5 +1100,94 @@ fn format_size(bytes: u64) -> String {
         format!("{:.1} KB", bytes as f64 / KB as f64)
     } else {
         format!("{} bytes", bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MODULE_JSON: &str =
+        r#"{"module_name":"synthetic","semantic_version":"1.0.0","version":10000}"#;
+
+    fn write_synthetic_inputs(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+        let module_path = dir.join("synthetic.so");
+        let metadata_path = dir.join("module.json");
+        fs::write(&module_path, vec![0x7f_u8; 4096]).unwrap();
+        fs::write(&metadata_path, MODULE_JSON).unwrap();
+        (module_path, metadata_path)
+    }
+
+    #[tokio::test]
+    async fn package_writes_deflated_module_json_and_binary_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let (module_path, metadata_path) = write_synthetic_inputs(dir.path());
+        let output_path = dir.path().join("out").join("synthetic.zip");
+
+        handle_package(
+            &module_path,
+            &metadata_path,
+            &output_path,
+            false,
+            OutputFormat::Json,
+        )
+        .await
+        .unwrap();
+
+        let mut archive = zip::ZipArchive::new(fs::File::open(&output_path).unwrap()).unwrap();
+        assert_eq!(archive.len(), 2);
+
+        let mut names = Vec::new();
+        for i in 0..archive.len() {
+            let mut entry = archive.by_index(i).unwrap();
+            let name = entry.name().unwrap().into_owned();
+            assert_eq!(entry.compression(), zip::CompressionMethod::Deflated);
+            let mut content = Vec::new();
+            entry.read_to_end(&mut content).unwrap();
+            match name.as_str() {
+                "module.json" => assert_eq!(content, MODULE_JSON.as_bytes()),
+                "synthetic.so" => assert_eq!(content, vec![0x7f_u8; 4096]),
+                other => panic!("unexpected entry {other}"),
+            }
+            names.push(name);
+        }
+        assert_eq!(names, ["module.json", "synthetic.so"]);
+    }
+
+    #[tokio::test]
+    async fn inspect_reads_a_package_created_by_package() {
+        let dir = tempfile::tempdir().unwrap();
+        let (module_path, metadata_path) = write_synthetic_inputs(dir.path());
+        let output_path = dir.path().join("synthetic.zip");
+
+        handle_package(
+            &module_path,
+            &metadata_path,
+            &output_path,
+            false,
+            OutputFormat::Table,
+        )
+        .await
+        .unwrap();
+
+        handle_inspect(&output_path, true, OutputFormat::Json)
+            .await
+            .unwrap();
+        handle_inspect(&output_path, false, OutputFormat::Table)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn inspect_rejects_non_zip_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let bogus = dir.path().join("not-a-zip.zip");
+        fs::write(&bogus, b"definitely not a zip archive").unwrap();
+
+        assert!(
+            handle_inspect(&bogus, false, OutputFormat::Table)
+                .await
+                .is_err()
+        );
     }
 }

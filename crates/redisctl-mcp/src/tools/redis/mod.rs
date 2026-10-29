@@ -218,6 +218,22 @@ impl<T> RedisResultExt<T> for Result<T, redis::RedisError> {
     }
 }
 
+/// Refuse a TTL of zero or less before it reaches Redis.
+///
+/// `EXPIRE` and `HEXPIRE` treat a non-positive TTL as "expire now": the key (or
+/// hash fields) is deleted immediately. Reporting that as "TTL set" misleads the
+/// caller, so the tools reject it up front. `target` names what would be deleted
+/// and `remedy` points at the tool that does what the caller likely meant.
+pub(crate) fn require_positive_ttl(seconds: i64, target: &str, remedy: &str) -> Result<(), String> {
+    if seconds > 0 {
+        return Ok(());
+    }
+    Err(format!(
+        "seconds must be positive (got {seconds}): a TTL of 0 or less deletes {target} \
+         immediately. {remedy}"
+    ))
+}
+
 /// Build an MCP sub-router containing all Redis database tools
 pub fn router(state: Arc<AppState>) -> McpRouter {
     McpRouter::new()
@@ -230,6 +246,29 @@ pub fn router(state: Arc<AppState>) -> McpRouter {
         .merge(bulk::router(state.clone()))
         .merge(raw::router(state.clone()))
         .merge(aliases::router(state))
+}
+
+#[cfg(test)]
+mod ttl_tests {
+    use super::require_positive_ttl;
+
+    #[test]
+    fn non_positive_ttls_are_rejected() {
+        for seconds in [0, -1, -5, i64::MIN] {
+            let msg = require_positive_ttl(seconds, "the key", "Use redis_del.").unwrap_err();
+            assert!(msg.contains("must be positive"), "{msg}");
+            assert!(msg.contains(&format!("got {seconds}")), "{msg}");
+            assert!(msg.contains("deletes the key immediately"), "{msg}");
+            assert!(msg.contains("Use redis_del."), "{msg}");
+        }
+    }
+
+    #[test]
+    fn positive_ttls_are_accepted() {
+        for seconds in [1, 60, i64::MAX] {
+            assert_eq!(require_positive_ttl(seconds, "the key", "unused"), Ok(()));
+        }
+    }
 }
 
 #[cfg(test)]

@@ -222,7 +222,7 @@ Server-level operations -- connectivity, server info, client listing, slow log, 
 | `redis_slowlog` | Get slow log entries |
 | `redis_memory_stats` | Get memory statistics |
 | `redis_config_get` | Get config values |
-| `redis_config_set` | Set config values *(write)* |
+| `redis_config_set` | Set config values; refuses security-sensitive parameters *(write)* |
 
 ### `database:keys` (31 tools)
 

@@ -39,7 +39,7 @@ fn report(path: &Path, format: &str) -> Value {
     if format == "json" {
         serde_json::from_slice(&assertion.get_output().stdout).unwrap()
     } else {
-        serde_yaml::from_slice(&assertion.get_output().stdout).unwrap()
+        serde_norway::from_slice(&assertion.get_output().stdout).unwrap()
     }
 }
 

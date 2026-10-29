@@ -1439,11 +1439,12 @@ database_tool!(write, hexpire, "redis_hexpire",
      - GT: set expiry only if new TTL is greater than current TTL\n\
      - LT: set expiry only if new TTL is less than current TTL\n\n\
      Per-field result codes: 2 = field already expired/deleted, 1 = expiry set, \
-     0 = condition not met, -2 = field does not exist.",
+     0 = condition not met, -2 = field does not exist.\n\n\
+     TTL must be positive; 0 or less is refused because Redis would delete the fields immediately.",
     {
         /// Hash key
         pub key: String,
-        /// TTL in seconds
+        /// TTL in seconds (must be positive)
         #[serde(deserialize_with = "serde_helpers::string_or_i64::deserialize")]
         pub seconds: i64,
         /// Fields to set TTL on
@@ -1452,6 +1453,14 @@ database_tool!(write, hexpire, "redis_hexpire",
         #[serde(default)]
         pub condition: Option<String>,
     } => |conn, input| {
+        super::require_positive_ttl(
+            input.seconds,
+            "the fields",
+            "Use redis_hdel to delete the fields.",
+        )
+        .map_err(tower_mcp::Error::tool)?;
+
+
         if let Some(ref cond) = input.condition {
             let cond_upper = cond.to_uppercase();
             if !matches!(cond_upper.as_str(), "NX" | "XX" | "GT" | "LT") {
