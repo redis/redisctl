@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "redisctl": {
+      "type": "stdio",
+      "command": "redisctl-mcp",
+      "args": [
+        "--transport",
+        "stdio",
+        "--read-only=true",
+        "--policy",
+        "${CLAUDE_PLUGIN_ROOT}/read-only.toml",
+        "--tools",
+        "cloud,enterprise,database,app"
+      ]
+    }
+  }
+}
