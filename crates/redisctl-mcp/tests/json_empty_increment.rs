@@ -43,7 +43,7 @@ async fn call_tool(input: Value, response: String) -> CallToolResult {
         let (socket, _) = listener.accept().await.unwrap();
         let (read, mut write) = socket.into_split();
         let mut reader = BufReader::new(read);
-        // redis-rs0.27.6 RESP2 setup uses two CLIENT SETINFO commands.
+        // The default RESP2 connection setup sends two CLIENT SETINFO commands.
         for field in ["LIB-NAME", "LIB-VER"] {
             let handshake = read_command(&mut reader).await;
             assert_eq!(handshake.len(), 4);
@@ -66,8 +66,6 @@ async fn call_tool(input: Value, response: String) -> CallToolResult {
             other => panic!("unexpected extra query or close error: {other:?}"),
         }
     });
-    // Constructor may read default Config; explicit loopback selection bypasses
-    // profile lookup. No credentials or real deployments are selected or contacted.
     let state = support::database_state_write(format!("redis://{addr}"));
     let tool = redis::json_numincrby(state.clone());
     let result = tokio::time::timeout(Duration::from_secs(5), tool.call(input))
