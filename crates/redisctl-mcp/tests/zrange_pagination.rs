@@ -49,8 +49,8 @@ async fn call_tool(input: Value, reply: &'static str) -> (CallToolResult, Option
         }
         let command = read_command(&mut reader).await;
         if command.is_some() {
-            // Also answer buggy baseline queries, so the negative control is an
-            // observable false-success response, not a fixture/connection timeout.
+            // Answer whatever arrives, so a missing pair check shows up as a
+            // false success rather than a timeout.
             write.write_all(reply.as_bytes()).await.unwrap();
             let mut byte = [0];
             match reader.read(&mut byte).await {
@@ -66,8 +66,6 @@ async fn call_tool(input: Value, reply: &'static str) -> (CallToolResult, Option
         command
     });
 
-    // AppState construction may read the default Config; explicit loopback URL
-    // selection bypasses profile lookup and never uses credential-bearing targets.
     let state = support::database_state_readonly(format!("redis://{addr}"));
     let tool = redis::zrangebyscore(state.clone());
     let result = tokio::time::timeout(Duration::from_secs(5), tool.call(input))
