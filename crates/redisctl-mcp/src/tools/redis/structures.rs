@@ -15,6 +15,7 @@ use crate::tools::macros::{database_tool, mcp_module};
 
 /// A score-member pair for sorted set operations
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ScoreMember {
     /// Score value
     #[serde(deserialize_with = "serde_helpers::string_or_f64::deserialize")]
