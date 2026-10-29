@@ -8,14 +8,18 @@ Initialize a new cluster:
 
 ```bash
 redisctl enterprise workflow init-cluster \
-  --license-file ./license.txt \
-  --cluster-name production
+  --name production \
+  --username admin@example.com \
+  --password "$REDIS_ENTERPRISE_INIT_PASSWORD"
 ```
 
 This:
-1. Uploads the license
-2. Configures the cluster name
-3. Waits for initialization
+1. Bootstraps the cluster with the given name and admin credentials
+2. Waits until the API reports the bootstrap as completed
+3. Creates a default database (`--skip-database` to skip; `--database-name` and
+   `--database-memory-gb` adjust it)
+
+To choose the database's Redis version, the workflow asks the cluster which versions its nodes support and requests the highest. Right after bootstrap the REST API can answer `401` for a few seconds while authentication comes up, so discovery retries for about 30 seconds before giving up; a cluster that keeps refusing is reported as an error rather than guessed at. If the cluster answers but advertises no supported version, the workflow prints a note and creates the database with the cluster default. Pass `--database-redis-version MAJOR.MINOR` to pin a version; an explicit value skips discovery and is validated strictly.
 
 ## When to Use Workflows
 

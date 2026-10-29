@@ -1,5 +1,7 @@
 //! Alerts, logs, aggregate stats, shards, debug info, and module tools
 
+use std::collections::BTreeMap;
+
 use redis_enterprise::logs::{LogsHandler, LogsQuery};
 use tower_mcp::{CallToolResult, ResultExt};
 
@@ -26,15 +28,27 @@ mcp_module! {
 // ============================================================================
 
 enterprise_tool!(read_only, list_alerts, "list_alerts",
-    "List all active alerts.",
+    "List cluster-level alert states (GET /v1/cluster/alerts), keyed by alert name. \
+     Each entry reports whether the alert is enabled, whether it is currently triggered \
+     (`state: true`), and its severity. `active_count` is the number of triggered alerts, \
+     including alerts that are not enabled.",
     {} => |client, _input| {
-        // The `AlertHandler::list` convenience method was removed upstream; call
-        // the cluster-wide alerts route directly to preserve this tool.
-        let alerts: Vec<redis_enterprise::alerts::Alert> = client
-            .get("/v1/alerts")
+        // Plain JSON rather than a typed state: an alert that has not been evaluated
+        // yet can report `state: null` without a severity.
+        let alerts: BTreeMap<String, serde_json::Value> = client
+            .get("/v1/cluster/alerts")
             .await
-            .tool_context("Failed to list alerts")?;
-        CallToolResult::from_list("alerts", &alerts)
+            .tool_context("Failed to list cluster alerts")?;
+        let active_count = alerts
+            .values()
+            .filter(|alert| alert["state"] == serde_json::Value::Bool(true))
+            .count();
+
+        CallToolResult::from_serialize(&serde_json::json!({
+            "count": alerts.len(),
+            "active_count": active_count,
+            "alerts": alerts,
+        }))
     }
 );
 

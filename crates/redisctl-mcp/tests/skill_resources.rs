@@ -31,8 +31,9 @@ async fn bundled_resource_index_matches_prompts_and_readable_markdown() {
         serde_json::from_str(result.contents[0].text.as_ref().unwrap()).unwrap();
     assert_eq!(index["schema_version"], 1);
     let skills = index["skills"].as_array().unwrap();
-    assert_eq!(skills.len(), 12);
+    assert_eq!(skills.len(), 13);
     assert!(skills.iter().any(|s| s["name"] == "expert-search"));
+    assert!(skills.iter().any(|s| s["name"] == "redisctl-tour"));
     let prompts = client.list_prompts().await;
     for skill in skills {
         let name = skill["name"].as_str().unwrap();

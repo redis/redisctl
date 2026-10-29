@@ -58,6 +58,8 @@ async fn copied_binary_discovers_reads_and_prompts_for_embedded_setup() {
         .args(["--tools", "app", "--log-level", "off", "--policy"])
         .arg(policy)
         .current_dir(directory.path())
+        .env("HOME", directory.path())
+        .env("XDG_CONFIG_HOME", directory.path().join("config"))
         .env_remove("REDISCTL_PROFILE")
         .env_remove("REDIS_URL")
         .env_remove("REDIS_CLUSTER")
@@ -108,7 +110,7 @@ async fn copied_binary_discovers_reads_and_prompts_for_embedded_setup() {
     .await;
     let index: Value =
         serde_json::from_str(index["contents"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(index["skills"].as_array().unwrap().len(), 12);
+    assert_eq!(index["skills"].as_array().unwrap().len(), 13);
     assert!(index["skills"].as_array().unwrap().iter().any(|s| {
         s["name"] == "expert-search" && s["uri"] == "redisctl://skills/expert-search"
     }));
@@ -150,6 +152,28 @@ async fn copied_binary_discovers_reads_and_prompts_for_embedded_setup() {
     )
     .await;
     assert!(prompt.to_string().contains("redisctl profile init"));
+
+    let tour = request(
+        &mut stdin,
+        &mut stdout,
+        7,
+        "resources/read",
+        json!({"uri": "redisctl://skills/redisctl-tour"}),
+    )
+    .await;
+    let tour = tour["contents"][0]["text"].as_str().unwrap();
+    assert!(tour.contains("stop with advice only"));
+    assert!(tour.contains("never inspect credential files"));
+    let prompt = request(
+        &mut stdin,
+        &mut stdout,
+        8,
+        "prompts/get",
+        json!({"name": "redisctl-tour", "arguments": {}}),
+    )
+    .await;
+    assert!(prompt.to_string().contains("Known synthetic sample"));
+    assert!(prompt.to_string().contains("redisctl://skills"));
 
     drop(stdin);
     let status = tokio::time::timeout(Duration::from_secs(10), child.wait())
