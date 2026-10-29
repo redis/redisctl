@@ -18,6 +18,7 @@ use crate::tools::macros::{cloud_tool, mcp_module};
 
 /// Input for a tag key-value pair
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FixedTagInput {
     /// Tag key
     pub key: String,
