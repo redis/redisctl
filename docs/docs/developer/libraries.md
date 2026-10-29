@@ -27,7 +27,7 @@ Redis Cloud API client with full type coverage. Maintained at [github.com/redis-
 **Rust:**
 ```toml
 [dependencies]
-redis-cloud = "0.10"
+redis-cloud = "0.11"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -70,7 +70,7 @@ Redis Enterprise REST API client. Maintained at [github.com/redis-developer/redi
 **Rust:**
 ```toml
 [dependencies]
-redis-enterprise = "0.9"
+redis-enterprise = "0.10"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -115,7 +115,7 @@ Core library for config, workflows, and shared logic.
 
 ```toml
 [dependencies]
-redisctl-core = "0.11"
+redisctl-core = "0.13"
 ```
 
 ### Example
