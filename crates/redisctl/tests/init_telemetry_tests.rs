@@ -7,7 +7,7 @@
 mod init_common;
 
 use assert_cmd::Command;
-use init_common::{fake_redis, skills_fixture};
+use init_common::{fake_redis, skills_fixture, telemetry_notice_seen};
 use predicates::prelude::*;
 use tempfile::TempDir;
 use wiremock::matchers::{method, path};
@@ -60,8 +60,10 @@ async fn amplitude() -> MockServer {
     server
 }
 
+const NOTICE: &str = "sends anonymous usage data to Amplitude, starting with the next run";
+
 #[tokio::test(flavor = "multi_thread")]
-async fn sends_one_event_and_never_the_values() {
+async fn the_first_run_only_prints_the_notice_and_later_runs_send_one_event() {
     let (project, home, repo) = (
         tempfile::tempdir().unwrap(),
         tempfile::tempdir().unwrap(),
@@ -71,15 +73,27 @@ async fn sends_one_event_and_never_the_values() {
     let endpoint = format!("127.0.0.1:{}", fake_redis());
 
     run_init(&project, &home, &repo, &endpoint, Some(&server), &[])
+        .env("REDISCTL_INIT_TELEMETRY_DEBUG", "1")
         .assert()
         .success()
-        .stderr(predicate::str::contains("Anonymous usage data"));
+        .stderr(predicate::str::contains(NOTICE))
+        .stderr(predicate::str::contains(
+            "nothing shared, the first run only prints the notice",
+        ));
+    assert!(server.received_requests().await.unwrap().is_empty());
+    let device_id = std::fs::read_to_string(home.path().join(".cache/redisctl/id")).unwrap();
+
+    run_init(&project, &home, &repo, &endpoint, Some(&server), &[])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(NOTICE).not());
 
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 1);
     let body: serde_json::Value = requests[0].body_json().unwrap();
     assert_eq!(body["api_key"], "test-key");
     let event = &body["events"][0];
+    assert_eq!(event["device_id"], device_id.trim());
     assert_eq!(event["event_type"], "cli_run");
     assert_eq!(event["ip"], "0.0.0.0");
     let props = &event["event_properties"];
@@ -87,26 +101,37 @@ async fn sends_one_event_and_never_the_values() {
     assert_eq!(props["exit_code"], 0);
     assert_eq!(props["url_provided"], true);
     assert_eq!(props["name_provided"], true);
-    assert_eq!(props["first_run"], true);
     assert_eq!(props["interactive"], false);
     // Values never travel: not the URL, the password, the name, or any path.
     let raw = String::from_utf8_lossy(&requests[0].body);
     assert!(!raw.contains("s3cret"), "{raw}");
     assert!(!raw.contains(project.path().to_str().unwrap()), "{raw}");
+}
 
-    // Second run: same device id, no notice, first_run false.
-    run_init(&project, &home, &repo, &endpoint, Some(&server), &[])
-        .assert()
-        .success()
-        .stderr(predicate::str::contains("Anonymous usage data").not());
-    let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 2);
-    let second: serde_json::Value = requests[1].body_json().unwrap();
-    assert_eq!(
-        second["events"][0]["device_id"],
-        body["events"][0]["device_id"]
+/// Without a saved device id nothing records that the notice was shown, so no run
+/// prints it or sends.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_home_that_cannot_keep_the_device_id_prints_and_sends_nothing() {
+    let (project, home, repo) = (
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+        skills_fixture(),
     );
-    assert_eq!(second["events"][0]["event_properties"]["first_run"], false);
+    std::fs::write(home.path().join(".cache"), "").unwrap();
+    let server = amplitude().await;
+    let endpoint = format!("127.0.0.1:{}", fake_redis());
+
+    for _ in 0..2 {
+        run_init(&project, &home, &repo, &endpoint, Some(&server), &[])
+            .env("REDISCTL_INIT_TELEMETRY_DEBUG", "1")
+            .assert()
+            .success()
+            .stderr(predicate::str::contains(NOTICE).not())
+            .stderr(predicate::str::contains(
+                "nothing shared, the device id cannot be saved",
+            ));
+    }
+    assert!(server.received_requests().await.unwrap().is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -163,6 +188,7 @@ async fn a_failed_run_reports_step_and_exit_code() {
         .local_addr()
         .unwrap()
         .port();
+    telemetry_notice_seen(home.path());
 
     run_init(
         &project,
