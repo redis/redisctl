@@ -21,8 +21,15 @@ use serde_json::Value;
 
 const CATALOG: &str = include_str!("fixtures/mcp-catalog-v1.json");
 
-/// Tool name to every property name its input schema declares.
-type Tools = BTreeMap<String, BTreeSet<String>>;
+/// What a tool's input schema declares. A JSON envelope's argument keys must be
+/// top-level arguments; prose may also name a nested field.
+#[derive(Default)]
+struct Inputs {
+    top: BTreeSet<String>,
+    any: BTreeSet<String>,
+}
+
+type Tools = BTreeMap<String, Inputs>;
 
 /// Property names at any depth, so a nested argument field such as a search
 /// schema entry's `field_type` counts as declared.
@@ -68,10 +75,16 @@ fn catalog_tools() -> Tools {
         .expect("catalog fixture lists tools")
         .iter()
         .map(|tool| {
-            let mut names = BTreeSet::new();
-            declared_names(&tool["inputSchema"], &mut names);
+            let schema = &tool["inputSchema"];
+            let mut inputs = Inputs::default();
+            declared_names(schema, &mut inputs.any);
+            inputs.top = schema["properties"]
+                .as_object()
+                .into_iter()
+                .flat_map(|properties| properties.keys().cloned())
+                .collect();
             let name = tool["name"].as_str().expect("catalog tool has a name");
-            (name.to_string(), names)
+            (name.to_string(), inputs)
         })
         .collect()
 }
@@ -188,7 +201,7 @@ fn check_skill(markdown: &str, tools: &Tools) -> Vec<String> {
             );
         }
         for (at, param) in params {
-            if !tools[tool].contains(param) && !tools.contains_key(param) {
+            if !tools[tool].any.contains(param) && !tools.contains_key(param) {
                 problems.push(format!("{at}: `{tool}` has no `{param}` input"));
             }
         }
@@ -213,7 +226,7 @@ fn check_envelope(opened: usize, block: &str, tools: &Tools) -> Vec<String> {
     };
     arguments
         .keys()
-        .filter(|arg| !declared.contains(*arg))
+        .filter(|arg| !declared.top.contains(*arg))
         .map(|arg| {
             format!("{opened}: the JSON example passes `{arg}`, which `{name}` has no input for")
         })
@@ -266,23 +279,29 @@ fn skills_name_only_declared_tool_inputs() {
 }
 
 fn sample_tools() -> Tools {
-    let tools: [(&str, &[&str]); 5] = [
-        ("redis_scan", &["pattern", "limit", "key_type"]),
-        ("create_fixed_subscription", &["name", "plan_id"]),
+    // (tool, top-level arguments, nested fields)
+    let tools: [(&str, &[&str], &[&str]); 6] = [
+        ("redis_scan", &["pattern", "limit", "key_type"], &[]),
+        ("create_fixed_subscription", &["name", "plan_id"], &[]),
         (
             "create_fixed_database",
             &["subscription_id", "name", "redis_version"],
+            &[],
         ),
-        ("get_fixed_redis_versions", &[]),
-        ("list_alerts", &[]),
+        ("redis_ft_create", &["index", "schema"], &["field_type"]),
+        ("get_fixed_redis_versions", &[], &[]),
+        ("list_alerts", &[], &[]),
     ];
     tools
         .into_iter()
-        .map(|(tool, inputs)| {
-            (
-                tool.to_string(),
-                inputs.iter().map(|s| s.to_string()).collect(),
-            )
+        .map(|(tool, top, nested)| {
+            let top: BTreeSet<String> = top.iter().map(|s| s.to_string()).collect();
+            let any = top
+                .iter()
+                .cloned()
+                .chain(nested.iter().map(|s| s.to_string()))
+                .collect();
+            (tool.to_string(), Inputs { top, any })
         })
         .collect()
 }
@@ -311,6 +330,12 @@ fn catches_the_shapes_that_shipped_broken() {
         check_skill(envelope, &tools),
         ["1: the JSON example passes `count`, which `redis_scan` has no input for"]
     );
+    // A nested field is not a top-level argument: strict inputs reject it there.
+    let nested = "```json\n{\"name\":\"redis_ft_create\",\"arguments\":{\"index\":\"i\",\"field_type\":\"TEXT\"}}\n```\n";
+    assert_eq!(
+        check_skill(nested, &tools),
+        ["1: the JSON example passes `field_type`, which `redis_ft_create` has no input for"]
+    );
 }
 
 #[test]
@@ -318,6 +343,7 @@ fn leaves_output_fields_values_and_prose_alone() {
     let tools = sample_tools();
     for prose in [
         "Use `redis_scan` with `limit` 100 to sample keys",
+        "Give each `redis_ft_create` schema entry with `field_type` TEXT or TAG",
         "Call `create_fixed_database` with:\n- `name`: database name\n- `redis_version` (optional)",
         "Call `list_alerts` to get alert states. Entries with `state: true` are firing.",
         "Call `list_alerts` to get:\n- `status` field — must be `active`",
