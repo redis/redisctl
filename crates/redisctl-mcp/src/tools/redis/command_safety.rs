@@ -50,6 +50,58 @@ const BLOCKED_COMMANDS: &[&str] = &[
     "WATCH",
 ];
 
+/// CONFIG parameters that can lock out clients, redirect files or sockets, change
+/// replication topology, or re-enable dangerous commands. They are refused at
+/// every safety tier by `redis_config_set` and by `CONFIG SET` through the
+/// caller-supplied command paths. Names are lower-case and sorted.
+pub(crate) const PROTECTED_CONFIG_PARAMETERS: &[&str] = &[
+    "aclfile",
+    "appenddirname",
+    "appendfilename",
+    "bind",
+    "cluster-config-file",
+    "daemonize",
+    "dbfilename",
+    "dir",
+    "enable-debug-command",
+    "enable-module-command",
+    "enable-protected-configs",
+    "include",
+    "loadmodule",
+    "logfile",
+    "masterauth",
+    "masteruser",
+    "pidfile",
+    "port",
+    "protected-mode",
+    "rename-command",
+    "replicaof",
+    "requirepass",
+    "slaveof",
+    "supervised",
+    "tls-auth-clients",
+    "tls-ca-cert-dir",
+    "tls-ca-cert-file",
+    "tls-cert-file",
+    "tls-dh-params-file",
+    "tls-key-file",
+    "tls-key-file-pass",
+    "tls-port",
+    "unixsocket",
+    "unixsocketperm",
+];
+
+/// Refuse `CONFIG SET` for security-sensitive parameters, regardless of tier.
+pub(crate) fn check_config_parameter(parameter: &str) -> Result<(), String> {
+    let normalized = parameter.trim().to_ascii_lowercase();
+    if PROTECTED_CONFIG_PARAMETERS.contains(&normalized.as_str()) {
+        return Err(format!(
+            "config parameter '{normalized}' is blocked for safety"
+        ));
+    }
+    Ok(())
+}
+
 const READ_ONLY_COMMANDS: &[&str] = &[
     "BITCOUNT",
     "BITPOS",
@@ -237,6 +289,13 @@ fn subcommand(args: &[String]) -> Option<String> {
 
 fn classify_privileged_family(command: &str, args: &[String]) -> Result<ToolSafety, String> {
     let subcommand = subcommand(args);
+    if command == "CONFIG" && subcommand.as_deref() == Some("SET") {
+        // CONFIG SET takes parameter/value pairs; report protected names with the
+        // same error as `redis_config_set` (the value is never echoed).
+        for parameter in args.iter().skip(1).step_by(2) {
+            check_config_parameter(parameter)?;
+        }
+    }
     let allowed = match command {
         "CONFIG" => matches!(subcommand.as_deref(), Some("GET" | "HELP")),
         "ACL" => match subcommand.as_deref() {
@@ -572,7 +631,7 @@ mod tests {
         for (command, command_args) in [
             ("AUTH", args(&["user", "password-never-echoed"])),
             ("BLPOP", args(&["queue", "0"])),
-            ("CONFIG", args(&["SET", "requirepass", "secret"])),
+            ("CONFIG", args(&["SET", "maxmemory", "secret"])),
             ("ACL", args(&["LOG", "RESET"])),
             ("CLIENT", args(&["KILL", "TYPE", "normal"])),
             ("BGSAVE", Vec::new()),
@@ -591,6 +650,71 @@ mod tests {
             assert!(!error.contains("requirepass"));
             assert!(!error.contains("secret"));
         }
+    }
+
+    #[test]
+    fn protected_config_parameters_are_sorted_and_lowercase() {
+        assert!(PROTECTED_CONFIG_PARAMETERS.is_sorted());
+        for parameter in PROTECTED_CONFIG_PARAMETERS {
+            assert_eq!(*parameter, parameter.to_ascii_lowercase());
+        }
+    }
+
+    #[test]
+    fn check_config_parameter_rejects_protected_names() {
+        for parameter in PROTECTED_CONFIG_PARAMETERS {
+            assert!(check_config_parameter(parameter).is_err(), "{parameter}");
+        }
+        for (input, normalized) in [
+            ("RequirePass", "requirepass"),
+            ("  MASTERAUTH\t", "masterauth"),
+            ("\nDir ", "dir"),
+            ("TLS-Key-File-Pass", "tls-key-file-pass"),
+        ] {
+            assert_eq!(
+                check_config_parameter(input).unwrap_err(),
+                format!("config parameter '{normalized}' is blocked for safety")
+            );
+        }
+    }
+
+    #[test]
+    fn check_config_parameter_accepts_operational_parameters() {
+        for parameter in [
+            "maxmemory",
+            "maxmemory-policy",
+            "slowlog-log-slower-than",
+            "save",
+            "appendonly",
+            "hz",
+        ] {
+            assert!(check_config_parameter(parameter).is_ok(), "{parameter}");
+        }
+    }
+
+    #[test]
+    fn config_set_of_protected_parameter_uses_parameter_blocked_error() {
+        let error = classify("config", &args(&["set", "RequirePass", "hunter2"])).unwrap_err();
+        assert_eq!(
+            error,
+            "config parameter 'requirepass' is blocked for safety"
+        );
+        assert!(!error.contains("hunter2"));
+
+        // Multi-pair CONFIG SET is checked on every parameter position.
+        let error = classify(
+            "CONFIG",
+            &args(&["SET", "maxmemory", "1gb", "dir", "/tmp", "hz", "10"]),
+        )
+        .unwrap_err();
+        assert_eq!(error, "config parameter 'dir' is blocked for safety");
+
+        // Other CONFIG SET parameters keep the existing command-level block.
+        assert_eq!(
+            classify("CONFIG", &args(&["SET", "maxmemory", "1gb"])).unwrap_err(),
+            "command 'CONFIG' is blocked for safety"
+        );
+        assert!(classify_command_safety("CONFIG", &args(&["SET", "requirepass", "x"])).is_err());
     }
 
     #[test]

@@ -79,7 +79,7 @@ fn cloud_user_delete_yaml_cancellation_preserves_error_contract() {
         .assert()
         .code(12)
         .stdout(predicate::str::is_empty());
-    let error: Value = serde_yaml::from_slice(&assertion.get_output().stderr).unwrap();
+    let error: Value = serde_norway::from_slice(&assertion.get_output().stderr).unwrap();
     assert_eq!(error["error"]["code"], "cancelled");
     assert_eq!(error["error"]["exit_code"], 12);
 }

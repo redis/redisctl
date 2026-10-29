@@ -218,6 +218,17 @@ asset-dependent documentation follow-up once the application releases exist:
 - [ ] Build the documentation with `cd docs && mkdocs build --strict`. Validate
       command syntax and published asset references without executing downloaded
       installers as part of documentation review.
+- [ ] Check the `redisctl init` pins in
+      `crates/redisctl/src/workflows/init/engine/pins.rs` against PyPI
+      `redis-mcp-server`, npm `mcp-remote` and `skills`, the `mcp/redis` digest
+      (`docker buildx imagetools inspect mcp/redis:latest`) and the redis-cli
+      `stable` version (`curl -fsSL https://packages.redis.io/redis-cli/stable`).
+      Check advisories with
+      `gh api '/advisories?ecosystem=npm&affects=mcp-remote'`. Keep mcp-remote at
+      0.1.16 or later. Before taking a new `mcp/redis` digest, read `source.commit`
+      in docker/mcp-registry's `servers/redis/server.yaml` and confirm that commit's
+      `src/main.py` and `src/common/config.py` match the uvx pin's, then confirm the
+      image still starts with `docker run --rm <image> uv run redis-mcp-server --help`.
 
 This checklist documents maintenance checks; it does not grant release,
 publication or installer-execution permission.

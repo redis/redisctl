@@ -67,7 +67,7 @@ fn overwrite_cancellation_preserves_structured_errors_and_existing_file() {
                 let error: Value = if format == "json" {
                     serde_json::from_slice(stderr).unwrap()
                 } else {
-                    serde_yaml::from_slice(stderr).unwrap()
+                    serde_norway::from_slice(stderr).unwrap()
                 };
                 assert_eq!(error["error"]["code"], "cancelled");
                 assert_eq!(error["error"]["exit_code"], 12);
@@ -141,7 +141,7 @@ fn explicit_force_skips_only_confirmation_and_preserves_structured_errors() {
                 let error: Value = if format == "json" {
                     serde_json::from_slice(stderr).unwrap()
                 } else {
-                    serde_yaml::from_slice(stderr).unwrap()
+                    serde_norway::from_slice(stderr).unwrap()
                 };
                 assert_eq!(error["error"]["code"], "no_profile_configured");
                 assert!(!String::from_utf8_lossy(stderr).contains("Overwrite?"));
@@ -170,7 +170,7 @@ fn force_keeps_missing_output_parent_check_before_profile_resolution() {
             let error: Value = if format == "json" {
                 serde_json::from_slice(stderr).unwrap()
             } else {
-                serde_yaml::from_slice(stderr).unwrap()
+                serde_norway::from_slice(stderr).unwrap()
             };
             assert!(
                 error["error"]["message"]
@@ -210,7 +210,7 @@ fn skip_checks_retains_broader_bypass_with_or_without_force() {
                 let error: Value = if format == "json" {
                     serde_json::from_slice(stderr).unwrap()
                 } else {
-                    serde_yaml::from_slice(stderr).unwrap()
+                    serde_norway::from_slice(stderr).unwrap()
                 };
                 assert_eq!(error["error"]["code"], "no_profile_configured");
                 assert!(!output.exists());
@@ -234,7 +234,7 @@ fn new_output_path_does_not_prefix_structured_error_with_human_warning() {
             let error: Value = if format == "json" {
                 serde_json::from_slice(stderr).unwrap()
             } else {
-                serde_yaml::from_slice(stderr).unwrap()
+                serde_norway::from_slice(stderr).unwrap()
             };
             assert_eq!(error["error"]["code"], "no_profile_configured");
             assert!(!output.exists());

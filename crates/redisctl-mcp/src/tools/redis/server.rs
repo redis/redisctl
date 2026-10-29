@@ -307,13 +307,18 @@ database_tool!(read_only, module_list, "redis_module_list",
 
 database_tool!(write, config_set, "redis_config_set",
     "Set a configuration parameter at runtime (CONFIG SET). \
-     Changes may not persist unless CONFIG REWRITE is called.",
+     Changes may not persist unless CONFIG REWRITE is called. \
+     Security-sensitive parameters (authentication, persistence paths, \
+     bind/TLS, replication, command-surface switches) are refused at every tier.",
     {
         /// Configuration parameter name
         pub parameter: String,
         /// Configuration parameter value
         pub value: String,
     } => |conn, input| {
+        super::command_safety::check_config_parameter(&input.parameter)
+            .map_err(tower_mcp::Error::tool)?;
+
         let _: () = redis::cmd("CONFIG")
             .arg("SET")
             .arg(&input.parameter)
