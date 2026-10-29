@@ -53,8 +53,8 @@ from a Redis version or promise Search/JSON commands because a skill is indexed.
 For the sample, the user must already have prepared a disposable standalone
 fixture with only two tiny strings: `demo:catalog:1` = `Synthetic headphones`
 and `demo:session:1` = `Synthetic session`, each initially expiring in 1,800
-seconds. Use the [connect and explore recipe](https://github.com/redis/redisctl/pull/1246)
-for the preparation plan; that linked draft is not assumed to be released.
+seconds. Use the [connect and explore recipe](https://redis-field-engineering.github.io/redisctl-docs/mcp/demo/connect-and-explore/)
+for the preparation plan.
 Never seed, recreate expired keys or read arbitrary customer values in this tour.
 An empty database does not authorize writes. If the fixture is not confirmed,
 offer connection facts instead.

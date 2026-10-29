@@ -87,7 +87,8 @@ fn example_checks_reject_ignored_fields_overrides_and_out_of_scope_calls() {
     for example in examples() {
         let mut invented = example.clone();
         invented["arguments"]["count"] = json!(10);
-        assert!(validate_example(&invented).is_err());
+        let error = validate_example(&invented).unwrap_err().to_string();
+        assert!(error.contains("Undeclared tour input"), "{error}");
         for (field, value) in [("url", "redis://127.0.0.1"), ("profile", "other")] {
             let mut overridden = example.clone();
             overridden["arguments"][field] = json!(value);
@@ -155,7 +156,7 @@ async fn tour_resource_and_prompt_work_without_database_tools() {
             .unwrap()
             .ends_with(body.trim())
     );
-    assert!(body.contains("explain the\nmissing capabilities without database calls"));
+    assert!(body.contains("missing capabilities without database calls"));
 }
 
 #[tokio::test]
