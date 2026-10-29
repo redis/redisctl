@@ -367,7 +367,7 @@ database_tool!(read_only, ft_aggregate, "redis_ft_aggregate",
             .tool_context("FT.AGGREGATE failed")?;
 
         // The first element of a non-cursor FT.AGGREGATE reply is not a reliable
-        // total (it is 1 for pipelines without GROUPBY), so report the rows we got.
+        // count of the rows returned, so report the rows we got.
         let rows = result.iter().skip(1);
         let mut output = format!("Results: {}\n\n", rows.len());
 

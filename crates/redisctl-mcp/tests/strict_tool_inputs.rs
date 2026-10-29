@@ -1,4 +1,3 @@
-#![cfg(feature = "test-support")]
 //! Offline input contracts: no tool execution, connections, credentials or policy changes.
 
 use serde::de::DeserializeOwned;

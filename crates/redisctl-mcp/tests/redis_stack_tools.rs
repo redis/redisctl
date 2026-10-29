@@ -140,6 +140,37 @@ async fn cleanup(conn: &mut ::redis::aio::MultiplexedConnection, prefix: &str) {
     }
 }
 
+/// Wait until `index` holds `expected` documents. FT.CREATE indexes keys that
+/// already exist in the background, so a query right after it can see none.
+async fn wait_for_indexed_docs(
+    conn: &mut ::redis::aio::MultiplexedConnection,
+    index: &str,
+    expected: i64,
+) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let reply: Vec<::redis::Value> = ::redis::cmd("FT.SEARCH")
+            .arg(index)
+            .arg("*")
+            .arg("LIMIT")
+            .arg(0)
+            .arg(0)
+            .query_async(conn)
+            .await
+            .unwrap_or_default();
+        if let Some(::redis::Value::Int(count)) = reply.first()
+            && *count >= expected
+        {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{index} did not index {expected} documents within 10s"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 // ============================================================================
 // JSON tools (RedisJSON)
 // ============================================================================
@@ -360,8 +391,8 @@ async fn test_search_tools() {
         text
     );
 
-    // Give the indexer a moment to settle.
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    // The exact counts below need all three documents indexed first.
+    wait_for_indexed_docs(&mut conn, "ft_test_idx", 3).await;
 
     // redis_ft_list -- index appears
     let text = call_tool_text(&redis::ft_list(state.clone()), json!({})).await;
@@ -405,11 +436,7 @@ async fn test_search_tools() {
         }),
     )
     .await;
-    assert!(
-        text.contains("total") || text.contains("Results"),
-        "ft_aggregate: {}",
-        text
-    );
+    assert!(text.contains("total: 3"), "ft_aggregate: {}", text);
 
     // redis_ft_aggregate -- structured group_by/reduce instead of raw_args
     let text = call_tool_text(

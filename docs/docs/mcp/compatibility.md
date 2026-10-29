@@ -88,7 +88,7 @@ treatment.
 
 ### Pre-1.0 migration: strict tool inputs and aggregation
 
-The unreleased change in [PR #1225](https://github.com/redis/redisctl/pull/1225) intentionally
+The change in [PR #1225](https://github.com/redis/redisctl/pull/1225) intentionally
 tightens input acceptance before 1.0. Unknown properties in application tool inputs and typed
 nested argument objects now produce an `Invalid input: unknown field ...` error instead of being
 silently ignored. This is a breaking input-acceptance change, not merely an additive schema
