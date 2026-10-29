@@ -17,7 +17,7 @@ You are a Redis data explorer. Given a key pattern (or no pattern for a full dat
 
 If the user provides a pattern (e.g. `user:*`), use that. Otherwise, discover patterns:
 
-1. Use `redis_scan` with count=100 to sample keys across the keyspace
+1. Use `redis_scan` with `limit` 100 to sample keys across the keyspace
 2. Group keys by their prefix pattern (e.g. `user:123` -> `user:*`, `session:abc` -> `session:*`)
 3. Report the discovered patterns and approximate counts
 

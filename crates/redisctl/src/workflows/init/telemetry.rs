@@ -1,5 +1,6 @@
-//! Anonymous usage counting: one `cli_run` event per run, so we can see how many
-//! people run this command and which paths they take. This module owns the
+//! Anonymous usage counting: one `cli_run` event per run after the first on a
+//! machine, so we can see how many people run this command and which paths they
+//! take. The first run prints the notice and sends nothing. This module owns the
 //! transport - the device id, the opt-outs, the send timeout, and never letting a
 //! failure escape. The property list is a closed allowlist of booleans, counts and
 //! detector-owned vocabularies: paths, names, URLs and credentials structurally
@@ -17,7 +18,7 @@ use crate::error::RedisCtlError;
 const DEFAULT_ENDPOINT: &str = "https://api2.amplitude.com/2/httpapi";
 const SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
-const NOTICE: &str = "  Anonymous usage data (which paths get used, never paths, names or credentials).\n  Opt out with --no-telemetry, REDISCTL_INIT_TELEMETRY=0, or DO_NOT_TRACK=1.";
+const NOTICE: &str = "  redisctl init sends anonymous usage data to Amplitude, starting with the next run:\n  which paths get used, never paths, names or credentials.\n  Opt out with --no-telemetry, REDISCTL_INIT_TELEMETRY=0, or DO_NOT_TRACK=1.";
 
 /// The key comes from the runtime environment, else from the build environment at
 /// compile time; a build with neither sends nothing. An exported-but-empty runtime
@@ -64,24 +65,22 @@ fn debug(line: &str) {
 }
 
 /// A random id in the cache directory. Random rather than derived, so it cannot be
-/// traced back to a machine or a user. `first` drives the one-time notice.
-fn identify() -> (String, bool) {
+/// traced back to a machine or a user. `first` means this run creates it and shows
+/// the notice. None when the id cannot be saved: then nothing records that the
+/// notice was shown.
+fn identify() -> Option<(String, bool)> {
     let path = std::env::home_dir()
-        .filter(|home| home.is_absolute())
-        .map(|home| home.join(".cache/redisctl/id"));
-    if let Some(path) = &path
-        && let Ok(existing) = std::fs::read_to_string(path)
+        .filter(|home| home.is_absolute())?
+        .join(".cache/redisctl/id");
+    if let Ok(existing) = std::fs::read_to_string(&path)
         && !existing.trim().is_empty()
     {
-        return (existing.trim().to_string(), false);
+        return Some((existing.trim().to_string(), false));
     }
     let id = uuid::Uuid::new_v4().to_string();
-    // A read-only home is not a reason to fail the run.
-    if let Some(path) = &path {
-        let _ = path.parent().map(std::fs::create_dir_all);
-        let _ = std::fs::write(path, format!("{id}\n"));
-    }
-    (id, true)
+    std::fs::create_dir_all(path.parent()?).ok()?;
+    std::fs::write(&path, format!("{id}\n")).ok()?;
+    Some((id, true))
 }
 
 /// The closed property allowlist. Every field is a bool, a count, or a closed
@@ -123,7 +122,6 @@ pub(crate) struct Properties {
     failed_step: Option<&'static str>,
     exit_code: i32,
     duration_ms: u64,
-    first_run: bool,
     version: &'static str,
     platform: &'static str,
 }
@@ -169,7 +167,8 @@ impl Telemetry {
     }
 
     /// Send the one event. Failures are swallowed: no retry, no message, no exit
-    /// code - and without a key (or with an opt-out) nothing leaves the machine.
+    /// code - and without a key, with an opt-out, or on the run that shows the
+    /// notice, nothing leaves the machine.
     pub async fn finish(mut self, args: &InitArgs, result: &Result<(), RedisCtlError>) {
         if opted_out(args) {
             return;
@@ -178,22 +177,30 @@ impl Telemetry {
             debug("nothing shared, REDISCTL_INIT_AMPLITUDE_KEY is unset or blank");
             return;
         };
+        let Some((device_id, first)) = identify() else {
+            debug("nothing shared, the device id cannot be saved");
+            return;
+        };
+        if first {
+            // A diagnostic about the tool, not output of the run: stderr, so it
+            // never lands in anything that parses stdout. A successful run's
+            // output already ends with a blank line; a failed run's error follows.
+            match result {
+                Ok(()) => eprintln!("{}", dim(NOTICE)),
+                Err(_) => eprintln!("\n{}\n", dim(NOTICE)),
+            }
+            debug("nothing shared, the first run only prints the notice");
+            return;
+        }
         let (outcome, failed_step) = match result {
             Ok(()) => ("success", None),
             Err(RedisCtlError::Cancelled { .. }) => ("cancelled", Some(self.step)),
             Err(_) => ("failed", Some(self.step)),
         };
-        let (device_id, first) = identify();
-        if first {
-            // A diagnostic about the tool, not output of the run: stderr, so it
-            // never lands in anything that parses stdout.
-            eprintln!("\n{}", dim(NOTICE));
-        }
         self.props.outcome = outcome;
         self.props.failed_step = failed_step;
         self.props.exit_code = result.as_ref().err().map(|e| e.exit_code()).unwrap_or(0);
         self.props.duration_ms = self.started.elapsed().as_millis() as u64;
-        self.props.first_run = first;
         self.props.version = env!("CARGO_PKG_VERSION");
         self.props.platform = std::env::consts::OS;
         let body = serde_json::json!({
@@ -254,7 +261,6 @@ mod tests {
                 "duration_ms",
                 "exit_code",
                 "failed_step",
-                "first_run",
                 "framework",
                 "interactive",
                 "iris",

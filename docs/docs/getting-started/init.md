@@ -55,7 +55,7 @@ up before.
 | `--agent <name>` | configure specific agents (`claude`, `cursor`, `vscode`, `codex`, `all`; repeatable or comma-separated). Default: on a terminal the wizard asks; otherwise the detected tools, or all four when none is detected |
 | `--no-install-cli` | skip installing redis-cli when it is missing |
 | `--install-cli` | install a missing redis-cli without asking. On a terminal init asks before running the official installer from packages.redis.io; a run with nothing to ask (piped stdin, `CI` set, or `--defaults`) only prints the install command unless this flag is set |
-| `--skills-repo <dir>` | copy skills from a local redis/agent-skills checkout (offline-safe) |
+| `--skills-repo <dir>` | copy skills from a local redis/agent-skills checkout (offline-safe); a same-named skill dir that init did not copy and the skills CLI does not track is kept as it is |
 | `--skills-global` | install the official skills for your user instead of this project |
 | `--no-skills` | skip the official skills; the generated `redis-project-setup` skill is still written. The wizard offers the same as "Skip" |
 | `--defaults` | take the defaults instead of asking: with no database flag that is a local Docker container. With `--cloud` and no Cloud sign-in, a terminal still opens the browser to sign in; piped stdin never prompts |
@@ -125,15 +125,16 @@ and keeps that command's exit codes.
 
 ## Telemetry
 
-When a telemetry key is configured, each run sends one anonymous usage event: which paths get used (flags as booleans,
-outcome, duration) - never paths, names, URLs, or credentials. The device id is a
-random UUID in `~/.cache/redisctl/id`: it links the runs from one machine and nothing
-else. A notice prints on
-first send. Opt out with `--no-telemetry`, `REDISCTL_INIT_TELEMETRY=0`, or
-`DO_NOT_TRACK=1`. The Amplitude key is read from `REDISCTL_INIT_AMPLITUDE_KEY` at
-runtime, or from the build environment at compile time; a build without one sends
-nothing. `REDISCTL_INIT_TELEMETRY_DEBUG=1` prints the event body and send outcome to
-stderr, or that nothing was shared when no key is set.
+When a telemetry key is configured, the first run on a machine prints a notice and
+sends nothing. From the next run on, each run sends one anonymous usage event to
+Amplitude: which paths get used (flags as booleans, outcome, duration) - never paths,
+names, URLs, or credentials. The device id is a random UUID in
+`~/.cache/redisctl/id`: it links the runs from one machine and nothing else, and a
+machine that cannot save it sends nothing. Opt out with `--no-telemetry`,
+`REDISCTL_INIT_TELEMETRY=0`, or `DO_NOT_TRACK=1`. The Amplitude key is read from
+`REDISCTL_INIT_AMPLITUDE_KEY` at runtime, or from the build environment at compile
+time; a build without one sends nothing. `REDISCTL_INIT_TELEMETRY_DEBUG=1` prints the
+event body and send outcome to stderr, or why nothing was shared.
 
 ## Iris products
 
