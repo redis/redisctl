@@ -4,7 +4,6 @@ use crate::error::Result as CliResult;
 use redisctl_core::{
     ClientResolver, Config, ConfigDocument, ConfigPathSegment, EnvironmentOverrides,
 };
-use std::sync::{Arc, Mutex};
 use tracing::{debug, info};
 
 pub use redisctl_core::{
@@ -21,7 +20,7 @@ const REDISCTL_USER_AGENT: &str = redisctl_core::USER_AGENT;
 pub struct ConnectionManager {
     pub config: Config,
     pub config_path: Option<std::path::PathBuf>,
-    document: Option<Arc<Mutex<ConfigDocument>>>,
+    document: Option<ConfigDocument>,
 }
 
 impl ConnectionManager {
@@ -51,26 +50,23 @@ impl ConnectionManager {
         Self {
             config: document.config().clone(),
             config_path,
-            document: Some(Arc::new(Mutex::new(document))),
+            document: Some(document),
         }
     }
 
-    /// Persist edits through the load-time document, retaining its updated baseline after a save.
-    /// Clones share that baseline; in-memory connection-only managers cannot guess provenance.
+    /// Persist one command's edits through its startup document. Attempt-local replacement
+    /// permissions are discarded on failure. A successful write invalidates this manager's
+    /// startup baseline (including clones); reload before another write. Commands save once.
+    /// In-memory connection-only managers cannot guess provenance.
     pub fn save_config(
         &self,
         config: &Config,
         replacements: &[Vec<ConfigPathSegment>],
         owner_only: bool,
     ) -> CliResult<()> {
-        let document = self.document.as_ref().ok_or_else(|| {
+        let mut document = self.document.clone().ok_or_else(|| {
             crate::error::RedisCtlError::Configuration(
                 "Configuration writes require a document loaded at command startup".into(),
-            )
-        })?;
-        let mut document = document.lock().map_err(|_| {
-            crate::error::RedisCtlError::Configuration(
-                "Configuration document is unavailable after an earlier failure".into(),
             )
         })?;
         *document.config_mut() = config.clone();
@@ -182,6 +178,7 @@ impl ConnectionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use redisctl_core::ProfileCredentials;
 
     const CONTENT: &str = "files_api_key = '${REDISCTL_DOCUMENT_TEST_ABSENT:-synthetic-files}'\n[profiles.db]\ndeployment_type = 'database'\nhost = 'localhost'\nport = 6379\npassword = '${REDISCTL_DOCUMENT_TEST_ABSENT:-synthetic-password}'\n";
 
@@ -261,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn successive_saves_and_clones_share_the_updated_document_baseline() {
+    fn successful_save_requires_a_reload_before_another_write() {
         for owner_only in [false, true] {
             let (_directory, manager) = fixture();
             let clone = manager.clone();
@@ -275,21 +272,93 @@ mod tests {
                 )
                 .unwrap();
             updated.default_cloud = Some("new-cloud".into());
-            clone
+            let path = manager.config_path.as_ref().unwrap();
+            let before = std::fs::read(path).unwrap();
+            for retained in [&manager, &clone] {
+                let error = retained
+                    .save_config(
+                        &updated,
+                        &[ConnectionManager::key_path(&["default_cloud"])],
+                        owner_only,
+                    )
+                    .unwrap_err();
+                assert!(error.to_string().contains("source changed"));
+                assert_eq!(std::fs::read(path).unwrap(), before);
+            }
+            let loaded = Config::load_from_path(path).unwrap();
+            assert_eq!(loaded.default_database.as_deref(), Some("db"));
+            assert_eq!(loaded.default_cloud, None);
+            assert!(
+                std::fs::read_to_string(path)
+                    .unwrap()
+                    .contains("${REDISCTL_DOCUMENT_TEST_ABSENT:-synthetic-password}")
+            );
+        }
+    }
+
+    #[test]
+    fn stale_clone_cannot_overwrite_a_successful_save() {
+        for owner_only in [false, true] {
+            let (_directory, manager) = fixture();
+            let clone = manager.clone();
+            let mut first = manager.config.clone();
+            first.default_cloud = Some("intentional-first-default".into());
+            manager
                 .save_config(
-                    &updated,
+                    &first,
                     &[ConnectionManager::key_path(&["default_cloud"])],
                     owner_only,
                 )
                 .unwrap();
             let path = manager.config_path.as_ref().unwrap();
-            let loaded = Config::load_from_path(path).unwrap();
-            assert_eq!(loaded.default_database.as_deref(), Some("db"));
-            assert_eq!(loaded.default_cloud.as_deref(), Some("new-cloud"));
-            assert!(
-                std::fs::read_to_string(path)
+            let before = std::fs::read(path).unwrap();
+            let mut stale = clone.config.clone();
+            stale.default_database = Some("db".into());
+            let error = clone.save_config(&stale, &[], owner_only).unwrap_err();
+            assert!(error.to_string().contains("source changed"));
+            assert_eq!(std::fs::read(path).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn failed_save_does_not_authorize_replacements_on_a_later_attempt() {
+        for owner_only in [false, true] {
+            let (_directory, manager) = fixture();
+            let mut rejected = manager.config.clone();
+            rejected.files_api_key = Some("intentional-first-attempt".into());
+            let ProfileCredentials::Database { password, .. } =
+                &mut rejected.profiles.get_mut("db").unwrap().credentials
+            else {
+                panic!("fixture must be a database profile");
+            };
+            *password = Some("undeclared-password-change".into());
+            let error = manager
+                .save_config(
+                    &rejected,
+                    &[ConnectionManager::key_path(&["files_api_key"])],
+                    owner_only,
+                )
+                .unwrap_err();
+            assert!(error.to_string().contains("edited ambiguously"));
+            let path = manager.config_path.as_ref().unwrap();
+            assert_eq!(std::fs::read_to_string(path).unwrap(), CONTENT);
+
+            let mut retry = manager.config.clone();
+            retry.default_database = Some("db".into());
+            manager
+                .clone()
+                .save_config(&retry, &[], owner_only)
+                .unwrap();
+            let saved = std::fs::read_to_string(path).unwrap();
+            assert!(saved.contains("${REDISCTL_DOCUMENT_TEST_ABSENT:-synthetic-files}"));
+            assert!(saved.contains("${REDISCTL_DOCUMENT_TEST_ABSENT:-synthetic-password}"));
+            assert!(!saved.contains("intentional-first-attempt"));
+            assert_eq!(
+                Config::load_from_path(path)
                     .unwrap()
-                    .contains("${REDISCTL_DOCUMENT_TEST_ABSENT:-synthetic-password}")
+                    .default_database
+                    .as_deref(),
+                Some("db")
             );
         }
     }
