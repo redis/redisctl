@@ -177,13 +177,13 @@ fn save_to_readonly_directory_returns_clear_error() {
     let dir = TempDir::new().unwrap();
     let readonly_dir = dir.path().join("readonly");
     fs::create_dir(&readonly_dir).unwrap();
-    fs::set_permissions(&readonly_dir, fs::Permissions::from_mode(0o444)).unwrap();
 
     let config_path = readonly_dir.join("config.toml");
     let config = Config::default();
 
     let mut document = ConfigDocument::load_from_path(&config_path).unwrap();
     *document.config_mut() = config;
+    fs::set_permissions(&readonly_dir, fs::Permissions::from_mode(0o444)).unwrap();
     let result = document.save();
     assert!(
         result.is_err(),
