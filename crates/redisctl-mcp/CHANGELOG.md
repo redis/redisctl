@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0](https://github.com/redis/redisctl/compare/redisctl-mcp-v0.13.0...redisctl-mcp-v0.14.0) - 2026-10-30
+
+### Added
+
+- *(mcp)* add a bounded read-only guided tour ([#1250](https://github.com/redis/redisctl/pull/1250))
+
+### Fixed
+
+- *(core)* [**breaking**] preserve configuration value round trips ([#1188](https://github.com/redis/redisctl/pull/1188))
+- *(mcp)* report unmatched JSON increment paths explicitly ([#1236](https://github.com/redis/redisctl/pull/1236))
+- *(mcp)* query cluster alerts at /v1/cluster/alerts ([#1258](https://github.com/redis/redisctl/pull/1258))
+- *(mcp)* report empty list and stream range results without key-state guesses ([#1240](https://github.com/redis/redisctl/pull/1240))
+- *(mcp)* reject incomplete sorted-set pagination pairs ([#1235](https://github.com/redis/redisctl/pull/1235))
+- *(mcp)* [**breaking**] reject unknown tool inputs and give ft_aggregate a structured pipeline ([#1225](https://github.com/redis/redisctl/pull/1225))
+
+### Other
+
+- *(mcp)* check that skills only name declared tool inputs ([#1301](https://github.com/redis/redisctl/pull/1301))
+
 ## [0.12.1](https://github.com/redis/redisctl/compare/redisctl-mcp-v0.12.0...redisctl-mcp-v0.12.1) - 2026-10-01
 
 ### Fixed

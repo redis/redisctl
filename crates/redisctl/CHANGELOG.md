@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0](https://github.com/redis/redisctl/compare/redisctl-v0.13.0...redisctl-v0.14.0) - 2026-10-30
+
+### Added
+
+- *(init)* print the telemetry notice before anything is sent, and build the key into releases ([#1297](https://github.com/redis/redisctl/pull/1297))
+
+### Fixed
+
+- *(core)* [**breaking**] preserve configuration value round trips ([#1188](https://github.com/redis/redisctl/pull/1188))
+- *(cli)* let init-cluster create the default database when version discovery fails ([#1273](https://github.com/redis/redisctl/pull/1273))
+- *(init)* keep a same-named skill dir that a --skills-repo copy does not own ([#1300](https://github.com/redis/redisctl/pull/1300))
+
+### Other
+
+- *(cli)* carry ZIP module-archive contract tests forward from #1256 ([#1292](https://github.com/redis/redisctl/pull/1292))
+
 ## [0.12.1](https://github.com/redis/redisctl/compare/redisctl-v0.12.0...redisctl-v0.12.1) - 2026-10-01
 
 ### Other
