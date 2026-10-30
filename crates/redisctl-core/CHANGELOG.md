@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0](https://github.com/redis/redisctl/compare/redisctl-core-v0.13.0...redisctl-core-v0.14.0) - 2026-10-30
+
+### Fixed
+
+- *(core)* [**breaking**] preserve configuration value round trips ([#1188](https://github.com/redis/redisctl/pull/1188))
+
 ## [0.12.0](https://github.com/redis/redisctl/compare/redisctl-core-v0.11.1...redisctl-core-v0.12.0) - 2026-10-01
 
 ### Added
