@@ -241,7 +241,8 @@ fn files_key_writes_use_the_selected_document_and_preserve_other_references() {
         read_back
             .assert()
             .success()
-            .stdout(predicate::str::contains("fresh-fi...rker"));
+            .stdout(predicate::str::contains("fr...er"))
+            .stdout(predicate::str::contains("fresh-files-marker").not());
         let saved = std::fs::read_to_string(&path).unwrap();
         assert!(saved.contains("${REDISCTL_CLI_EDIT_PASSWORD}"));
         assert!(saved.contains("${REDISCTL_CLI_EDIT_TAG}"));
