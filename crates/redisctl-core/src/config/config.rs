@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 use super::credential::CredentialStore;
 use super::error::{ConfigError, Result};
 
-/// Main configuration structure
+/// Main serializable runtime configuration structure.
+///
+/// Use [`super::ConfigDocument`] for file editing that retains load-time reference provenance.
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct Config {
     /// Default profile for enterprise commands
@@ -604,138 +606,101 @@ impl Config {
             source: e,
         })?;
 
-        // Expand environment variables in the config content
-        let expanded_content = Self::expand_env_vars(&content);
-
-        let config: Config = toml::from_str(&expanded_content)?;
-
-        Ok(config)
+        // Environment values are data, not TOML source. Parse before expansion so quotes,
+        // backslashes and newlines are not interpreted a second time. Keys remain literal.
+        let mut document: toml::Value = toml::from_str(&content)?;
+        Self::expand_string_values(&mut document);
+        document.try_into().map_err(Into::into)
     }
 
-    /// Save configuration to the standard location
+    /// Save a literal-only configuration to the standard location.
+    ///
+    /// This untracked API cannot infer load-time reference provenance. It refuses an
+    /// environment-backed source or value; use `ConfigDocument` for load/edit/save.
+    #[deprecated(note = "use ConfigDocument for provenance-aware configuration writes")]
     pub fn save(&self) -> Result<()> {
         let config_path = Self::config_path()?;
-        self.save_to_path(&config_path)
+        self.save_literal_to_path(&config_path, false)
     }
 
-    /// Every `${…}` reference in `previous`, by the field path that held it.
+    /// Save a literal-only configuration without guessing environment-reference provenance.
     ///
-    /// The whole field text is kept rather than a parsed variable name, so the supported syntax
-    /// does not have to be reimplemented here: `${VAR}`, `$VAR` and `${VAR:-default}` are all
-    /// restored by expanding the recorded text with the same function the loader uses and
-    /// comparing. Strings inside arrays are skipped — they are not credentials, and they would
-    /// need index-aware paths.
-    fn collect_env_references(
-        table: &toml::Table,
-        path: &mut Vec<String>,
-        out: &mut HashMap<Vec<String>, (String, String)>,
-    ) {
-        for (key, value) in table {
-            match value {
-                toml::Value::String(text) if text.contains('$') => {
-                    let resolved = Self::expand_env_vars(text);
-                    // Unchanged means nothing expanded — an unset variable stays a reference in
-                    // the file already, so there is nothing to put back.
-                    if resolved != *text {
-                        path.push(key.clone());
-                        out.insert(path.clone(), (text.clone(), resolved));
-                        path.pop();
-                    }
-                }
-                toml::Value::Table(inner) => {
-                    path.push(key.clone());
-                    Self::collect_env_references(inner, path, out);
-                    path.pop();
-                }
-                _ => {}
-            }
-        }
-    }
-
-    /// The value at `path`, if every segment before the last is a table.
-    fn value_at_mut<'a>(
-        table: &'a mut toml::Table,
-        path: &[String],
-    ) -> Option<&'a mut toml::Value> {
-        let (last, parents) = path.split_last()?;
-        let mut current = table;
-        for key in parents {
-            current = current.get_mut(key)?.as_table_mut()?;
-        }
-        current.get_mut(last)
-    }
-
-    /// This config as TOML, with every `${…}` reference from the file at `config_path` put back
-    /// on the field that held it.
-    ///
-    /// References are expanded when the file is read, so by the time there is a `Config` the
-    /// placeholders are gone and a plain save would write the resolved secret to disk — for every
-    /// profile in the file, not just the one a command touched. They are recovered from the file
-    /// being overwritten rather than carried on the struct, which keeps `Config` the same shape
-    /// for anyone embedding this crate.
-    ///
-    /// Restored per field, and only where that field still holds what the reference resolves to.
-    /// Two variables can resolve to the same string today and diverge tomorrow, so replacing by
-    /// value alone would point a profile at the wrong variable. A field whose value changed since
-    /// the load no longer matches, so it is written literally, as it should be.
-    ///
-    /// The edit is made on the parsed document. Editing the serialized text instead means
-    /// re-implementing TOML — quoted keys, dotted names, escaping — and getting any of it wrong
-    /// silently writes the secret.
-    fn to_toml_preserving_env_references(&self, config_path: &Path) -> Result<String> {
-        let mut doc = match toml::Value::try_from(self)? {
-            toml::Value::Table(table) => table,
-            other => return Ok(toml::to_string_pretty(&other)?),
-        };
-        if let Ok(previous) = fs::read_to_string(config_path)
-            && let Ok(old) = toml::from_str::<toml::Table>(&previous)
-        {
-            let mut refs: HashMap<Vec<String>, (String, String)> = HashMap::new();
-            Self::collect_env_references(&old, &mut Vec::new(), &mut refs);
-            for (path, (original, resolved)) in refs {
-                if let Some(slot) = Self::value_at_mut(&mut doc, &path)
-                    && slot.as_str() == Some(resolved.as_str())
-                {
-                    *slot = toml::Value::String(original);
-                }
-            }
-        }
-        Ok(toml::to_string_pretty(&doc)?)
-    }
-
-    /// Save configuration to a specific path
+    /// Both the destination (if present) and outgoing values must be free of environment
+    /// references. Malformed or unreadable destinations are not overwritten. A bare `Config`
+    /// does not retain its source history: callers are responsible for ensuring a new/literal
+    /// destination is appropriate. Use `ConfigDocument` for all load/edit/save or save-as work.
+    /// These preflight checks are not an atomic filesystem transaction.
+    #[deprecated(note = "use ConfigDocument::save_to_path for provenance-aware writes")]
     pub fn save_to_path(&self, config_path: &Path) -> Result<()> {
-        // Create parent directories if they don't exist
-        if let Some(parent) = config_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| ConfigError::SaveError {
-                path: parent.display().to_string(),
-                source: e,
-            })?;
-        }
-
-        let content = self.to_toml_preserving_env_references(config_path)?;
-
-        fs::write(config_path, content).map_err(|e| ConfigError::SaveError {
-            path: config_path.display().to_string(),
-            source: e,
-        })?;
-
-        Ok(())
+        self.save_literal_to_path(config_path, false)
     }
 
-    /// Save to `config_path` with owner-only permissions, for callers that just put a secret in it.
+    /// As `save_to_path`, using an owner-only write after the same non-mutating preflight.
+    #[deprecated(note = "use ConfigDocument::save_to_path_owner_only for provenance-aware writes")]
     pub fn save_to_path_owner_only(&self, config_path: &Path) -> Result<()> {
+        self.save_literal_to_path(config_path, true)
+    }
+
+    fn save_literal_to_path(&self, config_path: &Path, owner_only: bool) -> Result<()> {
+        let requires_document = || ConfigError::SaveError {
+            path: config_path.display().to_string(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Untracked Config writers accept only literal-only configurations; use ConfigDocument for environment-backed load/edit/save",
+            ),
+        };
+        // Inspect syntax only. Never re-expand a destination using the save-time environment.
+        match fs::read_to_string(config_path) {
+            Ok(previous) => {
+                let document: toml::Value = toml::from_str(&previous)?;
+                if Self::contains_environment_reference(&document) {
+                    return Err(requires_document());
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(ConfigError::SaveError {
+                    path: config_path.display().to_string(),
+                    source,
+                });
+            }
+        }
+        let document = toml::Value::try_from(self)?;
+        if Self::contains_environment_reference(&document) {
+            return Err(requires_document());
+        }
+        let content = toml::to_string_pretty(&document)?;
         if let Some(parent) = config_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| ConfigError::SaveError {
-                path: parent.display().to_string(),
-                source: e,
+            fs::create_dir_all(parent).map_err(|source| ConfigError::SaveError {
+                path: config_path.display().to_string(),
+                source,
             })?;
         }
-        let content = self.to_toml_preserving_env_references(config_path)?;
-        write_owner_only(config_path, content.as_bytes()).map_err(|e| ConfigError::SaveError {
+        let result = if owner_only {
+            write_owner_only(config_path, content.as_bytes())
+        } else {
+            fs::write(config_path, content)
+        };
+        result.map_err(|source| ConfigError::SaveError {
             path: config_path.display().to_string(),
-            source: e,
+            source,
         })
+    }
+
+    fn contains_environment_reference(value: &toml::Value) -> bool {
+        match value {
+            toml::Value::String(text) => {
+                let mut found = false;
+                let _ = shellexpand::env_with_context_no_errors(text, |_| {
+                    found = true;
+                    None::<String>
+                });
+                found
+            }
+            toml::Value::Array(values) => values.iter().any(Self::contains_environment_reference),
+            toml::Value::Table(table) => table.values().any(Self::contains_environment_reference),
+            _ => false,
+        }
     }
 
     /// Set or update a profile
@@ -882,12 +847,40 @@ impl Config {
     /// api_key = "${REDIS_CLOUD_API_KEY}"
     /// api_url = "${REDIS_CLOUD_API_URL:-https://api.redislabs.com/v1}"
     /// ```
+    #[cfg(test)]
     fn expand_env_vars(content: &str) -> String {
         // Use shellexpand::env_with_context_no_errors which returns unexpanded vars as-is
         // This prevents errors when env vars for unused profiles aren't set
         let expanded =
             shellexpand::env_with_context_no_errors(content, |var| std::env::var(var).ok());
         expanded.to_string()
+    }
+
+    pub(super) fn expand_string_values(value: &mut toml::Value) {
+        Self::expand_string_values_with_context(value, &mut |var| std::env::var(var).ok());
+    }
+
+    pub(super) fn expand_string_values_with_context(
+        value: &mut toml::Value,
+        context: &mut impl FnMut(&str) -> Option<String>,
+    ) {
+        match value {
+            toml::Value::String(text) => {
+                *text = shellexpand::env_with_context_no_errors(text.as_str(), &mut *context)
+                    .into_owned();
+            }
+            toml::Value::Array(values) => {
+                for value in values {
+                    Self::expand_string_values_with_context(value, context);
+                }
+            }
+            toml::Value::Table(table) => {
+                for (_, value) in table.iter_mut() {
+                    Self::expand_string_values_with_context(value, context);
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -903,7 +896,7 @@ fn default_cloud_url() -> String {
 /// the new file's mode, so a reader either sees the old contents at the old permissions or the
 /// new contents at `0600`.
 #[cfg(unix)]
-fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(super) fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt;
 
@@ -945,13 +938,31 @@ fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 #[cfg(not(unix))]
-fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(super) fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     fs::write(path, bytes)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn string_expansion_recurses_through_nested_arrays_and_tables() {
+        let mut document: toml::Value = toml::from_str(
+            r#"
+"$VALUE" = [["$VALUE", { "$VALUE" = "${VALUE}" }], [true, 6379]]
+"#,
+        )
+        .unwrap();
+        let literal = "literal\"value\\nwith\nlines";
+        Config::expand_string_values_with_context(&mut document, &mut |name| {
+            (name == "VALUE").then(|| literal.to_string())
+        });
+        assert_eq!(document["$VALUE"][0][0].as_str(), Some(literal));
+        assert_eq!(document["$VALUE"][0][1]["$VALUE"].as_str(), Some(literal));
+        assert_eq!(document["$VALUE"][1][0].as_bool(), Some(true));
+        assert_eq!(document["$VALUE"][1][1].as_integer(), Some(6379));
+    }
 
     #[test]
     fn test_config_serialization() {

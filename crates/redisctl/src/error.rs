@@ -608,6 +608,15 @@ impl From<redisctl_core::ConfigError> for RedisCtlError {
     }
 }
 
+impl From<redisctl_core::ConfigDocumentError> for RedisCtlError {
+    fn from(err: redisctl_core::ConfigDocumentError) -> Self {
+        match err {
+            redisctl_core::ConfigDocumentError::Config(error) => error.into(),
+            other => RedisCtlError::Configuration(other.to_string()),
+        }
+    }
+}
+
 impl From<redisctl_core::ClientResolutionError> for RedisCtlError {
     fn from(err: redisctl_core::ClientResolutionError) -> Self {
         match err {

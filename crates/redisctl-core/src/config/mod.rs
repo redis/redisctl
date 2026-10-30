@@ -17,9 +17,11 @@
 
 pub mod config;
 pub mod credential;
+pub mod document;
 pub mod error;
 
 // Re-export main types for convenience
 pub use config::{CloudAuthConfig, Config, DeploymentType, Profile, ProfileCredentials};
 pub use credential::{CredentialStorage, CredentialStore, EnvironmentOverrides};
+pub use document::{ConfigDocument, ConfigDocumentError, ConfigPathSegment};
 pub use error::{ConfigError, Result};
