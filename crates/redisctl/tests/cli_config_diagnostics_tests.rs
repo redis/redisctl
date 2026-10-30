@@ -59,6 +59,23 @@ fn literal_environment_credentials_do_not_break_cli_config_loading() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
 }
 
+#[test]
+fn unquoted_placeholder_has_a_safe_location_and_migration_hint() {
+    let directory = TempDir::new().unwrap();
+    let source = "[profiles.db]\ndeployment_type = 'database'\nhost = 'localhost'\nport = ${REDISCTL_PRIVATE_PORT}";
+    std::fs::write(directory.path().join("config.toml"), source).unwrap();
+    command(&directory)
+        .args(["profile", "list"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("byte offset"))
+        .stderr(predicate::str::contains(
+            "placeholders must be quoted strings",
+        ))
+        .stderr(predicate::str::contains("REDISCTL_PRIVATE_PORT").not());
+}
+
 const EDIT_FIXTURE: &str = r#"
 files_api_key = '${REDISCTL_CLI_EDIT_FILES}'
 default_database = '${REDISCTL_CLI_EDIT_DEFAULT}'

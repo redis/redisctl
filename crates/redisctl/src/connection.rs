@@ -4,6 +4,7 @@ use crate::error::Result as CliResult;
 use redisctl_core::{
     ClientResolver, Config, ConfigDocument, ConfigPathSegment, EnvironmentOverrides,
 };
+use std::sync::{Arc, Mutex};
 use tracing::{debug, info};
 
 pub use redisctl_core::{
@@ -20,7 +21,7 @@ const REDISCTL_USER_AGENT: &str = redisctl_core::USER_AGENT;
 pub struct ConnectionManager {
     pub config: Config,
     pub config_path: Option<std::path::PathBuf>,
-    document: Option<ConfigDocument>,
+    document: Option<Arc<Mutex<ConfigDocument>>>,
 }
 
 impl ConnectionManager {
@@ -50,21 +51,26 @@ impl ConnectionManager {
         Self {
             config: document.config().clone(),
             config_path,
-            document: Some(document),
+            document: Some(Arc::new(Mutex::new(document))),
         }
     }
 
-    /// Persist one command's edits through its load-time document. In-memory connection-only
-    /// managers deliberately cannot write files without provenance.
+    /// Persist edits through the load-time document, retaining its updated baseline after a save.
+    /// Clones share that baseline; in-memory connection-only managers cannot guess provenance.
     pub fn save_config(
         &self,
         config: &Config,
         replacements: &[Vec<ConfigPathSegment>],
         owner_only: bool,
     ) -> CliResult<()> {
-        let mut document = self.document.clone().ok_or_else(|| {
+        let document = self.document.as_ref().ok_or_else(|| {
             crate::error::RedisCtlError::Configuration(
                 "Configuration writes require a document loaded at command startup".into(),
+            )
+        })?;
+        let mut document = document.lock().map_err(|_| {
+            crate::error::RedisCtlError::Configuration(
+                "Configuration document is unavailable after an earlier failure".into(),
             )
         })?;
         *document.config_mut() = config.clone();
@@ -103,6 +109,15 @@ impl ConnectionManager {
         keys.iter()
             .map(|key| ConfigPathSegment::Key((*key).into()))
             .collect()
+    }
+
+    /// Return the selected configuration path, or the platform default when none was selected.
+    /// Keep the path as supplied: reporting does not require the file to exist.
+    pub fn resolved_config_path(&self) -> CliResult<std::path::PathBuf> {
+        match &self.config_path {
+            Some(path) => Ok(path.clone()),
+            None => Config::config_path().map_err(Into::into),
+        }
     }
 
     /// Resolve Cloud connection info without creating an HTTP client.
@@ -243,5 +258,39 @@ mod tests {
         let manager = ConnectionManager::with_document(document, Some(path.clone()));
         manager.save_config(&manager.config, &[], false).unwrap();
         assert!(path.exists());
+    }
+
+    #[test]
+    fn successive_saves_and_clones_share_the_updated_document_baseline() {
+        for owner_only in [false, true] {
+            let (_directory, manager) = fixture();
+            let clone = manager.clone();
+            let mut updated = manager.config.clone();
+            updated.default_database = Some("db".into());
+            manager
+                .save_config(
+                    &updated,
+                    &[ConnectionManager::key_path(&["default_database"])],
+                    owner_only,
+                )
+                .unwrap();
+            updated.default_cloud = Some("new-cloud".into());
+            clone
+                .save_config(
+                    &updated,
+                    &[ConnectionManager::key_path(&["default_cloud"])],
+                    owner_only,
+                )
+                .unwrap();
+            let path = manager.config_path.as_ref().unwrap();
+            let loaded = Config::load_from_path(path).unwrap();
+            assert_eq!(loaded.default_database.as_deref(), Some("db"));
+            assert_eq!(loaded.default_cloud.as_deref(), Some("new-cloud"));
+            assert!(
+                std::fs::read_to_string(path)
+                    .unwrap()
+                    .contains("${REDISCTL_DOCUMENT_TEST_ABSENT:-synthetic-password}")
+            );
+        }
     }
 }

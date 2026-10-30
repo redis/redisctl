@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 /// A literal TOML key or an array index. Dotted profile names are a single key, not split paths.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
 pub enum ConfigPathSegment {
     Key(String),
     Index(usize),
@@ -18,6 +19,7 @@ type ValuePath = Vec<ConfigPathSegment>;
 /// Errors from provenance-aware configuration loading and saving.
 /// Field paths and retained values are deliberately absent from conflict diagnostics.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ConfigDocumentError {
     #[error(transparent)]
     Config(#[from] ConfigError),

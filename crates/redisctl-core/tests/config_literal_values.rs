@@ -49,6 +49,24 @@ fn changed_or_removed_environment_does_not_change_save_provenance() {
 }
 
 #[test]
+fn legacy_writers_reject_changed_environment_without_writing_resolved_values() {
+    run_child("legacy_changed_environment", "synthetic-loaded-value");
+}
+
+#[allow(deprecated)]
+fn legacy_save(
+    config: &Config,
+    path: &std::path::Path,
+    owner_only: bool,
+) -> Result<(), ConfigError> {
+    if owner_only {
+        config.save_to_path_owner_only(path)
+    } else {
+        config.save_to_path(path)
+    }
+}
+
+#[test]
 fn unquoted_placeholders_are_not_toml_syntax() {
     run_child("unquoted", "6379");
 }
@@ -98,6 +116,31 @@ fn explicitly_constructed_toml_errors_have_safe_formatting_and_sources() {
     };
     assert!(!inner.to_string().contains(marker));
     assert!(!format!("{inner:?}").contains(marker));
+}
+
+#[test]
+fn parser_conversion_keeps_only_a_typed_safe_location() {
+    let marker = "synthetic-invalid-secret";
+    let content = format!("default_cloud = {marker}");
+    let raw = toml::from_str::<Config>(&content).unwrap_err();
+    let expected = raw.span().unwrap().start;
+    let error = ConfigError::from(raw);
+    assert!(
+        matches!(error, ConfigError::InvalidDocument { byte_offset: Some(offset) } if offset == expected)
+    );
+    assert!(
+        error
+            .to_string()
+            .contains(&format!("byte offset {expected}"))
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("placeholders must be quoted strings")
+    );
+    assert!(format!("{error:?}").starts_with("InvalidDocument"));
+    assert!(error.source().is_none());
+    assert_safe_error(&error, marker);
 }
 
 #[test]
@@ -182,6 +225,27 @@ tags = ["${REDISCTL_CONFIG_LITERAL_VALUE}", "${REDISCTL_CONFIG_LITERAL_UNSET}", 
                 }
             }
         }
+        "legacy_changed_environment" => {
+            for owner_only in [false, true] {
+                for unset in [false, true] {
+                    // This exact fixture is the only test in its subprocess; parent environment is unchanged.
+                    unsafe { std::env::set_var(VALUE, &value); }
+                    let original = "[profiles.db]\ndeployment_type = 'database'\nhost = 'localhost'\nport = 6379\npassword = '${REDISCTL_CONFIG_LITERAL_VALUE}'";
+                    std::fs::write(&path, original).unwrap();
+                    let mut config = Config::load_from_path(&path).unwrap();
+                    config.default_database = Some("db".into());
+                    // Same subprocess-only isolation as the fixture setup above.
+                    unsafe {
+                        if unset { std::env::remove_var(VALUE); }
+                        else { std::env::set_var(VALUE, "synthetic-rotated-value"); }
+                    }
+                    let error = legacy_save(&config, &path, owner_only).unwrap_err();
+                    assert!(error.to_string().contains("ConfigDocument"));
+                    assert_safe_error(&error, &value);
+                    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+                }
+            }
+        }
         "diagnostics" => {
             for content in [
                 format!("default_cloud = {value}"),
@@ -200,7 +264,11 @@ tags = ["${REDISCTL_CONFIG_LITERAL_VALUE}", "${REDISCTL_CONFIG_LITERAL_UNSET}", 
                 "[profiles.db]\ndeployment_type = 'database'\nhost = 'localhost'\nport = ${REDISCTL_CONFIG_LITERAL_VALUE}",
             )
             .unwrap();
-            assert!(matches!(Config::load_from_path(&path), Err(ConfigError::ParseError(_))));
+            let error = Config::load_from_path(&path).unwrap_err();
+            assert!(matches!(error, ConfigError::InvalidDocument { byte_offset: Some(_) }));
+            assert!(error.to_string().contains("byte offset"));
+            assert!(error.to_string().contains("placeholders must be quoted strings"));
+            assert!(!error.to_string().contains(VALUE));
         }
         _ => panic!("unknown fixture"),
     }

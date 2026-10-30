@@ -4,12 +4,13 @@ mod upload;
 
 use crate::error::RedisCtlError;
 
-use anyhow::{Context, Result as AnyhowResult};
+use anyhow::Context;
 use chrono::Local;
 use clap::Subcommand;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use crate::cli::OutputFormat;
@@ -30,6 +31,10 @@ pub enum SupportPackageCommands {
         /// Skip pre-flight checks
         #[arg(long)]
         skip_checks: bool,
+
+        /// Overwrite an existing output file without prompting; retain other pre-flight checks
+        #[arg(long)]
+        force: bool,
 
         /// Optimize package size by truncating logs and removing redundant data
         #[arg(long)]
@@ -75,6 +80,10 @@ pub enum SupportPackageCommands {
         #[arg(long)]
         skip_checks: bool,
 
+        /// Overwrite an existing output file without prompting; retain other pre-flight checks
+        #[arg(long)]
+        force: bool,
+
         /// Optimize package size by truncating logs and removing redundant data
         #[arg(long)]
         optimize: bool,
@@ -118,6 +127,10 @@ pub enum SupportPackageCommands {
         /// Skip pre-flight checks
         #[arg(long)]
         skip_checks: bool,
+
+        /// Overwrite an existing output file without prompting; retain other pre-flight checks
+        #[arg(long)]
+        force: bool,
 
         /// Optimize package size by truncating logs and removing redundant data
         #[arg(long)]
@@ -178,6 +191,7 @@ pub async fn handle_support_package_command(
         SupportPackageCommands::Cluster {
             file,
             skip_checks,
+            force,
             optimize,
             no_optimize: _,
             log_lines,
@@ -194,7 +208,7 @@ pub async fn handle_support_package_command(
             });
 
             if !skip_checks {
-                perform_preflight_checks(&output_path)?;
+                perform_preflight_checks(&output_path, output_format, force)?;
             }
 
             let optimization_opts = if optimize {
@@ -227,6 +241,7 @@ pub async fn handle_support_package_command(
             uid,
             file,
             skip_checks,
+            force,
             optimize,
             no_optimize: _,
             log_lines,
@@ -246,7 +261,7 @@ pub async fn handle_support_package_command(
             });
 
             if !skip_checks {
-                perform_preflight_checks(&output_path)?;
+                perform_preflight_checks(&output_path, output_format, force)?;
             }
 
             let optimization_opts = if optimize {
@@ -280,6 +295,7 @@ pub async fn handle_support_package_command(
             uid,
             file,
             skip_checks,
+            force,
             optimize,
             no_optimize: _,
             log_lines,
@@ -301,7 +317,7 @@ pub async fn handle_support_package_command(
             });
 
             if !skip_checks {
-                perform_preflight_checks(&output_path)?;
+                perform_preflight_checks(&output_path, output_format, force)?;
             }
 
             let optimization_opts = if optimize {
@@ -334,15 +350,29 @@ pub async fn handle_support_package_command(
 }
 
 /// Perform pre-flight checks before generating support package
-fn perform_preflight_checks(output_path: &Path) -> AnyhowResult<()> {
+fn perform_preflight_checks(
+    output_path: &Path,
+    output_format: OutputFormat,
+    force: bool,
+) -> CliResult<()> {
     // Check if output file already exists
-    if output_path.exists() {
+    if output_path.exists() && !force {
+        let cancelled = || RedisCtlError::OverwriteCancelled {
+            path: output_path.display().to_string(),
+        };
+        // Never consume piped consent or contaminate a structured error with a prompt.
+        // Human-mode terminal confirmation and explicit --force remain available.
+        if !std::io::stdin().is_terminal()
+            || matches!(output_format, OutputFormat::Json | OutputFormat::Yaml)
+        {
+            return Err(cancelled());
+        }
         eprintln!("Warning: File {} already exists", output_path.display());
         eprint!("Overwrite? (y/N): ");
         let mut response = String::new();
         std::io::stdin().read_line(&mut response)?;
         if !response.trim().eq_ignore_ascii_case("y") {
-            return Err(anyhow::anyhow!("Operation cancelled by user"));
+            return Err(cancelled());
         }
     }
 
@@ -354,10 +384,9 @@ fn perform_preflight_checks(output_path: &Path) -> AnyhowResult<()> {
         parent_dir
     };
     if !parent_dir.exists() {
-        return Err(anyhow::anyhow!(
-            "Output directory {} does not exist",
-            parent_dir.display()
-        ));
+        return Err(
+            anyhow::anyhow!("Output directory {} does not exist", parent_dir.display()).into(),
+        );
     }
 
     // Check available disk space (warn if less than 1GB)
@@ -366,7 +395,9 @@ fn perform_preflight_checks(output_path: &Path) -> AnyhowResult<()> {
     if let Ok(metadata) = fs::metadata(parent_dir) {
         use std::os::unix::fs::MetadataExt;
         // Basic check - would need proper disk space checking
-        if metadata.blocks() < 1000000 {
+        if metadata.blocks() < 1000000
+            && !matches!(output_format, OutputFormat::Json | OutputFormat::Yaml)
+        {
             eprintln!("Warning: Low disk space detected");
         }
     }

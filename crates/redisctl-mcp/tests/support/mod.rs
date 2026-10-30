@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod docker_fixture;
+
 use std::sync::Arc;
 
 #[cfg(feature = "enterprise")]

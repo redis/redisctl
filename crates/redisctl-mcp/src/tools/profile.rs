@@ -46,6 +46,7 @@ pub fn tool_names() -> Vec<String> {
 
 /// Input for listing profiles (no required parameters)
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ListProfilesInput {}
 
 /// Profile summary for list output
@@ -127,6 +128,7 @@ pub fn list_profiles(state: Arc<AppState>) -> Tool {
 
 /// Input for showing a specific profile
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ShowProfileInput {
     /// Name of the profile to show
     pub name: String,
@@ -175,7 +177,7 @@ struct MaskedDatabaseCredentials {
     database: u8,
 }
 
-/// Mask a credential value, showing only first/last chars
+/// Mask a credential value, showing only the first/last two Unicode scalar values.
 fn mask_credential(value: &str) -> String {
     if value.is_empty() {
         return "(not set)".to_string();
@@ -187,10 +189,19 @@ fn mask_credential(value: &str) -> String {
         }
         return "(env var)".to_string();
     }
-    if value.len() <= 8 {
+    if value.chars().count() <= 8 {
         return "****".to_string();
     }
-    format!("{}...{}", &value[..2], &value[value.len() - 2..])
+    let prefix: String = value.chars().take(2).collect();
+    let suffix: String = value
+        .chars()
+        .rev()
+        .take(2)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{prefix}...{suffix}")
 }
 
 /// Build the profile_show tool
@@ -301,6 +312,7 @@ pub fn show_profile(state: Arc<AppState>) -> Tool {
 
 /// Input for getting config path (no required parameters)
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigPathInput {}
 
 /// Build the profile_path tool
@@ -329,6 +341,7 @@ pub fn config_path(state: Arc<AppState>) -> Tool {
 
 /// Input for validating config
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ValidateConfigInput {
     /// When true, test actual API/database connectivity for each profile in addition to structural checks
     #[serde(default)]
@@ -605,6 +618,7 @@ pub fn validate_config(state: Arc<AppState>) -> Tool {
 
 /// Input for setting default cloud profile
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SetDefaultCloudInput {
     /// Name of the profile to set as default cloud profile
     pub name: String,
@@ -639,6 +653,7 @@ pub fn set_default_cloud(state: Arc<AppState>) -> Tool {
 
 /// Input for setting default enterprise profile
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SetDefaultEnterpriseInput {
     /// Name of the profile to set as default enterprise profile
     pub name: String,
@@ -673,6 +688,7 @@ pub fn set_default_enterprise(state: Arc<AppState>) -> Tool {
 
 /// Input for deleting a profile
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DeleteProfileInput {
     /// Name of the profile to delete
     pub name: String,
@@ -702,6 +718,7 @@ pub fn delete_profile(state: Arc<AppState>) -> Tool {
 
 /// Input for creating a new profile
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CreateProfileInput {
     /// Name for the new profile
     pub name: String,
@@ -1274,6 +1291,54 @@ password = '${REDISCTL_MCP_DOCUMENT_ABSENT:-synthetic-enterprise-password}'
                     Some("db")
                 }
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod credential_mask_tests {
+    use super::mask_credential;
+
+    #[test]
+    fn preserves_ascii_empty_and_reference_masks() {
+        for (value, expected) in [
+            ("", "(not set)"),
+            ("a", "****"),
+            ("abcdefgh", "****"),
+            ("abcdefghi", "ab...hi"),
+            ("abcdefghij", "ab...ij"),
+            ("keyring:🔒private-entry", "(keyring)"),
+            ("${PRIVATE_SECRET}", "(env var)"),
+        ] {
+            assert_eq!(mask_credential(value), expected);
+        }
+    }
+
+    #[test]
+    fn masks_multibyte_prefixes_and_suffixes_without_panicking() {
+        for (value, expected) in [
+            ("🔒password", "🔒p...rd"),
+            ("password🔒", "pa...d🔒"),
+            ("épassword", "ép...rd"),
+            ("passwordé", "pa...dé"),
+            ("密碼abcdefgh密碼", "密碼...密碼"),
+        ] {
+            assert_eq!(mask_credential(value), expected);
+            assert!(!mask_credential(value).contains(value));
+        }
+    }
+
+    #[test]
+    fn fully_masks_short_unicode_values_regardless_of_byte_length() {
+        for value in [
+            "🔒",
+            "🔒🔑🔒",
+            "密码短",
+            "éabcdefg",
+            "🔒abcdefg",
+            "e\u{301}abcdef",
+        ] {
+            assert_eq!(mask_credential(value), "****");
         }
     }
 }

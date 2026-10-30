@@ -42,7 +42,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Cache cargo registry and build
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           prefix-key: "v1-rust"
           shared-key: "quick"
@@ -84,7 +84,7 @@ jobs:
           toolchain: stable
 
       - name: Cache cargo registry and build
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           prefix-key: "v1-rust"
           shared-key: "test-${{ matrix.package }}"
@@ -106,7 +106,7 @@ jobs:
           toolchain: stable
 
       - name: Cache cargo registry and build
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           prefix-key: "v1-rust"
           shared-key: "integration"
@@ -127,6 +127,11 @@ jobs:
           cargo test -p redisctl-mcp --test redis_tools --all-features test_raw_command -- --ignored --test-threads=1
           cargo test -p redisctl-mcp --test redis_stack_tools --all-features test_bulk_seed_tools -- --ignored --test-threads=1
           cargo test -p redisctl-mcp --test redis_stack_tools --all-features test_alias_tools -- --ignored --test-threads=1
+
+      - name: Run Redis MCP Search integration tests
+        env:
+          REUSE_CONTAINERS: "1"
+        run: cargo test -p redisctl-mcp --test redis_stack_tools --all-features test_search_tools -- --ignored --test-threads=1
 
   # Platform builds - only required for main branch and releases
   build-platforms:
@@ -153,7 +158,7 @@ jobs:
           toolchain: stable
 
       - name: Cache cargo registry and build
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           prefix-key: "v1-rust"
           shared-key: "build"
@@ -181,13 +186,13 @@ jobs:
           toolchain: stable
 
       - name: Cache cargo registry and build
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           prefix-key: "v1-rust"
           shared-key: "coverage"
 
       - name: Install tarpaulin
-        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cargo-tarpaulin@0.31.2
 
@@ -200,11 +205,21 @@ jobs:
           files: ./cobertura.xml
           fail_ci_if_error: false
 
+  npm-wrapper:
+    name: npm Wrapper Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run wrapper tests
+        run: npm test
+        working-directory: npm/redisctl
+
   # Final status check - ensures all required jobs passed
   ci-status:
     name: CI Status
     runs-on: ubuntu-latest
-    needs: [quick-checks, test-unit, test-integration, build-platforms]
+    needs: [quick-checks, test-unit, test-integration, build-platforms, npm-wrapper]
     if: always()
     steps:
       - name: Check CI status
@@ -219,6 +234,10 @@ jobs:
           fi
           if [[ "${{ needs.test-integration.result }}" != "success" ]]; then
             echo "Integration tests failed"
+            exit 1
+          fi
+          if [[ "${{ needs.npm-wrapper.result }}" != "success" ]]; then
+            echo "npm wrapper tests failed"
             exit 1
           fi
           # Build platforms can have failures for non-Linux

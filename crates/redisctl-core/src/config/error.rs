@@ -20,9 +20,13 @@ pub enum ConfigError {
     },
 
     #[error(
-        "Failed to parse config: invalid TOML syntax or field value; check quoted strings and field types"
+        "Failed to parse config: invalid TOML syntax or field value; environment placeholders must be quoted strings and numeric/boolean fields must be literal TOML values"
     )]
     ParseError(toml::de::Error),
+
+    /// Sanitized parser diagnostic. No original input, keys or rejected values are retained.
+    #[error("Failed to parse config{location}: invalid TOML syntax or field value; environment placeholders must be quoted strings and numeric/boolean fields must be literal TOML values", location = parse_location(*.byte_offset))]
+    InvalidDocument { byte_offset: Option<usize> },
 
     #[error("Failed to serialize config: invalid configuration value")]
     SerializeError(toml::ser::Error),
@@ -64,8 +68,25 @@ impl std::fmt::Debug for ConfigError {
         match self {
             Self::ParseError(_) => f.write_str("ParseError(<redacted>)"),
             Self::SerializeError(_) => f.write_str("SerializeError(<redacted>)"),
+            Self::InvalidDocument { byte_offset } => f
+                .debug_struct("InvalidDocument")
+                .field("byte_offset", byte_offset)
+                .finish(),
             _ => f
-                .debug_tuple("ConfigError")
+                .debug_tuple(match self {
+                    Self::LoadError { .. } => "LoadError",
+                    Self::SaveError { .. } => "SaveError",
+                    Self::ProfileNotFound { .. } => "ProfileNotFound",
+                    Self::NoProfilesOfType { .. } => "NoProfilesOfType",
+                    Self::CredentialError(_) => "CredentialError",
+                    #[cfg(feature = "secure-storage")]
+                    Self::KeyringError(_) => "KeyringError",
+                    Self::EnvExpansionError(_) => "EnvExpansionError",
+                    Self::AmbiguousDeployment => "AmbiguousDeployment",
+                    Self::ConfigDirError => "ConfigDirError",
+                    Self::IoError(_) => "IoError",
+                    _ => "ConfigError",
+                })
                 .field(&self.to_string())
                 .finish(),
         }
@@ -74,13 +95,16 @@ impl std::fmt::Debug for ConfigError {
 
 impl From<toml::de::Error> for ConfigError {
     fn from(error: toml::de::Error) -> Self {
-        // Retain a non-sensitive location where available, without copying parser messages.
-        let message = match error.span() {
-            Some(span) => format!("Invalid configuration at byte offset {}", span.start),
-            None => "Invalid configuration syntax or field value".to_string(),
-        };
-        Self::ParseError(<toml::de::Error as serde::de::Error>::custom(message))
+        Self::InvalidDocument {
+            byte_offset: error.span().map(|span| span.start),
+        }
     }
+}
+
+fn parse_location(byte_offset: Option<usize>) -> String {
+    byte_offset
+        .map(|offset| format!(" at byte offset {offset}"))
+        .unwrap_or_default()
 }
 
 impl From<toml::ser::Error> for ConfigError {

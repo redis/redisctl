@@ -43,6 +43,7 @@ const PASSTHROUGH_COMMANDS: &[&str] = &[
     "pr",   // profile alias
     "api",
     "db",
+    "init",
     "version",
     "ver", // version alias
     "v",   // version alias
@@ -562,6 +563,10 @@ async fn execute_command(cli: &Cli, conn_mgr: &ConnectionManager) -> Result<(), 
         }
 
         Commands::Db(db_cmd) => commands::db::handle_db_command(db_cmd, conn_mgr, cli.output).await,
+
+        Commands::Init(init_args) => {
+            workflows::init::run(init_args, conn_mgr, cli.profile.as_deref()).await
+        }
     };
 
     let duration = start.elapsed();
@@ -660,6 +665,8 @@ fn format_command(command: &Commands) -> String {
                 Open { profile, .. } => format!("db open --profile {}", profile),
             }
         }
+        // The --url value can carry a database password, so it never reaches the log.
+        Commands::Init(_) => "init [args redacted]".to_string(),
     }
 }
 
@@ -1285,7 +1292,9 @@ async fn handle_enterprise_workflow_command(
                     .execute(context, args)
                     .await
                     .map_err(|e| RedisCtlError::ApiError {
-                        message: e.to_string(),
+                        // Alternate formatting keeps the cause chain (for example the 401
+                        // behind a discovery failure) instead of only the outermost context.
+                        message: format!("{e:#}"),
                     })?;
 
             if !result.success {
@@ -1575,6 +1584,9 @@ mod tests {
         "redisctl enterprise shard failover",
         "redisctl enterprise shard migrate",
         "redisctl enterprise suffix delete",
+        "redisctl enterprise support-package cluster",
+        "redisctl enterprise support-package database",
+        "redisctl enterprise support-package node",
         "redisctl enterprise user delete",
     ];
 

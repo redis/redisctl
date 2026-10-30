@@ -163,6 +163,56 @@ configuration. Reload and retry the command after resolving the conflicting edit
 are not an atomic filesystem transaction. Rust embedders should use `ConfigDocument` for
 provenance-aware load/edit/save operations; bare `Config` values do not retain load history.
 
+### Migration: literal expansion and configuration writers
+
+Configuration loading parses TOML **before** expanding string values. Older raw-text expansion
+could change TOML syntax, table names, keys, numbers and booleans. Those forms are no longer
+supported. For example, replace `port = ${PORT}` with a literal numeric port; quoting the
+placeholder is not a workaround for a numeric field. Keep environment references in string
+fields such as credentials, not field names or table names:
+
+```toml
+[profiles.cache]
+deployment_type = "database"
+host = "localhost"
+port = 6379
+tls = false
+password = "${REDIS_PASSWORD}"
+```
+
+Parser diagnostics report a byte offset when available and a migration hint without printing
+configuration excerpts or rejected values. In Rust, parser-error conversions now return
+`ConfigError::InvalidDocument { byte_offset }`. The older `ParseError(toml::de::Error)` variant
+remains available for callers constructing it explicitly, with redacted formatting and no
+parser source chain. Exhaustive matches on `ConfigError` need to account for the new variant.
+
+The public `Config::save`, `Config::save_to_path` and `Config::save_to_path_owner_only`
+signatures remain, but are deprecated. They accept only caller-created **literal-only**
+configurations. If either the existing destination or outgoing string values contain an
+environment reference, the write fails with guidance to use `ConfigDocument`, before creating
+directories or changing file contents/permissions. Malformed or unreadable destinations are
+not overwritten. The guard uses the loader's reference syntax without reading environment
+values; unset references and references in arrays are included.
+
+A bare `Config` cannot tell whether an already-resolved literal came from another file's
+environment reference. A new or literal-only destination is therefore not evidence that an
+untracked save-as is safe. For **all load/edit/save and save-as operations**, retain the
+document from the original load:
+
+```rust
+use redisctl_core::{ConfigDocument, ConfigPathSegment};
+
+let mut document = ConfigDocument::load_from_path(path)?;
+document.allow_literal_replacement(&[ConfigPathSegment::Key("default_database".into())]);
+document.config_mut().default_database = Some("cache".into());
+document.save()?;
+```
+
+This explicitly replaces only the selected default while preserving unrelated references.
+`ConfigDocumentError` and `ConfigPathSegment` are non-exhaustive so consumers should retain a
+fallback match arm. Configuration schema versions, unknown-field preservation and atomic
+migrations remain separate work; this change does not establish those guarantees.
+
 ### OS Keyring
 
 ```toml

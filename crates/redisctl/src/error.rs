@@ -147,6 +147,9 @@ pub enum RedisCtlError {
     #[error("Cancelled at the confirmation prompt: {prompt}")]
     Cancelled { prompt: String },
 
+    #[error("Cancelled overwrite of existing file '{path}'")]
+    OverwriteCancelled { path: String },
+
     #[error("Command not supported for deployment type '{deployment_type}'")]
     UnsupportedDeploymentType { deployment_type: String },
     #[error("File error for '{path}': {message}")]
@@ -161,6 +164,15 @@ pub enum RedisCtlError {
     #[error("Output formatting error: {message}")]
     OutputError { message: String },
 
+    /// A `redisctl init` failure. The message names its own remedy, so no generic
+    /// tips apply.
+    #[error("{message}")]
+    Init {
+        code: &'static str,
+        exit_code: i32,
+        message: String,
+    },
+
     /// Agent-native surface error carrying a stable code + exit code (see
     /// [`crate::structured_error`]). Handled specially in `main` (JSON envelope to stdout,
     /// mapped exit code) rather than the generic 0/1 path.
@@ -171,7 +183,36 @@ pub enum RedisCtlError {
 /// Result type for redisctl operations
 pub type Result<T> = std::result::Result<T, RedisCtlError>;
 
+impl From<crate::workflows::init::engine::InitError> for RedisCtlError {
+    fn from(err: crate::workflows::init::engine::InitError) -> Self {
+        use crate::workflows::init::engine::InitError;
+        let (code, exit_code) = match &err {
+            InitError::NoUrlInInput
+            | InitError::InvalidEnvValue { .. }
+            | InitError::ProductIncomplete { .. }
+            | InitError::DuplicateEnvKey { .. }
+            | InitError::NothingToComplete => ("invalid_input", exit_code::VALIDATION),
+            InitError::NotReady { .. } => ("connection_error", exit_code::NETWORK),
+            InitError::UnreadableFile { .. } | InitError::WriteFailed { .. } => {
+                ("file_error", exit_code::GENERIC)
+            }
+            InitError::DockerUnavailable
+            | InitError::DockerCommand { .. }
+            | InitError::NoFreePort => ("error", exit_code::GENERIC),
+        };
+        RedisCtlError::init(code, exit_code, err.to_string())
+    }
+}
+
 impl RedisCtlError {
+    pub(crate) fn init(code: &'static str, exit_code: i32, message: impl Into<String>) -> Self {
+        RedisCtlError::Init {
+            code,
+            exit_code,
+            message: message.into(),
+        }
+    }
+
     /// Get helpful suggestions for resolving this error
     pub fn suggestions(&self) -> Vec<String> {
         match self {
@@ -283,10 +324,27 @@ impl RedisCtlError {
                 "Verify file permissions are correct".to_string(),
                 "Ensure file path is correct (use absolute path if needed)".to_string(),
             ],
+            // The init wizard has no --force; the wizard itself decides which
+            // prompts are its own, so destructive confirmations keep their tip.
+            RedisCtlError::Cancelled { prompt }
+                if crate::workflows::init::wizard::is_wizard_prompt(prompt) =>
+            {
+                vec![
+                    "Re-run with --defaults to take the defaults without prompts".to_string(),
+                    "Flags answer questions up front: --url or --cloud, --agent, --skills-global or --no-skills, --install-cli or --no-install-cli"
+                        .to_string(),
+                ]
+            }
             RedisCtlError::Cancelled { .. } => vec![
                 "Re-run with --force to skip the confirmation prompt".to_string(),
                 "Confirmation prompts require an interactive terminal".to_string(),
                 "A declined or unanswerable prompt is a failure, not a no-op".to_string(),
+            ],
+            RedisCtlError::OverwriteCancelled { .. } => vec![
+                "Choose a different output file with --file".to_string(),
+                "Re-run with --force to skip only overwrite confirmation, or --skip-checks to skip all pre-flight checks".to_string(),
+                "Overwrite confirmation requires an interactive terminal and human-readable output"
+                    .to_string(),
             ],
             RedisCtlError::Configuration(_) => vec![
                 "Check the profile: redisctl profile show <name>".to_string(),
@@ -310,12 +368,15 @@ impl RedisCtlError {
             RedisCtlError::AuthenticationFailed { .. } => "authentication_failed",
             RedisCtlError::ApiError { .. } => "api_error",
             RedisCtlError::InvalidInput { .. } => "invalid_input",
-            RedisCtlError::Cancelled { .. } => "cancelled",
+            RedisCtlError::Cancelled { .. } | RedisCtlError::OverwriteCancelled { .. } => {
+                "cancelled"
+            }
             RedisCtlError::UnsupportedDeploymentType { .. } => "unsupported_deployment_type",
             RedisCtlError::FileError { .. } => "file_error",
             RedisCtlError::ConnectionError { .. } => "connection_error",
             RedisCtlError::Timeout { .. } => "timeout",
             RedisCtlError::OutputError { .. } => "output_error",
+            RedisCtlError::Init { code, .. } => code,
             // Agent-native surface errors carry their own stable code.
             RedisCtlError::Structured(se) => se.code,
         }
@@ -355,7 +416,9 @@ impl RedisCtlError {
             }
 
             RedisCtlError::InvalidInput { .. } => exit_code::VALIDATION,
-            RedisCtlError::Cancelled { .. } => exit_code::CANCELLED,
+            RedisCtlError::Cancelled { .. } | RedisCtlError::OverwriteCancelled { .. } => {
+                exit_code::CANCELLED
+            }
 
             // The command does not apply to this deployment, or names a file
             // that could not be read: in both cases the invocation was wrong.
@@ -369,6 +432,8 @@ impl RedisCtlError {
             // `Other` is the anyhow catch-all and `OutputError` covers
             // serialization and IO; neither is classified yet.
             RedisCtlError::Other(_) | RedisCtlError::OutputError { .. } => exit_code::GENERIC,
+
+            RedisCtlError::Init { exit_code, .. } => *exit_code,
 
             // The agent-native surface publishes its own 1-4 contract (see
             // docs/reference/agent-error-codes.md), where `retryable` is defined as exactly the
@@ -405,7 +470,7 @@ impl RedisCtlError {
                         .unwrap_or_else(|_| envelope.to_string())
                 );
             }
-            OutputFormat::Yaml => match serde_yaml::to_string(&self.envelope()) {
+            OutputFormat::Yaml => match serde_norway::to_string(&self.envelope()) {
                 Ok(s) => eprint!("{}", s),
                 Err(_) => self.print_human_diagnostic(),
             },
