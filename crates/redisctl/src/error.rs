@@ -190,6 +190,7 @@ impl From<crate::workflows::init::engine::InitError> for RedisCtlError {
             InitError::NoUrlInInput
             | InitError::InvalidEnvValue { .. }
             | InitError::ProductIncomplete { .. }
+            | InitError::InsecureProductEndpoint { .. }
             | InitError::DuplicateEnvKey { .. }
             | InitError::NothingToComplete => ("invalid_input", exit_code::VALIDATION),
             InitError::NotReady { .. } => ("connection_error", exit_code::NETWORK),

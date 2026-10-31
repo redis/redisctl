@@ -74,6 +74,11 @@ pub enum InitError {
     #[error("cannot complete {label}: .env needs {needed}.")]
     ProductIncomplete { label: String, needed: String },
 
+    #[error(
+        "{label} endpoint must use https:// (plain http is only allowed for localhost), got {url}."
+    )]
+    InsecureProductEndpoint { label: String, url: String },
+
     #[error("nothing to complete: .env has no Redis database or Redis Iris product setup.")]
     NothingToComplete,
 }
