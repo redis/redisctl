@@ -542,10 +542,9 @@ pub async fn get_cluster_alerts(
     query: Option<&str>,
 ) -> CliResult<()> {
     let client = conn_mgr.create_enterprise_client(profile_name).await?;
-    // `AlertHandler::list` was removed upstream; call the cluster-wide alerts
-    // route directly to preserve this command's behavior.
-    let alerts: Vec<redis_enterprise::alerts::Alert> = client.get("/v1/alerts").await?;
-    let alerts_json = serde_json::to_value(alerts).context("Failed to serialize alerts")?;
+    // Redis Enterprise has no `/v1/alerts` route; cluster alerts live under
+    // `/v1/cluster/alerts` and come back as a map keyed by alert name.
+    let alerts_json: serde_json::Value = client.get("/v1/cluster/alerts").await?;
     let data = handle_output(alerts_json, output_format, query)?;
     print_formatted_output(data, output_format)?;
     Ok(())
