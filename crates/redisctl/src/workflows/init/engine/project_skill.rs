@@ -412,7 +412,8 @@ description: >-
 
 # Redis setup in this project
 
-Set up by `redisctl init`; re-running it is safe and never clobbers existing content.
+Set up by `redisctl init`. Re-running it is safe, but it regenerates this file, so keep
+hand-written notes in another file.
 Every credential lives in `.env` and nowhere else - not in code, not in a committed
 file.
 {database}{products}{iris}"#,
