@@ -216,8 +216,11 @@ async fn api(
 /// Live proof the product works: reads only, plus the one self-check session write
 /// the health check needs. Returns the proof text for the Validate line.
 pub async fn validate_product(product: &WiredProduct) -> Result<String, String> {
+    // Never follow redirects: reqwest would replay the X-API-Key header to the
+    // redirect target, which may be a different host.
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| e.to_string())?;
     let base = &product.url;
@@ -369,6 +372,27 @@ pub(crate) fn recorded(cwd: &Path, getenv: &dyn Fn(&str) -> Option<String>) -> V
         .collect()
 }
 
+/// The product API key travels in a header, so the endpoint must be `https://`.
+/// Plain `http://` is accepted only for loopback hosts (local development).
+pub(crate) fn is_secure_endpoint(raw: &str) -> bool {
+    let lower = raw.trim().to_ascii_lowercase();
+    if lower.starts_with("https://") {
+        return true;
+    }
+    if !lower.starts_with("http://") {
+        return true; // no plain-http scheme to object to (e.g. placeholder values)
+    }
+    match url::Url::parse(raw.trim()) {
+        Ok(u) => match u.host() {
+            Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+            Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+            Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+            None => false,
+        },
+        Err(_) => false,
+    }
+}
+
 /// One product from its request and what `.env` stores; `None` when neither names it.
 fn wire_one(
     cwd: &Path,
@@ -400,6 +424,12 @@ fn wire_one(
             });
         }
     };
+    if !is_secure_endpoint(&url) {
+        return Err(InitError::InsecureProductEndpoint {
+            label: spec.label.to_string(),
+            url,
+        });
+    }
     let key = resolve_key(spec, flag_key, cwd, getenv);
     Ok(Some(WiredProduct {
         spec,
@@ -413,6 +443,60 @@ fn wire_one(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plain_http_is_only_allowed_for_loopback() {
+        assert!(is_secure_endpoint("https://eu.memory.redis.io"));
+        assert!(is_secure_endpoint("https://<region>.langcache.redis.io"));
+        assert!(is_secure_endpoint("http://localhost:8080"));
+        assert!(is_secure_endpoint("http://127.0.0.1:8080/mcp"));
+        assert!(is_secure_endpoint("http://[::1]:8080"));
+        assert!(!is_secure_endpoint("http://memory.example.com"));
+        assert!(!is_secure_endpoint("HTTP://memory.example.com"));
+        assert!(!is_secure_endpoint("http://10.0.0.5"));
+        assert!(!is_secure_endpoint("http://localhost.evil.example"));
+    }
+
+    #[test]
+    fn wire_one_rejects_a_plain_http_endpoint_from_env() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".env"),
+            "CONTEXT_RETRIEVER_MCP_URL=http://mcp.example.com\nCONTEXT_RETRIEVER_AGENT_KEY=k\n",
+        )
+        .unwrap();
+        let err = wire_one(dir.path(), &SPECS[2], None, None, &|_: &str| None).unwrap_err();
+        assert!(matches!(err, InitError::InsecureProductEndpoint { .. }));
+    }
+
+    #[tokio::test]
+    async fn validation_does_not_follow_redirects_with_the_api_key() {
+        use wiremock::matchers::any;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let target = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": { "tools": [] }
+            })))
+            .mount(&target)
+            .await;
+        let origin = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(307).insert_header("location", target.uri()))
+            .mount(&origin)
+            .await;
+
+        let product = WiredProduct {
+            spec: &SPECS[2],
+            url: origin.uri(),
+            id: None,
+            key: "secret-key".to_string(),
+            ready: true,
+        };
+        assert!(validate_product(&product).await.is_err());
+        assert!(target.received_requests().await.unwrap().is_empty());
+    }
 
     #[test]
     fn placeholders_and_empties_read_as_unconfigured() {
