@@ -9,7 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 
-from smoke_stdio import RpcProcess
+from smoke_stdio import RpcProcess, PROFILE_PROBE_ARGUMENTS, assert_profile_create_denied
 
 IMAGE = "redisctl-plugin-codex-test:0.160.1"
 PLUGIN_ID = "redisctl-mcp@redisctl-experimental"
@@ -112,7 +112,8 @@ def native_trial():
         tools = server["tools"]
         assert {"show_policy", "profile_list", "redis_ping", "get_license_usage"} <= tools.keys()
         assert not {"profile_create", "profile_delete", "redis_set", "redis_command",
-                    "cloud_raw_api", "enterprise_raw_api", "profile_show"} & tools.keys()
+                    "cloud_raw_api", "enterprise_raw_api", "profile_show", "redis_config_get",
+                    "get_enterprise_database"} & tools.keys()
         assert all(tool.get("annotations", {}).get("readOnlyHint") is True for tool in tools.values())
         result = rpc.request("mcpServer/tool/call", {"threadId": thread, "server": server["name"],
                                                     "tool": "show_policy", "arguments": {}})
@@ -120,8 +121,8 @@ def native_trial():
         assert policy["global_tier"] == "read-only"
         assert policy["source"] == f"file: {cache}/read-only.toml"
         denied = rpc.request("mcpServer/tool/call", {"threadId": thread, "server": server["name"],
-                                                    "tool": "profile_create", "arguments": {}}, allow_error=True)
-        assert "error" in denied or denied.get("isError") is True
+                                                    "tool": "profile_create", "arguments": PROFILE_PROBE_ARGUMENTS}, allow_error=True)
+        assert_profile_create_denied(denied)
         server_version = server["serverInfo"]["version"]
         tool_count = len(tools)
     finally:

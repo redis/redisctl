@@ -17,6 +17,19 @@ PACKAGE = builder.PACKAGE
 
 
 class PluginTests(unittest.TestCase):
+    def generation_fixture(self, root):
+        script = root / "plugins/build_plugin.py"
+        script.parent.mkdir(parents=True)
+        shutil.copyfile(ROOT / "plugins/build_plugin.py", script)
+        shutil.copyfile(ROOT / "Cargo.toml", root / "Cargo.toml")
+        for name in builder.SKILLS:
+            source = ROOT / f"crates/redisctl-mcp/skills/{name}/SKILL.md"
+            target = root / source.relative_to(ROOT)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+        subprocess.run([sys.executable, str(script)], check=True, capture_output=True)
+        return script
+
     def test_all_generated_files_match_sources(self):
         for relative, expected in builder.generated_files().items():
             with self.subTest(relative=relative):
@@ -33,7 +46,7 @@ class PluginTests(unittest.TestCase):
             generated = (PACKAGE / f"skills/{name}/SKILL.md").read_text()
             header, body = source[4:].split("\n---\n", 1)
             self.assertTrue(generated.startswith("---\n" + header + "\n---\n"))
-            self.assertTrue(generated.endswith(body.lstrip("\n")))
+            self.assertTrue(generated.endswith(builder.skill_body(name, body)))
             self.assertIn("Plugin safety and discovery", generated)
             self.assertIn("do not enable writes or bypass policy", generated)
             self.assertIn("Never request credentials", generated)
@@ -65,6 +78,7 @@ class PluginTests(unittest.TestCase):
         self.assertNotIn("hooks", portable)
         self.assertNotIn("hooks", claude)
         self.assertFalse((PACKAGE / "hooks").exists())
+        self.assertEqual(portable["version"], builder.workspace_version(ROOT))
 
     def test_catalog_paths_resolve_inside_marketplace_root(self):
         catalogs = [ROOT / "plugins/.claude-plugin/marketplace.json", ROOT / "plugins/.agents/plugins/marketplace.json"]
@@ -81,6 +95,7 @@ class PluginTests(unittest.TestCase):
     def test_generator_rejects_mismatched_source_identity(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            shutil.copyfile(ROOT / "Cargo.toml", root / "Cargo.toml")
             skill = root / "crates/redisctl-mcp/skills/redisctl-setup/SKILL.md"
             skill.parent.mkdir(parents=True)
             skill.write_text("---\nname: unrelated\ndescription: synthetic\n---\nbody\n")
@@ -91,6 +106,7 @@ class PluginTests(unittest.TestCase):
         for content in ("name: redisctl-setup\nbody", "---\nname: redisctl-setup\nbody"):
             with self.subTest(content=content), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
+                shutil.copyfile(ROOT / "Cargo.toml", root / "Cargo.toml")
                 skill = root / "crates/redisctl-mcp/skills/redisctl-setup/SKILL.md"
                 skill.parent.mkdir(parents=True)
                 skill.write_text(content)
@@ -100,6 +116,7 @@ class PluginTests(unittest.TestCase):
     def test_check_rejects_drift_and_missing_files_without_repairing_them(self):
         with tempfile.TemporaryDirectory(prefix="plugin generation fixture ") as directory:
             root = Path(directory)
+            shutil.copyfile(ROOT / "Cargo.toml", root / "Cargo.toml")
             script = root / "plugins/build_plugin.py"
             script.parent.mkdir(parents=True)
             shutil.copyfile(ROOT / "plugins/build_plugin.py", script)
@@ -128,6 +145,67 @@ class PluginTests(unittest.TestCase):
         before = {p: p.stat().st_mtime_ns for p in PACKAGE.rglob("*") if p.is_file()}
         subprocess.run([sys.executable, str(ROOT / "plugins/build_plugin.py"), "--check"], check=True, capture_output=True)
         self.assertEqual(before, {p: p.stat().st_mtime_ns for p in before})
+
+    def test_unexpected_skills_are_rejected_without_rewriting_or_deleting(self):
+        for check in (True, False):
+            for relative in ("skills/stale-skill/SKILL.md", "skills/data-explorer/extra/SKILL.md",
+                             "skills/stray-file.md"):
+                with self.subTest(check=check, relative=relative), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    script = self.generation_fixture(root)
+                    stray = root / "plugins/redisctl-mcp" / relative
+                    stray.parent.mkdir(parents=True, exist_ok=True)
+                    stray.write_text("synthetic untracked skill")
+                    before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in root.rglob("*") if p.is_file()}
+                    result = subprocess.run([sys.executable, str(script), *(["--check"] if check else [])],
+                                            capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn(relative, result.stderr)
+                    self.assertEqual(before, {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before})
+
+    def test_setup_adaptation_preserves_all_other_canonical_guidance(self):
+        source = (ROOT / "crates/redisctl-mcp/skills/redisctl-setup/SKILL.md").read_text()
+        body = source[4:].split("\n---\n", 1)[1]
+        adapted = builder.skill_body("redisctl-setup", body)
+        before, after = body.split(builder.SETUP_LAUNCH)
+        self.assertEqual(adapted, (before + builder.PLUGIN_SETUP_LAUNCH + after).lstrip("\n"))
+        self.assertIn("REDISCTL_PROFILE", adapted)
+        self.assertNotIn('"command": "/absolute/path/to/redisctl-mcp"', adapted)
+        self.assertIn("Do not edit the plugin's cached", adapted)
+        self.assertIn("explicit read-only policy intact", adapted)
+        with self.assertRaisesRegex(ValueError, "Canonical setup launch guidance changed"):
+            builder.skill_body("redisctl-setup", body.replace(builder.SETUP_LAUNCH, "changed upstream"))
+
+    def test_workspace_version_changes_the_generated_package_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = self.generation_fixture(root)
+            (root / "Cargo.toml").write_text('[workspace.package]\nversion = "9.8.7-test"\n')
+            result = subprocess.run([sys.executable, str(script), "--check"], capture_output=True)
+            self.assertEqual(result.returncode, 1)
+            subprocess.run([sys.executable, str(script)], check=True, capture_output=True)
+            package = root / "plugins/redisctl-mcp"
+            for path in ("plugin.json", ".claude-plugin/plugin.json"):
+                self.assertEqual(json.loads((package / path).read_text())["version"], "9.8.7-test")
+
+    def test_skill_symlinks_are_rejected_without_following_or_deleting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = self.generation_fixture(root)
+            package = root / "plugins/redisctl-mcp"
+            outside = root / "outside"
+            outside.mkdir()
+            marker = outside / "SKILL.md"
+            marker.write_text("synthetic external skill")
+            symlink = package / "skills/extra-link"
+            try:
+                symlink.symlink_to(outside, target_is_directory=True)
+            except OSError:
+                self.skipTest("platform cannot create symlinks")
+            result = subprocess.run([sys.executable, str(script), "--check"], capture_output=True)
+            self.assertEqual(result.returncode, 1)
+            self.assertTrue(symlink.is_symlink())
+            self.assertEqual(marker.read_text(), "synthetic external skill")
 
 
 if __name__ == "__main__":

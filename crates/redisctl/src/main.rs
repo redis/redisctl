@@ -13,7 +13,7 @@
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser};
 use clap_complete::{generate, shells};
-use redisctl_core::{Config, ConfigError, DeploymentType};
+use redisctl_core::{Config, ConfigDocument, ConfigError, DeploymentType};
 use std::io::IsTerminal;
 use tracing::{debug, info, trace};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -43,6 +43,7 @@ const PASSTHROUGH_COMMANDS: &[&str] = &[
     "pr",   // profile alias
     "api",
     "db",
+    "init",
     "version",
     "ver", // version alias
     "v",   // version alias
@@ -403,17 +404,17 @@ async fn main() -> Result<()> {
     let (config, config_path) = if let Some(config_file) = &cli.config_file {
         let path = std::path::PathBuf::from(config_file);
         debug!("Loading config from explicit path: {:?}", path);
-        let config = Config::load_from_path(&path)?;
+        let config = ConfigDocument::load_from_path(&path)?;
         (config, Some(path))
     } else {
         debug!("Loading config from default location");
-        (Config::load()?, None)
+        (ConfigDocument::load()?, None)
     };
     debug!(
         "Creating ConnectionManager with config_path: {:?}",
         config_path
     );
-    let conn_mgr = ConnectionManager::with_config_path(config, config_path);
+    let conn_mgr = ConnectionManager::with_document(config, config_path);
 
     // Execute command
     if let Err(e) = execute_command(&cli, &conn_mgr).await {
@@ -515,7 +516,7 @@ async fn execute_command(cli: &Cli, conn_mgr: &ConnectionManager) -> Result<(), 
 
         Commands::FilesKey(files_key_cmd) => {
             debug!("Executing files-key command");
-            execute_files_key_command(files_key_cmd).await
+            execute_files_key_command(files_key_cmd, conn_mgr).await
         }
 
         Commands::Api {
@@ -562,6 +563,10 @@ async fn execute_command(cli: &Cli, conn_mgr: &ConnectionManager) -> Result<(), 
         }
 
         Commands::Db(db_cmd) => commands::db::handle_db_command(db_cmd, conn_mgr, cli.output).await,
+
+        Commands::Init(init_args) => {
+            workflows::init::run(init_args, conn_mgr, cli.profile.as_deref()).await
+        }
     };
 
     let duration = start.elapsed();
@@ -660,6 +665,8 @@ fn format_command(command: &Commands) -> String {
                 Open { profile, .. } => format!("db open --profile {}", profile),
             }
         }
+        // The --url value can carry a database password, so it never reaches the log.
+        Commands::Init(_) => "init [args redacted]".to_string(),
     }
 }
 
@@ -1285,7 +1292,9 @@ async fn handle_enterprise_workflow_command(
                     .execute(context, args)
                     .await
                     .map_err(|e| RedisCtlError::ApiError {
-                        message: e.to_string(),
+                        // Alternate formatting keeps the cause chain (for example the 401
+                        // behind a discovery failure) instead of only the outermost context.
+                        message: format!("{e:#}"),
                     })?;
 
             if !result.success {
@@ -1316,6 +1325,7 @@ async fn handle_enterprise_workflow_command(
 
 async fn execute_files_key_command(
     files_key_cmd: &cli::FilesKeyCommands,
+    conn_mgr: &ConnectionManager,
 ) -> Result<(), RedisCtlError> {
     use cli::FilesKeyCommands::*;
 
@@ -1327,6 +1337,7 @@ async fn execute_files_key_command(
             global,
             profile,
         } => commands::files_key::handle_set(
+            conn_mgr,
             api_key.clone(),
             #[cfg(feature = "secure-storage")]
             *use_keyring,
@@ -1335,7 +1346,7 @@ async fn execute_files_key_command(
         )
         .await
         .map_err(RedisCtlError::from),
-        Get { profile } => commands::files_key::handle_get(profile.clone())
+        Get { profile } => commands::files_key::handle_get(conn_mgr, profile.clone())
             .await
             .map_err(RedisCtlError::from),
         Remove {
@@ -1344,6 +1355,7 @@ async fn execute_files_key_command(
             global,
             profile,
         } => commands::files_key::handle_remove(
+            conn_mgr,
             #[cfg(feature = "secure-storage")]
             *keyring,
             *global,
@@ -1572,6 +1584,9 @@ mod tests {
         "redisctl enterprise shard failover",
         "redisctl enterprise shard migrate",
         "redisctl enterprise suffix delete",
+        "redisctl enterprise support-package cluster",
+        "redisctl enterprise support-package database",
+        "redisctl enterprise support-package node",
         "redisctl enterprise user delete",
     ];
 

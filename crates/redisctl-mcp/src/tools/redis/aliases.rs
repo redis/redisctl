@@ -1,12 +1,15 @@
 //! Command alias tools — save and replay named Redis command sequences
 
-use tower_mcp::{CallToolResult, ResultExt};
+use tower_mcp::CallToolResult;
+
+use super::RedisResultExt;
 
 use crate::policy::ToolSafety;
 use crate::tools::macros::{database_tool, mcp_module};
 
 /// A command entry for defining an alias.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AliasCommand {
     /// Redis command arguments (e.g. ["SET", "key", "value"] or ["JSON.SET", "doc:1", "$", "{}"])
     pub args: Vec<String>,

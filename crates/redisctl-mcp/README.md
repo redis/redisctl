@@ -21,7 +21,7 @@ After connecting, read `redisctl://skills` for the embedded workflow index or
 select the `redisctl-setup` prompt for safe setup guidance. Workflows load on
 demand rather than being copied into initialization instructions. Credentials
 must be entered through a trusted local user flow, not chat or tool arguments.
-See [Embedded Skills and Setup](https://redis.github.io/redisctl/mcp/skills/).
+See [Embedded Skills and Setup](https://redis-field-engineering.github.io/redisctl-docs/mcp/skills/).
 
 ### With Claude Desktop
 

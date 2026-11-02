@@ -61,6 +61,7 @@ macro_rules! database_tool {
     ) => {
         pastey::paste! {
             #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+            #[serde(deny_unknown_fields)]
             pub struct [<$fn_name:camel Input>] {
                 /// Optional Redis URL (overrides profile, uses configured URL if not provided)
                 #[serde(default)]
@@ -105,6 +106,7 @@ macro_rules! database_tool {
     ) => {
         pastey::paste! {
             #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+            #[serde(deny_unknown_fields)]
             pub struct [<$fn_name:camel Input>] {
                 /// Optional Redis URL (overrides profile, uses configured URL if not provided)
                 #[serde(default)]
@@ -213,6 +215,7 @@ macro_rules! cloud_tool {
     ) => {
         pastey::paste! {
             #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+            #[serde(deny_unknown_fields)]
             pub struct [<$fn_name:camel Input>] {
                 /// Profile name for multi-account support. If not specified, uses the first configured profile or default.
                 #[serde(default)]
@@ -306,6 +309,7 @@ macro_rules! enterprise_tool {
     ) => {
         pastey::paste! {
             #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+            #[serde(deny_unknown_fields)]
             pub struct [<$fn_name:camel Input>] {
                 /// Profile name for multi-cluster support. If not specified, uses the first configured profile or default.
                 #[serde(default)]

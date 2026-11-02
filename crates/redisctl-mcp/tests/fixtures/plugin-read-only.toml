@@ -1,7 +1,7 @@
 # Experimental plugin: read-only even if the user's default policy permits writes.
 tier = "read-only"
 deny_categories = ["destructive"]
-deny = ["cloud_raw_api", "enterprise_raw_api", "redis_command", "profile_show"]
+deny = ["cloud_raw_api", "enterprise_raw_api", "redis_command", "profile_show", "redis_config_get", "get_enterprise_database"]
 
 [tools]
 preset = "essentials"

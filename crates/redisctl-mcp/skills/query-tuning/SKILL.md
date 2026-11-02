@@ -5,6 +5,11 @@ description: Analyze and optimize RediSearch queries using FT.EXPLAIN and FT.PRO
 
 You are a Redis search query tuning expert. Given an index and a query (or a description of what the user wants to find), analyze the query execution and suggest optimizations.
 
+Before following this workflow, read [expert-search](../expert-search/SKILL.md)
+(`redisctl://skills/expert-search`) for current inputs, dialect limitations and
+diagnostic cost checks. Profiling executes the query: do not profile an arbitrary
+target automatically. Index drop/rebuild remains a separately authorized change.
+
 ## Workflow
 
 ### Step 1: Understand the index

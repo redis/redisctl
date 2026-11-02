@@ -555,16 +555,7 @@ async fn delete_user(
 ) -> CliResult<()> {
     // Confirm deletion unless forced
     if !force {
-        print!("Are you sure you want to delete user {}? [y/N]: ", user_id);
-        std::io::Write::flush(&mut std::io::stdout())?;
-
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
-
-        if !input.trim().eq_ignore_ascii_case("y") && !input.trim().eq_ignore_ascii_case("yes") {
-            println!("Operation cancelled");
-            return Ok(());
-        }
+        confirm_action(&format!("Delete user {}?", user_id))?;
     }
 
     let client = conn_mgr.create_cloud_client(profile_name).await?;

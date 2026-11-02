@@ -1,0 +1,7 @@
+# Steps dist runs before `dist build` (github-build-setup in Cargo.toml). An unset
+# secret exports an empty key, which builds a binary that sends nothing.
+- name: Build in the init telemetry key
+  shell: bash
+  env:
+    KEY: ${{ secrets.REDISCTL_INIT_AMPLITUDE_KEY }}
+  run: echo "REDISCTL_INIT_AMPLITUDE_KEY=$KEY" >> "$GITHUB_ENV"

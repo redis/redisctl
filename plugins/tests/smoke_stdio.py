@@ -14,6 +14,24 @@ import threading
 import time
 
 
+# Deserializes as CreateProfileInput, but cannot create a profile even if the policy
+# is accidentally removed. This is an authorization probe, not a credential write.
+PROFILE_PROBE_ARGUMENTS = {"name": "synthetic-plugin-policy-probe",
+                           "profile_type": "synthetic-invalid-deployment"}
+
+
+def assert_profile_create_denied(result):
+    messages = []
+    error = result.get("error")
+    if isinstance(error, dict) and isinstance(error.get("message"), str):
+        messages.append(error["message"])
+    if result.get("isError") is True:
+        messages.extend(item["text"] for item in result.get("content", [])
+                        if isinstance(item, dict) and isinstance(item.get("text"), str))
+    if not any("Unauthorized: profile_create" in message for message in messages):
+        raise AssertionError("Expected explicit policy denial for profile_create; other failures are not policy evidence")
+
+
 class RpcProcess:
     def __init__(self, command, cwd, env):
         self.process = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.PIPE,
@@ -59,13 +77,35 @@ class RpcProcess:
                 return message["result"]
 
     def close(self):
-        self.process.stdin.close()
+        original_failure = sys.exc_info()[0] is not None
+        failed = False
         try:
-            self.process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            self.process.terminate()
-            self.process.wait(timeout=5)
-        self.process.stdout.close()
+            try:
+                self.process.stdin.close()
+            except OSError:
+                # A broken pipe can mean the child has already exited. Still reap it.
+                pass
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                    self.process.wait(timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            failed = True
+        finally:
+            try:
+                self.process.stdout.close()
+            except OSError:
+                failed = True
+        if failed:
+            if original_failure:
+                print("Protocol cleanup failed; preserving original failure", file=sys.stderr)
+            else:
+                raise RuntimeError("Protocol cleanup failed") from None
 
 
 def isolated_command(binary, args, directory):
@@ -111,13 +151,14 @@ def smoke(binary, package, client):
                 "redis_zrange", "redis_lrange", "redis_xrange",
             }
             assert required <= names, f"Missing workflow tools: {sorted(required - names)}"
-            assert not {"profile_create", "profile_delete", "redis_set", "redis_command", "cloud_raw_api", "profile_show"} & names
+            assert not {"profile_create", "profile_delete", "redis_set", "redis_command", "cloud_raw_api",
+                        "profile_show", "redis_config_get", "get_enterprise_database"} & names
             assert all(tool.get("annotations", {}).get("readOnlyHint") is True for tool in tools)
             policy = rpc.request("tools/call", {"name": "show_policy", "arguments": {}})
             summary = json.loads(policy["content"][0]["text"])
             assert summary["global_tier"] == "read-only"
-            denied = rpc.request("tools/call", {"name": "profile_create", "arguments": {}}, allow_error=True)
-            assert "error" in denied or denied.get("isError") is True
+            denied = rpc.request("tools/call", {"name": "profile_create", "arguments": PROFILE_PROBE_ARGUMENTS}, allow_error=True)
+            assert_profile_create_denied(denied)
             resources = rpc.request("resources/list", {})["resources"]
             assert any(resource["uri"] == "redisctl://skills" for resource in resources)
             index = rpc.request("resources/read", {"uri": "redisctl://skills"})

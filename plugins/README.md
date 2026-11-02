@@ -9,7 +9,10 @@ It has not been published to a public plugin directory.
 
 - Portable `redisctl-mcp/plugin.json` and `mcp.json` for local Codex.
 - Claude Code adapter: `.claude-plugin/plugin.json` and `.mcp.json`.
-- An explicit read-only policy, with raw passthrough and credential display denied.
+- An explicit read-only policy, with raw passthrough, `profile_show`,
+  `redis_config_get` and `get_enterprise_database` denied. Read-only is not a
+  secret-redaction guarantee: the Enterprise database-list response still needs
+  the separately scoped server-side redaction fix before this package is ready.
 - Three native skills generated from `crates/redisctl-mcp/skills/`: setup,
   Enterprise health check, and data exploration. Their source bodies stay shared;
   a generated preamble adds plugin discovery, scope, and safety guidance.
@@ -34,9 +37,12 @@ chat, a model-visible terminal, plugin files, or tool arguments. Use existing
 profiles where possible, and restart the MCP connection after profile changes.
 Secure-storage/helper improvements remain tracked separately in #1173.
 
-The spike uses the existing default target selection. A user can explicitly set
-the non-secret `REDISCTL_PROFILE` when starting their client. Inspect the target
-and policy before operations. Do not enable the plugin alongside a manual
+The spike uses the existing default target selection. Profile selection through
+the non-secret `REDISCTL_PROFILE` requires the client to forward it to the MCP
+server; exporting a variable to the client alone is not proof of forwarding.
+Use documented client controls where available, restart, and confirm the target
+through non-secret metadata before operations. If it cannot be confirmed, stop.
+Do not enable the plugin alongside a manual
 registration for the same target without reviewing possible duplicate servers.
 Automatic migration/deduplication and per-client target selection UI are later
 epic work, not part of this package.
@@ -94,8 +100,15 @@ decisions.
 
 ## Regenerate and test
 
-Python 3.10+ is used only for developer generation/tests, not to launch the
+Python 3.11+ is used only for developer generation/tests, not to launch the
 plugin's Rust server. Generated files are committed so consumers need no Python.
+Package versions come from `[workspace.package].version` in the root Cargo.toml.
+Regenerate the committed metadata whenever that version or a packaged skill/policy
+changes, including in a release preparation branch. Generation refuses unexpected
+skill files/directories rather than deleting them or silently packaging stale skills.
+The setup body has one tested plugin-specific adaptation: select a profile through
+the user's non-secret `REDISCTL_PROFILE` and restart, never edit cached MCP launch
+configuration or create a duplicate registration to bypass the packaged policy.
 
 ```sh
 python3 plugins/build_plugin.py
@@ -129,14 +142,25 @@ python3 plugins/tests/smoke_stdio.py --binary target/debug/redisctl-mcp --client
 
 The harness relocates the package to a temporary path containing spaces, clears
 credential/target environment values, isolates config, and calls only protocol
-discovery, policy inspection, and an unavailable profile-creation tool with no
-credentials. On macOS, sandbox-exec blocks both operator config locations and
+discovery, policy inspection, and an unavailable profile-creation tool with a
+schema-valid but deliberately invalid deployment type. Even if the policy is
+accidentally removed, that probe cannot create a profile; only an explicit
+`Unauthorized: profile_create` error counts as policy-denial evidence. On macOS,
+sandbox-exec blocks both operator config locations and
 all network access; it must not fall back to unsandboxed execution. Linux uses
 a disposable XDG config root. Windows and other unverified platforms are rejected
 before starting the server; environment rewriting is not native isolation proof.
 Only macOS has local execution evidence so far. Neither harness connects to Redis
 or exercises user credential storage. Inspect-Codex reads only package metadata
-through app-server; it does not start a conversation or MCP connection.
+through the experimental app-server API; it does not start a conversation or MCP
+connection. It sets disposable HOME/CODEX_HOME/XDG_CONFIG_HOME directories and a
+disposable working directory, not the operator's client home or project cwd.
+This developer inspector is not the production installer interface.
+
+RPC cleanup waits for exit, terminates, then kills/reaps an unresponsive child.
+Both streams close even on cleanup failures, and an existing protocol failure is
+not replaced by a raw cleanup exception. A synthetic POSIX child that ignores
+SIGTERM is exercised by the hermetic suite; no installed client is started.
 
 Inspect-Claude installs into a disposable `CLAUDE_CONFIG_DIR` on macOS, checks
 the installed registration with native `mcp list` (without `--plugin-dir`), and

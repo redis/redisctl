@@ -19,6 +19,11 @@ fn plugin_policy_allows_reads_and_denies_writes_and_raw_access() {
         ("redis_command".to_string(), ToolsetKind::Database),
         ("profile_show".to_string(), ToolsetKind::App),
         ("profile_create".to_string(), ToolsetKind::App),
+        ("redis_config_get".to_string(), ToolsetKind::Database),
+        (
+            "get_enterprise_database".to_string(),
+            ToolsetKind::Enterprise,
+        ),
     ]);
     let mut full_config = config.clone();
     full_config.tier = SafetyTier::Full;
@@ -40,7 +45,12 @@ fn plugin_policy_allows_reads_and_denies_writes_and_raw_access() {
         .handler(|_: serde_json::Value| async { Ok(CallToolResult::text("synthetic")) })
         .build();
     assert!(policy.is_tool_allowed(&read));
-    for name in ["profile_show", "redis_command"] {
+    for name in [
+        "profile_show",
+        "redis_command",
+        "redis_config_get",
+        "get_enterprise_database",
+    ] {
         let tool = ToolBuilder::new(name)
             .read_only_safe()
             .handler(|_: serde_json::Value| async { Ok(CallToolResult::text("synthetic")) })

@@ -18,6 +18,7 @@ mcp_module! {
 
 /// Input for `cloud_auth_status`.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CloudAuthStatusInput {
     /// Profile name (uses the default / first configured profile if omitted).
     #[serde(default)]

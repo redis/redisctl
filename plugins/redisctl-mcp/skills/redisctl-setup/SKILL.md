@@ -60,16 +60,11 @@ Use `profile_validate` with `connect=true` when available. If app tools are not 
 
 Diagnose connection failures in order: endpoint/port, network/VPN/firewall, TLS/CA, username, credential source, then permissions. Retain TLS verification; do not silently suggest insecure mode. Database profiles enable TLS by default; plaintext development instances require an explicit choice. An Enterprise REST endpoint (usually port 9443) is different from a Redis database endpoint.
 
-Profiles and connection caches are loaded when the MCP process starts. After creating or changing a profile, restart the MCP connection using the client's controls. Ask for user action when the agent cannot restart it. Select the appropriate profile and toolset in the MCP launch config and include app tools for setup/diagnostics, for example:
+Profiles and connection caches are loaded when the MCP process starts. After creating or changing a profile, restart this plugin's MCP connection using the client's controls. Ask for user action when the agent cannot restart it.
 
-```json
-{
-  "command": "/absolute/path/to/redisctl-mcp",
-  "args": ["--profile", "mydb", "--tools", "database,app"]
-}
-```
+Select an existing profile through the non-secret `REDISCTL_PROFILE` in the MCP server's environment, using the client's documented controls where supported, then restart the plugin connection. Do not assume a variable exported to the client was forwarded to its MCP server. Confirm the selected target through available non-secret metadata before operations; if it cannot be confirmed, stop. Do not read environment values through the agent. Do not edit the plugin's cached `mcp.json`/`.mcp.json`, replace its launch arguments or policy, or add a second manual MCP registration to complete this workflow. Keep the packaged toolset and explicit read-only policy intact.
 
-For Redis Cluster, include `--cluster` at startup. For multiple targets, use clearly named server configurations. Do not claim a startup-selected target can be changed by merely editing a profile.
+This spike does not offer per-plugin target configuration or a Redis Cluster startup switch. If the requested target needs unsupported launch options, explain that limitation and stop; do not silently switch targets or bypass the packaged policy. Do not claim editing a profile changes an already-running connection.
 
 ## 5. Prove a first read-only call
 

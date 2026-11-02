@@ -107,7 +107,7 @@ pub fn print_output<T: Serialize>(
             println!("{}", serde_json::to_string_pretty(&json_value)?);
         }
         OutputFormat::Yaml => {
-            println!("{}", serde_yaml::to_string(&json_value)?);
+            println!("{}", serde_norway::to_string(&json_value)?);
         }
         OutputFormat::Table => {
             print_as_table(&json_value)?;

@@ -75,6 +75,24 @@ All Redis Enterprise CLI commands.
 | workflow | Workflow operations for multi-step tasks |
 | jsonschema | JSON schema operations |
 
+## Module archives
+
+`enterprise module package` writes a ZIP containing `module.json` and the module
+binary's basename at the archive root, with Deflate compression. Input contents
+are preserved; compressed archive bytes and size can change between dependency
+versions. `enterprise module inspect` reads the archive without extracting or
+loading its entries. Its structural `valid` result is not a security assessment
+or proof that a module can be loaded by Redis Enterprise.
+
+The ZIP 9 reader prefers UTF-8 when filename bytes form valid UTF-8, otherwise
+falling back to CP437. An older archive with ambiguous non-ASCII bytes and no
+UTF-8 flag can therefore display a different filename than with ZIP 6. Correctly
+encoded UTF-8 and ordinary CP437 names remain supported. Some invalid
+Unicode-path extra fields previously rejected by ZIP 6 are ignored by ZIP 9.
+For stable automation, use ASCII entry names or explicitly encoded UTF-8 names;
+do not depend on malformed or ambiguous name metadata being interpreted the
+same way across reader versions. This does not enable archive extraction.
+
 ## Getting Help
 
 ```bash

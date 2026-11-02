@@ -4,7 +4,14 @@ The redisctl MCP server exposes **377 tools** across 4 toolsets and 2 system too
 
 Tools are organized into **toolsets** (Cloud, Enterprise, Database, App) and further into **sub-modules** that can be selectively loaded with the [`--tools` flag](configuration.md#the-tools-flag).
 
-Tools that modify state require `--read-only=false` or an appropriate [safety tier](configuration.md#safety-tiers). Database tools require a `--database-url` connection.
+Tools that modify state require `--read-only=false` or an appropriate [safety tier](configuration.md#safety-tiers).
+
+For the default legacy database backend, configure a Redis URL with
+`--database-url` (or `REDIS_URL`), or use a database profile such as
+`--profile mydb`. See [Configuration](configuration.md) for the connection
+options and [Embedded Skills and Setup](skills.md#first-run-setup) for safe
+profile setup. The opt-in [`redis-mcp` pilot](database-pilot.md) has separate
+explicit-target rules; follow that guide when selecting the experimental backend.
 
 !!! tip "Runtime Discovery"
     Use the `list_available_tools` system tool at runtime to see exactly which tools are active in your current configuration, grouped by toolset. This is the most accurate way to discover available tools.
@@ -159,7 +166,7 @@ Monitoring -- alerts, audit logs, aggregate stats for nodes/databases/shards, an
 
 | Representative Tools | Description |
 |---------------------|-------------|
-| `list_alerts` | List active alerts |
+| `list_alerts` | List cluster alert states keyed by alert name |
 | `acknowledge_enterprise_alert` | Acknowledge an alert *(write)* |
 | `list_logs` | Get cluster event logs |
 | `get_all_nodes_stats` | Get aggregate node statistics |
@@ -215,7 +222,7 @@ Server-level operations -- connectivity, server info, client listing, slow log, 
 | `redis_slowlog` | Get slow log entries |
 | `redis_memory_stats` | Get memory statistics |
 | `redis_config_get` | Get config values |
-| `redis_config_set` | Set config values *(write)* |
+| `redis_config_set` | Set config values; refuses security-sensitive parameters *(write)* |
 
 ### `database:keys` (31 tools)
 
@@ -306,6 +313,9 @@ Full-text and vector search via RediSearch -- index management, aliases, diction
 | `redis_ft_explain` | Explain query execution plan |
 | `redis_ft_profile` | Profile query execution |
 | `redis_ft_aliasupdate` | Atomically repoint an index alias *(write)* |
+
+For structured aggregation inputs, stage ordering, raw token escape hatches and the pre-1.0
+strict-input change, see the [migration guidance](compatibility.md#pre-10-migration-strict-tool-inputs-and-aggregation).
 
 ### `database:aliases` (4 tools)
 

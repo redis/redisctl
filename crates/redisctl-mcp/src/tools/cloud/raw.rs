@@ -24,6 +24,7 @@ pub enum HttpMethod {
 
 /// Input for the cloud_raw_api tool.
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CloudRawApiInput {
     /// HTTP method (GET, POST, PUT, PATCH, DELETE)
     pub method: HttpMethod,

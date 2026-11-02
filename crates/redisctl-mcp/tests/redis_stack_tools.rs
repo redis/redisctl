@@ -27,6 +27,7 @@ use tower_mcp::Tool;
 
 use redisctl_mcp::tools::redis;
 use redisctl_mcp::{AppState, CredentialSource, Policy, PolicyConfig, SafetyTier, ToolsetKind};
+use support::docker_fixture::{FixtureStage, fixture_error};
 use support::{database_state_full, database_state_readonly};
 
 // ============================================================================
@@ -61,12 +62,12 @@ async fn get_redis_stack() -> anyhow::Result<&'static RedisStackTestContext> {
                 .stop_timeout(Duration::from_secs(10))
                 .start()
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to start container: {}", e))?;
+                .map_err(|e| fixture_error(FixtureStage::StackStart, e))?;
 
             let port = guard
                 .host_port(6379)
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to get port: {}", e))?;
+                .map_err(|e| fixture_error(FixtureStage::StackPort, e))?;
 
             Ok(RedisStackTestContext {
                 _guard: guard,
@@ -139,6 +140,37 @@ async fn cleanup(conn: &mut ::redis::aio::MultiplexedConnection, prefix: &str) {
     }
 }
 
+/// Wait until `index` holds `expected` documents. FT.CREATE indexes keys that
+/// already exist in the background, so a query right after it can see none.
+async fn wait_for_indexed_docs(
+    conn: &mut ::redis::aio::MultiplexedConnection,
+    index: &str,
+    expected: i64,
+) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let reply: Vec<::redis::Value> = ::redis::cmd("FT.SEARCH")
+            .arg(index)
+            .arg("*")
+            .arg("LIMIT")
+            .arg(0)
+            .arg(0)
+            .query_async(conn)
+            .await
+            .unwrap_or_default();
+        if let Some(::redis::Value::Int(count)) = reply.first()
+            && *count >= expected
+        {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{index} did not index {expected} documents within 10s"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 // ============================================================================
 // JSON tools (RedisJSON)
 // ============================================================================
@@ -169,6 +201,27 @@ async fn test_json_tools() {
     // redis_json_get -- get root
     let text = call_tool_text(&redis::json_get(state.clone()), json!({"key": "js_doc:1"})).await;
     assert!(text.contains("alice"), "json_get: {}", text);
+
+    // redis_json_get -- missing key is a readable message, not a type error
+    let result = redis::json_get(state.clone())
+        .call(json!({"key": "js_doc:missing"}))
+        .await;
+    let text = result
+        .content
+        .first()
+        .and_then(|c: &tower_mcp::Content| c.as_text())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        !result.is_error,
+        "json_get missing key should not error: {}",
+        text
+    );
+    assert!(
+        text.contains("does not exist"),
+        "json_get missing: {}",
+        text
+    );
 
     // redis_json_mget -- multi-key get at $.name (js_doc:2 missing)
     let text = call_tool_text(
@@ -325,8 +378,9 @@ async fn test_search_tools() {
             "prefixes": ["ft_doc:"],
             "schema": [
                 {"name": "$.title", "alias": "title", "field_type": "TEXT"},
-                {"name": "$.tags", "alias": "tags", "field_type": "TAG"},
-                {"name": "$.score", "alias": "score", "field_type": "NUMERIC", "sortable": true}
+                {"name": "$.tags", "alias": "tags", "field_type": "TAG", "separator": ","},
+                {"name": "$.score", "alias": "score", "field_type": "NUMERIC", "sortable": true},
+                {"name": "$.score", "alias": "max", "field_type": "NUMERIC", "sortable": true}
             ]
         }),
     )
@@ -337,8 +391,8 @@ async fn test_search_tools() {
         text
     );
 
-    // Give the indexer a moment to settle.
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    // The exact counts below need all three documents indexed first.
+    wait_for_indexed_docs(&mut conn, "ft_test_idx", 3).await;
 
     // redis_ft_list -- index appears
     let text = call_tool_text(&redis::ft_list(state.clone()), json!({})).await;
@@ -382,9 +436,88 @@ async fn test_search_tools() {
         }),
     )
     .await;
+    assert!(text.contains("total: 3"), "ft_aggregate: {}", text);
+
+    // redis_ft_aggregate -- structured group_by/reduce instead of raw_args
+    let text = call_tool_text(
+        &redis::ft_aggregate(state.clone()),
+        json!({
+            "index": "ft_test_idx",
+            "query": "*",
+            "group_by": [],
+            "reduce": ["COUNT 0 AS total"]
+        }),
+    )
+    .await;
+    assert!(text.contains("total: 3"), "ft_aggregate group_by: {}", text);
+
+    // Keyword-named GROUPBY properties and SORTBY MAX must match raw syntax.
+    let structured = redis::ft_aggregate(state.clone())
+        .call(json!({
+            "index": "ft_test_idx", "query": "*",
+            "group_by": ["max"], "reduce": ["COUNT 0 AS count"],
+            "sort_by": ["@max", "DESC", "MAX", "2"],
+            "limit_offset": 1, "limit_num": 1
+        }))
+        .await;
+    assert!(!structured.is_error, "structured aggregate: {structured:?}");
+    let raw = redis::ft_aggregate(state.clone())
+        .call(json!({
+            "index": "ft_test_idx", "query": "*",
+            "raw_args": ["GROUPBY", "1", "@max", "REDUCE", "COUNT", "0", "AS", "count",
+                         "SORTBY", "2", "@max", "DESC", "MAX", "2", "LIMIT", "1", "1"]
+        }))
+        .await;
+    assert!(!raw.is_error, "raw aggregate: {raw:?}");
+    let structured_text = structured
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .unwrap();
+    let raw_text = raw.content.first().and_then(|c| c.as_text()).unwrap();
+    assert_eq!(structured_text, raw_text);
     assert!(
-        text.contains("total") || text.contains("Total results"),
-        "ft_aggregate: {}",
+        structured_text.starts_with("Results: 1\n"),
+        "{structured_text}"
+    );
+    assert!(structured_text.contains("max: 9,"), "{structured_text}");
+    assert!(structured_text.contains("count: 1"), "{structured_text}");
+
+    // redis_ft_aggregate -- no pipeline is an error with guidance, not blank rows
+    let result = redis::ft_aggregate(state.clone())
+        .call(json!({"index": "ft_test_idx", "query": "*"}))
+        .await;
+    let text = result
+        .content
+        .first()
+        .and_then(|c: &tower_mcp::Content| c.as_text())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        result.is_error,
+        "ft_aggregate without pipeline should error: {}",
+        text
+    );
+    assert!(
+        text.contains("needs a pipeline"),
+        "ft_aggregate guidance: {}",
+        text
+    );
+
+    // Unknown input fields are rejected (deny_unknown_fields on all tool inputs)
+    let result = redis::ft_aggregate(state.clone())
+        .call(json!({"index": "ft_test_idx", "query": "*", "groupby": ["@tags"]}))
+        .await;
+    let text = result
+        .content
+        .first()
+        .and_then(|c: &tower_mcp::Content| c.as_text())
+        .unwrap_or_default()
+        .to_string();
+    assert!(result.is_error, "unknown field should error: {}", text);
+    assert!(
+        text.contains("unknown field"),
+        "unknown field message: {}",
         text
     );
 
@@ -1182,16 +1315,35 @@ async fn test_json_array_tools() {
     .await;
     assert!(text.contains("6"), "json_arrinsert: {}", text);
 
-    // redis_json_arrpop -- pop the last element. Uses a legacy path (".nums")
-    // because the tool deserializes the reply into a scalar String; a "$" path
-    // returns a wrapped array that would not deserialize.
+    // redis_json_arrpop -- pop the last element with a JSONPath ("$.nums").
+    // The reply is an array with one entry per matched path.
+    let text = call_tool_text(
+        &redis::json_arrpop(state.clone()),
+        json!({"key": "jarr_doc:1", "path": "$.nums"}),
+    )
+    .await;
+    assert!(text.contains("Popped:"), "json_arrpop: {}", text);
+    assert!(text.contains("50"), "json_arrpop value: {}", text);
+
+    // redis_json_arrpop -- legacy path still returns a scalar.
     let text = call_tool_text(
         &redis::json_arrpop(state.clone()),
         json!({"key": "jarr_doc:1", "path": ".nums"}),
     )
     .await;
-    assert!(text.contains("Popped:"), "json_arrpop: {}", text);
-    assert!(text.contains("50"), "json_arrpop value: {}", text);
+    assert!(text.contains("Popped:"), "json_arrpop legacy: {}", text);
+
+    // redis_json_arrpop -- a path that matches nothing is reported, not a crash.
+    let text = call_tool_text(
+        &redis::json_arrpop(state.clone()),
+        json!({"key": "jarr_doc:1", "path": "$.nope"}),
+    )
+    .await;
+    assert!(
+        text.contains("Nothing popped"),
+        "json_arrpop no match: {}",
+        text
+    );
 
     // redis_json_arrtrim -- trim to indices 0..=1 -> new length 2.
     let text = call_tool_text(

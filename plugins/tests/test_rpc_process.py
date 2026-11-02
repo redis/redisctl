@@ -1,7 +1,11 @@
 """Deterministic RPC boundary tests: no child process, sleeps, or network."""
 
 import json
+import os
 import queue
+import subprocess
+import sys
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -63,6 +67,81 @@ class RpcProcessTests(unittest.TestCase):
         with patch.object(smoke_stdio.time, "monotonic", side_effect=[0, 1]):
             with self.assertRaisesRegex(RuntimeError, "ended before responding"):
                 rpc.request("synthetic/read", {})
+
+    def cleanup_rpc(self, waits):
+        rpc = smoke_stdio.RpcProcess.__new__(smoke_stdio.RpcProcess)
+        rpc.process = Mock()
+        rpc.process.wait.side_effect = waits
+        return rpc
+
+    def test_cleanup_reaps_an_already_exited_child(self):
+        rpc = self.cleanup_rpc([0])
+        rpc.close()
+        rpc.process.stdin.close.assert_called_once()
+        rpc.process.wait.assert_called_once_with(timeout=5)
+        rpc.process.terminate.assert_not_called()
+        rpc.process.kill.assert_not_called()
+        rpc.process.stdout.close.assert_called_once()
+
+    def test_cleanup_terminates_a_child_that_ignores_eof(self):
+        rpc = self.cleanup_rpc([subprocess.TimeoutExpired("synthetic", 5), 0])
+        rpc.close()
+        rpc.process.terminate.assert_called_once()
+        rpc.process.kill.assert_not_called()
+        self.assertEqual(rpc.process.wait.call_count, 2)
+        rpc.process.stdout.close.assert_called_once()
+
+    def test_cleanup_kills_and_reaps_a_child_that_ignores_termination(self):
+        timeout = subprocess.TimeoutExpired("synthetic", 5)
+        rpc = self.cleanup_rpc([timeout, timeout, -9])
+        rpc.close()
+        rpc.process.terminate.assert_called_once()
+        rpc.process.kill.assert_called_once()
+        self.assertEqual(rpc.process.wait.call_count, 3)
+        rpc.process.stdout.close.assert_called_once()
+
+    def test_broken_stdin_does_not_prevent_reaping(self):
+        rpc = self.cleanup_rpc([0])
+        rpc.process.stdin.close.side_effect = BrokenPipeError("synthetic")
+        rpc.close()
+        rpc.process.wait.assert_called_once_with(timeout=5)
+        rpc.process.stdout.close.assert_called_once()
+
+    def test_cleanup_failure_closes_streams_and_redacts_diagnostics(self):
+        rpc = self.cleanup_rpc([OSError("synthetic private detail")])
+        with self.assertRaisesRegex(RuntimeError, "Protocol cleanup failed") as caught:
+            rpc.close()
+        self.assertNotIn("private detail", str(caught.exception))
+        rpc.process.stdout.close.assert_called_once()
+
+    def test_cleanup_failure_does_not_mask_the_original_failure(self):
+        rpc = self.cleanup_rpc([OSError("synthetic private detail")])
+        with patch.object(smoke_stdio.sys, "stderr"), \
+                self.assertRaisesRegex(ValueError, "original failure"):
+            try:
+                raise ValueError("original failure")
+            finally:
+                rpc.close()
+        rpc.process.stdout.close.assert_called_once()
+
+    @unittest.skipUnless(os.name == "posix", "requires POSIX signal handling")
+    def test_real_sigterm_ignoring_child_is_killed_and_reaped(self):
+        program = "import signal\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\nprint('synthetic-ready', flush=True)\nwhile True: signal.pause()\n"
+        with tempfile.TemporaryDirectory(prefix="rpc cleanup fixture ") as directory:
+            rpc = smoke_stdio.RpcProcess([sys.executable, "-I", "-u", "-c", program], directory, {})
+            try:
+                self.assertEqual(rpc.lines.get(timeout=5).strip(), "synthetic-ready")
+                rpc.close()
+                self.assertIsNotNone(rpc.process.poll())
+                self.assertTrue(rpc.process.stdin.closed)
+                self.assertTrue(rpc.process.stdout.closed)
+            finally:
+                # Always reap this test's child, including when testing a broken cleanup.
+                if rpc.process.poll() is None:
+                    rpc.process.kill()
+                    rpc.process.wait(timeout=5)
+                rpc.process.stdin.close()
+                rpc.process.stdout.close()
 
 
 if __name__ == "__main__":

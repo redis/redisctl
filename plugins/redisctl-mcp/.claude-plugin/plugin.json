@@ -1,6 +1,6 @@
 {
   "name": "redisctl-mcp",
-  "version": "0.0.1",
+  "version": "0.13.0",
   "description": "Experimental local Redis management plugin using the Rust redisctl-mcp server.",
   "author": {
     "name": "Redis",

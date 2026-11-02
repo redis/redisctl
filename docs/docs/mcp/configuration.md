@@ -179,6 +179,18 @@ The `--read-only` CLI flag maps to read-only (`true`, default) and full (`false`
 
 Tools that fall outside the active tier are hidden from the AI and return an "unauthorized" error if called directly.
 
+### Protected `CONFIG SET` parameters
+
+`redis_config_set` is a write tool (available from the read-write tier up). Regardless of tier, it refuses security-sensitive parameters with a `config parameter '<name>' is blocked for safety` error before sending anything to Redis. The protected groups are:
+
+- authentication (`requirepass`, `masterauth`, `masteruser`, `aclfile`)
+- persistence paths and process settings (`dir`, `dbfilename`, `appendfilename`, `pidfile`, `logfile`, `unixsocket`, ...)
+- bind, port and TLS settings
+- replication topology (`replicaof`, `slaveof`)
+- command-surface switches (`rename-command`, `enable-debug-command`, `enable-module-command`, `enable-protected-configs`, `loadmodule`, `include`)
+
+Operational parameters such as `maxmemory`, `maxmemory-policy`, `slowlog-log-slower-than`, `save` and `appendonly` remain settable. `redis_command`, alias and bulk-load paths apply the same refusal to `CONFIG SET`.
+
 ## Policy Files
 
 Policy files give you granular control beyond the `--read-only` flag. A policy file is a TOML document that configures the safety tier, per-toolset overrides, explicit allow/deny lists, tool visibility presets, and audit logging.

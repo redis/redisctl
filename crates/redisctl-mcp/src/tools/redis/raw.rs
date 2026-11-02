@@ -12,6 +12,7 @@ use crate::state::AppState;
 
 /// Input for the redis_command tool.
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RedisCommandInput {
     /// Redis command name (e.g., "GET", "HGETALL", "CLIENT")
     pub command: String,

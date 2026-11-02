@@ -212,7 +212,7 @@ All commands support multiple output formats:
 match output_format {
     OutputFormat::Table => print_table(&data),
     OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&data)?),
-    OutputFormat::Yaml => println!("{}", serde_yaml::to_string(&data)?),
+    OutputFormat::Yaml => println!("{}", serde_norway::to_string(&data)?),
 }
 ```
 
