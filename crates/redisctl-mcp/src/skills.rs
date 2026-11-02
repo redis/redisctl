@@ -58,6 +58,10 @@ const BUNDLED: &[(&str, &str)] = &[
         "redisctl-setup",
         include_str!("../skills/redisctl-setup/SKILL.md"),
     ),
+    (
+        "redisctl-tour",
+        include_str!("../skills/redisctl-tour/SKILL.md"),
+    ),
 ];
 
 struct Entry {

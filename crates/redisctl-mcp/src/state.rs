@@ -106,6 +106,31 @@ impl AppState {
         })
     }
 
+    /// Isolated handler-test state: no configuration IO, credentials, or live clients.
+    #[cfg(test)]
+    pub(crate) fn without_config_for_tests(policy: Arc<Policy>) -> Self {
+        Self {
+            credential_source: CredentialSource::Profiles(Vec::new()),
+            policy,
+            database_url: None,
+            cluster: false,
+            client_name: None,
+            config: None,
+            profiles: Vec::new(),
+            #[cfg(any(feature = "cloud", feature = "enterprise", feature = "database"))]
+            clients: RwLock::new(CachedClients {
+                #[cfg(feature = "cloud")]
+                cloud: HashMap::new(),
+                #[cfg(feature = "enterprise")]
+                enterprise: HashMap::new(),
+                #[cfg(feature = "database")]
+                database: HashMap::new(),
+            }),
+            #[cfg(feature = "database")]
+            aliases: RwLock::new(HashMap::new()),
+        }
+    }
+
     /// Return the credential source used to resolve platform clients.
     pub fn credential_source(&self) -> &CredentialSource {
         &self.credential_source
