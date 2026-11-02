@@ -527,26 +527,53 @@ fn redact_arguments(
 /// `redact_fields` with `"[REDACTED]"`. Redis URL credentials are sanitized
 /// recursively even when their containing field has another name.
 pub fn redact_value(value: &serde_json::Value, redact_fields: &[String]) -> serde_json::Value {
+    redact_value_inner(value, redact_fields, false)
+}
+
+/// Redact known credential fields before constructing model-visible responses.
+/// Unlike audit records, read responses retain null/empty values so callers can
+/// distinguish an unset credential from a populated, hidden one. This is not a
+/// general guarantee that arbitrary response content is safe to disclose.
+#[cfg(any(feature = "enterprise", feature = "database"))]
+pub(crate) fn redact_response_value(
+    value: &serde_json::Value,
+    redact_fields: &[String],
+) -> serde_json::Value {
+    redact_value_inner(value, redact_fields, true)
+}
+
+fn redact_value_inner(
+    value: &serde_json::Value,
+    redact_fields: &[String],
+    preserve_unset: bool,
+) -> serde_json::Value {
     match value {
         serde_json::Value::Object(map) => {
             let redacted: serde_json::Map<String, serde_json::Value> = map
                 .iter()
                 .map(|(k, v)| {
-                    if is_sensitive_field(k, redact_fields) {
+                    if is_sensitive_field(k, redact_fields)
+                        && !(preserve_unset && (v.is_null() || v.as_str() == Some("")))
+                    {
                         (
                             k.clone(),
                             serde_json::Value::String("[REDACTED]".to_string()),
                         )
                     } else {
-                        (k.clone(), redact_value(v, redact_fields))
+                        (
+                            k.clone(),
+                            redact_value_inner(v, redact_fields, preserve_unset),
+                        )
                     }
                 })
                 .collect();
             serde_json::Value::Object(redacted)
         }
-        serde_json::Value::Array(arr) => {
-            serde_json::Value::Array(arr.iter().map(|v| redact_value(v, redact_fields)).collect())
-        }
+        serde_json::Value::Array(arr) => serde_json::Value::Array(
+            arr.iter()
+                .map(|v| redact_value_inner(v, redact_fields, preserve_unset))
+                .collect(),
+        ),
         serde_json::Value::String(value) => serde_json::Value::String(sanitize_redis_url(value)),
         other => other.clone(),
     }
@@ -831,6 +858,45 @@ redact_fields = ["password", "token"]
     }
 
     // -- Redaction tests --
+
+    #[test]
+    fn audit_redaction_still_masks_unset_credentials() {
+        let value = json!({"password": null, "token": "", "custom-pass": ""});
+        let fields = vec!["custom_pass".to_string()];
+        let redacted = redact_value(&value, &fields);
+        for key in ["password", "token", "custom-pass"] {
+            assert_eq!(redacted[key], "[REDACTED]");
+        }
+    }
+
+    #[test]
+    #[cfg(any(feature = "enterprise", feature = "database"))]
+    fn response_redaction_preserves_unset_values_and_metadata_without_mutation() {
+        let value = json!({
+            "databases": [{"uid": 7, "enabled": true, "password": null, "token": "",
+                "Custom-Pass": "synthetic-response-marker", "nested": {"secret": "hidden"},
+                "endpoint": "redis://default:synthetic-url-marker@localhost:6379/2?keep=yes"}],
+            "count": 1
+        });
+        let original = value.clone();
+        let fields = vec!["custom_pass".to_string()];
+        let redacted = redact_response_value(&value, &fields);
+        assert_eq!(value, original);
+        assert_eq!(redacted["count"], 1);
+        let database = &redacted["databases"][0];
+        assert_eq!(database["uid"], 7);
+        assert_eq!(database["enabled"], true);
+        assert_eq!(database["password"], serde_json::Value::Null);
+        assert_eq!(database["token"], "");
+        assert!(database.get("absent").is_none());
+        assert_eq!(database["Custom-Pass"], "[REDACTED]");
+        assert_eq!(database["nested"]["secret"], "[REDACTED]");
+        let endpoint = database["endpoint"].as_str().unwrap();
+        assert!(endpoint.contains("localhost:6379/2?keep=yes"));
+        let serialized = redacted.to_string();
+        assert!(!serialized.contains("synthetic-"));
+        assert!(!serialized.contains("hidden"));
+    }
 
     #[test]
     fn redact_top_level_fields() {
