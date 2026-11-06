@@ -3,8 +3,8 @@
 //! OS keyring.
 
 use redisctl_core::{
-    CloudAuthConfig, Config, CredentialStore, DeploymentType, MintedCredentials, Profile,
-    ProfileCredentials,
+    CloudAuthConfig, Config, ConfigDocument, CredentialStore, DeploymentType, MintedCredentials,
+    Profile, ProfileCredentials,
 };
 
 fn cloud_profile(api_url: &str) -> Profile {
@@ -31,10 +31,20 @@ fn qa_cloud_auth() -> CloudAuthConfig {
     }
 }
 
+fn save_literal(config: &Config, path: &std::path::Path, owner_only: bool) {
+    let mut document = ConfigDocument::load_from_path(path).unwrap();
+    *document.config_mut() = config.clone();
+    if owner_only {
+        document.save_to_path_owner_only(path).unwrap();
+    } else {
+        document.save().unwrap();
+    }
+}
+
 fn roundtrip(config: &Config) -> (String, Config) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
-    config.save_to_path(&path).unwrap();
+    save_literal(config, &path, false);
     let toml = std::fs::read_to_string(&path).unwrap();
     let loaded = Config::load_from_path(&path).unwrap();
     (toml, loaded)
@@ -260,13 +270,13 @@ fn owner_only_save_is_0600_and_tightens_an_existing_file() {
             true,
         )
         .unwrap();
-    config.save_to_path_owner_only(&path).unwrap();
+    save_literal(&config, &path, true);
 
     let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600, "got {mode:o}");
 
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-    config.save_to_path_owner_only(&path).unwrap();
+    save_literal(&config, &path, true);
     let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
     assert_eq!(
         mode, 0o600,
@@ -286,7 +296,7 @@ fn owner_only_save_is_0600_and_tightens_an_existing_file() {
     let mut prior = std::fs::File::open(&path).unwrap();
     let mut config = config.clone();
     config.profiles.remove("qa");
-    config.save_to_path_owner_only(&path).unwrap();
+    save_literal(&config, &path, true);
     let mut seen = String::new();
     std::io::Read::read_to_string(&mut prior, &mut seen).unwrap();
     assert!(
@@ -326,8 +336,8 @@ api_url = "https://api.redislabs.com/v1"
         std::env::set_var("B_PROD_KEY", "identical-for-now");
         std::env::set_var("B_STAGE_KEY", "identical-for-now");
     }
-    let config = Config::load_from_path(&path).unwrap();
-    config.save_to_path(&path).unwrap();
+    let mut document = ConfigDocument::load_from_path(&path).unwrap();
+    document.save().unwrap();
     unsafe {
         std::env::remove_var("B_PROD_KEY");
         std::env::remove_var("B_STAGE_KEY");
@@ -372,8 +382,8 @@ api_url = "https://api.redislabs.com/v1"
 
     // SAFETY: single-threaded test; this name is read nowhere else.
     unsafe { std::env::set_var("B_DOTTED_KEY", "dotted-resolved-secret") };
-    let config = Config::load_from_path(&path).unwrap();
-    config.save_to_path(&path).unwrap();
+    let mut document = ConfigDocument::load_from_path(&path).unwrap();
+    document.save().unwrap();
     unsafe { std::env::remove_var("B_DOTTED_KEY") };
 
     let written = std::fs::read_to_string(&path).unwrap();
@@ -407,8 +417,8 @@ api_url = "https://api.redislabs.com/v1"
 
     // SAFETY: single-threaded test; this name is read nowhere else.
     unsafe { std::env::set_var("B_DEFAULTED_KEY", "resolved-not-fallback") };
-    let config = Config::load_from_path(&path).unwrap();
-    config.save_to_path(&path).unwrap();
+    let mut document = ConfigDocument::load_from_path(&path).unwrap();
+    document.save().unwrap();
     unsafe { std::env::remove_var("B_DEFAULTED_KEY") };
 
     let written = std::fs::read_to_string(&path).unwrap();
@@ -446,7 +456,8 @@ api_url = "https://api.redislabs.com/v1"
         std::env::set_var("A_PROD_KEY", "live-key-must-not-be-written");
         std::env::set_var("A_PROD_SECRET", "live-secret-must-not-be-written");
     }
-    let mut config = Config::load_from_path(&path).unwrap();
+    let mut document = ConfigDocument::load_from_path(&path).unwrap();
+    let config = document.config_mut();
 
     // Reads still see the resolved value — this changes what a save writes, nothing else.
     let ProfileCredentials::Cloud { api_key, .. } = &config.profiles["prod"].credentials else {
@@ -464,7 +475,7 @@ api_url = "https://api.redislabs.com/v1"
             false,
         )
         .unwrap();
-    config.save_to_path_owner_only(&path).unwrap();
+    document.save_to_path_owner_only(&path).unwrap();
     unsafe {
         std::env::remove_var("A_PROD_KEY");
         std::env::remove_var("A_PROD_SECRET");

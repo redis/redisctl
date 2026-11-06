@@ -50,7 +50,7 @@ Report shard headroom: `licensed - used = available shards`.
 
 ### Step 4: Active alerts
 
-Call `list_alerts` to get all active alerts for the cluster.
+Call `list_alerts` to get the cluster alert states, keyed by alert name. Entries with `state: true` are currently firing; `active_count` is their total. It includes alerts that are not enabled: a fresh cluster reports some with `enabled: false, state: true`, so count only enabled ones as alerting someone configured.
 
 Classify alerts by severity:
 - **Critical alerts** (memory, connectivity, node down, license): **NO-GO** — must be resolved before proceeding

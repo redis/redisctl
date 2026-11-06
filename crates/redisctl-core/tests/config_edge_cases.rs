@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
+use redisctl_core::ConfigDocument;
 use redisctl_core::config::Config;
 use tempfile::TempDir;
 
@@ -176,12 +177,14 @@ fn save_to_readonly_directory_returns_clear_error() {
     let dir = TempDir::new().unwrap();
     let readonly_dir = dir.path().join("readonly");
     fs::create_dir(&readonly_dir).unwrap();
-    fs::set_permissions(&readonly_dir, fs::Permissions::from_mode(0o444)).unwrap();
 
     let config_path = readonly_dir.join("config.toml");
     let config = Config::default();
 
-    let result = config.save_to_path(&config_path);
+    let mut document = ConfigDocument::load_from_path(&config_path).unwrap();
+    *document.config_mut() = config;
+    fs::set_permissions(&readonly_dir, fs::Permissions::from_mode(0o444)).unwrap();
+    let result = document.save();
     assert!(
         result.is_err(),
         "saving to read-only directory should produce an error"
@@ -247,9 +250,9 @@ fn tags_round_trip_save_and_reload() {
         },
     );
 
-    config
-        .save_to_path(&config_path)
-        .expect("save should succeed");
+    let mut document = ConfigDocument::load_from_path(&config_path).unwrap();
+    *document.config_mut() = config;
+    document.save().expect("save should succeed");
 
     let reloaded = Config::load_from_path(&config_path).expect("reload should succeed");
     let profile = reloaded.profiles.get("tagged").unwrap();
