@@ -33,7 +33,12 @@ redisctl init              # apply it
    via the standard skills CLI, a generated `redis-project-setup` skill carrying this
    project's specific facts, and a credential-free `redis` MCP server registration
    per agent config.
-5. **Proves it works**: a live PING and SET/GET round trip.
+5. **Proves it works**: a live PING and SET/GET round trip on a per-run
+   `redisctl:selfcheck:<uuid>` key. SET uses NX to avoid overwriting an existing key
+   and a 60-second TTL. init attempts DEL after GET, including command refusals;
+   if cleanup is denied or the connection drops, the TTL removes the key.
+   Validation requires write access. Command refusals such as NOPERM, READONLY,
+   OOM and Cluster redirects get their own remedies, rather than stale-URL advice.
 
 Re-running with the same choices preserves the existing setup. An explicit database
 choice replaces `REDIS_URL`; other env values are kept, including placeholders
@@ -114,13 +119,13 @@ Built on the standard `redisctl` [exit codes](../reference/agent-error-codes.md#
 | 1 | the run cannot finish: Docker unavailable or a `docker` command failed, no free port, a project file cannot be read or written, `.env` tracked by git while init would write a secret into it, a `.env` or `.gitignore` symlink, a product key rejected, `--cloud` with no sign-in and nothing to prompt on, the OS keyring cannot store a new sign-in, an account with databases and no `--name` when nothing can prompt, a new Cloud database that never gets an endpoint |
 | 2 | usage: an unknown flag or argument, `--cloud` together with `--url` or a pasted URL, `--cloud-subscription` without `--cloud` |
 | 3 | the redisctl configuration cannot be used, for example `-p` names a profile that is not a Redis Cloud one |
-| 4 | Redis Cloud rejected the API keys |
+| 4 | Redis Cloud rejected the API keys, or Redis rejected authentication during database validation |
 | 5 | Redis Cloud has no such resource |
 | 6 | invalid input: no `redis://` URL in `--url`, a product flag missing its companion, `--complete` with nothing to complete, an invalid Cloud database name, a `.env` that sets one of init's keys on more than one line |
 | 7 | Redis Cloud conflict: a paid `redisctl-<name>` subscription, the free plan already used up, a quota reached |
-| 8 | any other Redis Cloud API or server error |
+| 8 | any other Redis Cloud API or server error, including a refused database self-check command or an unsuccessful PING or SET/GET round trip |
 | 9 | Redis Cloud rate limit |
-| 10 | the database cannot be reached (for a stale `.env` value, the message names it) |
+| 10 | database validation connection/DNS failure, or the connection failed or timed out during the self-check |
 | 12 | cancelled at a wizard question or the Cloud picker |
 
 A failure inside the browser sign-in itself comes from `redisctl cloud auth login`
