@@ -278,15 +278,21 @@ database_tool!(write, json_numincrby, "redis_json_numincrby",
             .tool_context("JSON.NUMINCRBY failed")?;
 
         if input.path.starts_with('$')
-            && matches!(
-                serde_json::from_str::<serde_json::Value>(&result),
-                Ok(serde_json::Value::Array(values)) if values.is_empty()
-            )
+            && let Ok(serde_json::Value::Array(values)) =
+                serde_json::from_str::<serde_json::Value>(&result)
         {
-            return Ok(CallToolResult::text(format!(
-                "Nothing incremented: path '{}' matched no values",
-                input.path
-            )));
+            let reason = if values.is_empty() {
+                Some("no values")
+            } else if values.iter().all(serde_json::Value::is_null) {
+                Some("no numeric values")
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                return Ok(CallToolResult::text(format!(
+                    "Nothing incremented: path '{}' matched {reason}", input.path
+                )));
+            }
         }
 
         Ok(CallToolResult::text(format!(
