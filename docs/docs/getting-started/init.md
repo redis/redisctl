@@ -73,10 +73,11 @@ up before.
 
 Before connecting to a Cloud database, init checks its authoritative DNS record.
 A confirmed missing record is polled on a 150-second deadline (a query in flight
-can finish after that deadline). A timeout, refusal or
-other DNS infrastructure failure is not reported as a missing record: init stops
-polling and continues to normal connection validation. Newly created databases
-wait one additional 3-second interval first; reused databases do not. That short
+can finish after that deadline). A timeout, refusal or other DNS
+infrastructure failure after a confirmed missing record does not end polling.
+On the first check, such a failure is not reported as a missing record: init
+continues to normal connection validation. Newly created databases wait one
+additional 3-second interval first; reused databases do not. That short
 wait does not guarantee propagation. A visible record proceeds immediately.
 User-supplied URLs and literal addresses do not use this gate.
 

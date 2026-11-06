@@ -4,8 +4,9 @@
 //! cloud zones tell resolvers to cache a failed lookup for up to 30 minutes - so a
 //! single premature lookup through the OS resolver poisons every later attempt.
 //! This gate asks the zone's authoritative server directly and polls confirmed
-//! absence. Infrastructure errors fall back to normal validation, after one
-//! extra poll interval for a newly created database. That delay does not prove
+//! absence, including through later infrastructure errors. An infrastructure
+//! error on the first probe falls back to normal validation, after one extra
+//! poll interval for a newly created database. That delay does not prove
 //! propagation; validation still reports the truth.
 
 use std::net::IpAddr;
@@ -181,13 +182,10 @@ where
         if tokio::time::Instant::now() >= deadline {
             return Visibility::Absent;
         }
-        match probe().await {
-            Visibility::Absent => {}
-            Visibility::Visible => return Visibility::Visible,
-            Visibility::Unknown => {
-                settle_unknown(created).await;
-                return Visibility::Unknown;
-            }
+        // Once absence is confirmed, a failed probe (one lost UDP packet) is not
+        // a reason to hand the lookup to the OS resolver early: keep polling.
+        if probe().await == Visibility::Visible {
+            return Visibility::Visible;
         }
     }
 }
@@ -341,11 +339,19 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn infrastructure_failure_after_absence_does_not_claim_record_missing() {
-        for (created, elapsed) in [(false, POLL), (true, POLL * 2)] {
+    async fn infrastructure_failure_after_absence_keeps_polling() {
+        for created in [false, true] {
+            assert_eq!(
+                simulated_gate(
+                    &[Visibility::Absent, Visibility::Unknown, Visibility::Visible],
+                    created
+                )
+                .await,
+                (Visibility::Visible, POLL * 2, 3, 1)
+            );
             assert_eq!(
                 simulated_gate(&[Visibility::Absent, Visibility::Unknown], created).await,
-                (Visibility::Unknown, elapsed, 2, 1)
+                (Visibility::Absent, DEADLINE, 50, 1)
             );
         }
     }
