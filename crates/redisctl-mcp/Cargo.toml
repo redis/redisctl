@@ -65,6 +65,14 @@ required-features = ["database", "test-support"]
 name = "zrange_pagination"
 required-features = ["database", "test-support"]
 
+[[test]]
+name = "config_set_guard"
+required-features = ["database", "test-support"]
+
+[[test]]
+name = "tour_contract"
+required-features = ["test-support"]
+
 [dependencies]
 # MCP framework
 tower-mcp = { version = "0.23.2", features = ["http", "dynamic-tools"] }
