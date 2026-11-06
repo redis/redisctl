@@ -3,17 +3,21 @@
 //! A new database's hostname can lag its API "active" status by a minute, and the
 //! cloud zones tell resolvers to cache a failed lookup for up to 30 minutes - so a
 //! single premature lookup through the OS resolver poisons every later attempt.
-//! This gate asks the zone's authoritative server directly (no cache anywhere in
-//! the path) and only lets the run proceed to a normal connect once the record
-//! exists. Any infrastructure hiccup here degrades to proceeding; validation still
-//! reports the truth.
+//! This gate asks the zone's authoritative server directly and polls confirmed
+//! absence, including through later infrastructure errors. An infrastructure
+//! error on the first probe falls back to normal validation, after one extra
+//! poll interval for a newly created database. That delay does not prove
+//! propagation; validation still reports the truth.
 
 use std::net::IpAddr;
 use std::time::Duration;
 
 use hickory_resolver::TokioResolver;
 use hickory_resolver::config::{ConnectionConfig, NameServerConfig, ResolverConfig};
+use hickory_resolver::lookup::Lookup;
 use hickory_resolver::net::runtime::TokioRuntimeProvider;
+use hickory_resolver::net::{DnsError, NetError};
+use hickory_resolver::proto::op::{Message, ResponseCode};
 use hickory_resolver::proto::rr::{RData, RecordType};
 
 use super::output;
@@ -92,47 +96,274 @@ async fn authoritative_resolver(host: &str) -> Option<TokioResolver> {
 
 /// Any answer counts as published - an A record directly (what the cloud zones
 /// serve), or a CNAME the recursive resolvers will chase once it exists.
-async fn resolves(resolver: &TokioResolver, host: &str) -> bool {
-    resolver
-        .lookup(host, RecordType::A)
-        .await
-        .map(|answer| !answer.answers().is_empty())
-        .unwrap_or(false)
+async fn resolves(resolver: &TokioResolver, host: &str) -> Visibility {
+    classify_lookup(resolver.lookup(host, RecordType::A).await)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Visibility {
+    Visible,
+    Absent,
+    Unknown,
+}
+
+fn classify_lookup(result: Result<Lookup, NetError>) -> Visibility {
+    match result {
+        Ok(answer) => classify_answer(answer.message()),
+        Err(NetError::Dns(DnsError::NoRecordsFound(records)))
+            if matches!(
+                records.response_code,
+                ResponseCode::NXDomain | ResponseCode::NoError
+            ) && (records.soa.is_some() || records.ns.is_none()) =>
+        {
+            Visibility::Absent
+        }
+        Err(_) => Visibility::Unknown,
+    }
+}
+
+fn classify_answer(answer: &Message) -> Visibility {
+    if answer.metadata.truncation {
+        return Visibility::Unknown;
+    }
+    if !answer.answers.is_empty() {
+        return Visibility::Visible;
+    }
+    let referral = answer
+        .authorities
+        .iter()
+        .any(|r| r.record_type() == RecordType::NS);
+    let soa = answer
+        .authorities
+        .iter()
+        .any(|r| r.record_type() == RecordType::SOA);
+    if referral && !soa {
+        Visibility::Unknown
+    } else {
+        Visibility::Absent
+    }
+}
+
+fn outcome_text(outcome: Visibility) -> &'static str {
+    match outcome {
+        Visibility::Visible => " ready",
+        Visibility::Absent => " still not visible - validation may fail",
+        Visibility::Unknown => " authoritative DNS unavailable - continuing validation",
+    }
+}
+
+async fn settle_unknown(created: bool) {
+    if created {
+        // One bounded fallback interval, not a propagation guarantee.
+        tokio::time::sleep(POLL).await;
+    }
+}
+
+async fn wait_with_probe<F, Fut>(
+    mut probe: F,
+    created: bool,
+    on_absent: impl FnOnce(),
+) -> Visibility
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Visibility>,
+{
+    let first = probe().await;
+    if first != Visibility::Absent {
+        if first == Visibility::Unknown {
+            settle_unknown(created).await;
+        }
+        return first;
+    }
+    on_absent();
+    let deadline = tokio::time::Instant::now() + DEADLINE;
+    loop {
+        tokio::time::sleep(POLL).await;
+        if tokio::time::Instant::now() >= deadline {
+            return Visibility::Absent;
+        }
+        // Once absence is confirmed, a failed probe (one lost UDP packet) is not
+        // a reason to hand the lookup to the OS resolver early: keep polling.
+        if probe().await == Visibility::Visible {
+            return Visibility::Visible;
+        }
+    }
 }
 
 /// Block until the endpoint's DNS record is visible on the authoritative server,
 /// bounded by [`DEADLINE`]. Called on cloud-resolved URLs only: a user-pasted URL
 /// must keep failing fast when its host is stale.
-pub(crate) async fn wait_for_endpoint_dns(url: &str) {
+pub(crate) async fn wait_for_endpoint_dns(url: &str, created: bool) {
     let Some(host) = host_of(url) else { return };
     if !needs_gate(&host) {
         return;
     }
     let Some(resolver) = authoritative_resolver(&host).await else {
+        settle_unknown(created).await;
         return;
     };
-    if resolves(&resolver, &host).await {
-        return;
-    }
-    let mut progress =
-        output::progress("waiting for the database's DNS record (new endpoints take a moment)");
-    let deadline = tokio::time::Instant::now() + DEADLINE;
-    loop {
-        tokio::time::sleep(POLL).await;
-        if resolves(&resolver, &host).await {
-            progress.done(" ready");
-            return;
-        }
-        if tokio::time::Instant::now() > deadline {
-            progress.done(" still not visible - validation may fail");
-            return;
-        }
+    let mut progress = None;
+    let outcome = wait_with_probe(
+        || resolves(&resolver, &host),
+        created,
+        || {
+            progress = Some(output::progress(
+                "waiting for the database's DNS record (new endpoints take a moment)",
+            ));
+        },
+    )
+    .await;
+    if let Some(mut progress) = progress {
+        progress.done(outcome_text(outcome));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hickory_resolver::net::{ForwardNSData, NoRecords};
+    use hickory_resolver::proto::op::{OpCode, Query};
+    use hickory_resolver::proto::rr::{
+        Name, Record,
+        rdata::{A, NS},
+    };
+
+    #[test]
+    fn lookup_classification_distinguishes_absence_from_infrastructure_errors() {
+        let query = Query::query(Name::from_ascii("db.example.test.").unwrap(), RecordType::A);
+        let answer = Lookup::from_rdata(query.clone(), RData::A(A(std::net::Ipv4Addr::LOCALHOST)));
+        assert_eq!(classify_lookup(Ok(answer)), Visibility::Visible);
+        let empty = Lookup::new_with_max_ttl(query.clone(), Vec::<Record>::new());
+        assert_eq!(classify_lookup(Ok(empty)), Visibility::Absent);
+        for code in [ResponseCode::NXDomain, ResponseCode::NoError] {
+            let error = NetError::from(NoRecords::new(query.clone(), code));
+            assert_eq!(classify_lookup(Err(error)), Visibility::Absent);
+        }
+        for error in [
+            NetError::Timeout,
+            std::io::Error::from(std::io::ErrorKind::ConnectionRefused).into(),
+            NetError::Dns(DnsError::ResponseCode(ResponseCode::Refused)),
+            NetError::Dns(DnsError::ResponseCode(ResponseCode::ServFail)),
+            NetError::from(NoRecords::new(query.clone(), ResponseCode::Refused)),
+            NetError::from(NoRecords::new(query, ResponseCode::ServFail)),
+            NetError::NoConnections,
+        ] {
+            assert_eq!(classify_lookup(Err(error)), Visibility::Unknown);
+        }
+    }
+
+    #[test]
+    fn referral_and_truncated_answers_are_not_confirmed_absence() {
+        let name = Name::from_ascii("example.test.").unwrap();
+        let ns = Record::from_rdata(name.clone(), 60, NS(name.clone()));
+        let mut records = NoRecords::new(Query::query(name, RecordType::A), ResponseCode::NoError);
+        records.ns = Some(
+            vec![ForwardNSData {
+                ns: ns.clone().into_record_of_rdata(),
+                glue: Vec::new().into(),
+            }]
+            .into(),
+        );
+        assert_eq!(classify_lookup(Err(records.into())), Visibility::Unknown);
+        let mut message = Message::response(1, OpCode::Query);
+        message.add_authority(ns.into_record_of_rdata());
+        assert_eq!(classify_answer(&message), Visibility::Unknown);
+        message.authorities.clear();
+        message.metadata.truncation = true;
+        assert_eq!(classify_answer(&message), Visibility::Unknown);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn planned_cloud_placeholder_and_literal_urls_skip_the_gate() {
+        let start = tokio::time::Instant::now();
+        let planned = crate::workflows::init::cloud::PLANNED_URL;
+        assert!(host_of(planned).is_none());
+        wait_for_endpoint_dns(planned, true).await;
+        wait_for_endpoint_dns("redis://127.0.0.1:6379", true).await;
+        assert_eq!(start.elapsed(), Duration::ZERO);
+    }
+
+    async fn simulated_gate(
+        states: &[Visibility],
+        created: bool,
+    ) -> (Visibility, Duration, usize, usize) {
+        let start = tokio::time::Instant::now();
+        let mut calls = 0;
+        let mut progress = 0;
+        let outcome = wait_with_probe(
+            || {
+                let state = states[calls.min(states.len() - 1)];
+                calls += 1;
+                std::future::ready(state)
+            },
+            created,
+            || progress += 1,
+        )
+        .await;
+        (outcome, start.elapsed(), calls, progress)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unknown_stops_after_one_probe_and_only_new_databases_wait() {
+        for (created, delay) in [(false, Duration::ZERO), (true, POLL)] {
+            assert_eq!(
+                simulated_gate(&[Visibility::Unknown], created).await,
+                (Visibility::Unknown, delay, 1, 0)
+            );
+        }
+        assert!(!outcome_text(Visibility::Unknown).contains("still not visible"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn visible_records_return_without_progress_or_delay() {
+        for created in [false, true] {
+            assert_eq!(
+                simulated_gate(&[Visibility::Visible], created).await,
+                (Visibility::Visible, Duration::ZERO, 1, 0)
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn confirmed_absence_keeps_polling_until_visible_or_deadline() {
+        for created in [false, true] {
+            assert_eq!(
+                simulated_gate(&[Visibility::Absent, Visibility::Visible], created).await,
+                (Visibility::Visible, POLL, 2, 1)
+            );
+            assert_eq!(
+                simulated_gate(&[Visibility::Absent], created).await,
+                (Visibility::Absent, DEADLINE, 50, 1)
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn infrastructure_failure_after_absence_keeps_polling() {
+        for created in [false, true] {
+            assert_eq!(
+                simulated_gate(
+                    &[Visibility::Absent, Visibility::Unknown, Visibility::Visible],
+                    created
+                )
+                .await,
+                (Visibility::Visible, POLL * 2, 3, 1)
+            );
+            assert_eq!(
+                simulated_gate(&[Visibility::Absent, Visibility::Unknown], created).await,
+                (Visibility::Absent, DEADLINE, 50, 1)
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unknown_discovery_has_the_same_bounded_fallback() {
+        for (created, delay) in [(false, Duration::ZERO), (true, POLL)] {
+            let start = tokio::time::Instant::now();
+            settle_unknown(created).await;
+            assert_eq!(start.elapsed(), delay);
+        }
+    }
 
     #[test]
     fn literal_addresses_and_localhost_skip_the_gate() {
@@ -168,7 +399,10 @@ mod tests {
         let resolver = authoritative_resolver("www.cloudflare.com")
             .await
             .expect("resolver");
-        assert!(resolves(&resolver, "www.cloudflare.com").await);
+        assert_eq!(
+            resolves(&resolver, "www.cloudflare.com").await,
+            Visibility::Visible
+        );
     }
 
     #[test]
