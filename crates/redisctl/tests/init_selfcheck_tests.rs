@@ -116,6 +116,10 @@ impl Fixture {
     }
 
     fn init(&self) -> std::process::Output {
+        self.init_with_args(&[])
+    }
+
+    fn init_with_args(&self, extra: &[&str]) -> std::process::Output {
         let project = tempfile::tempdir().unwrap();
         let repo = init_common::skills_fixture();
         let mut cmd = init_common::hermetic_redisctl();
@@ -133,7 +137,7 @@ impl Fixture {
                 "--url",
                 &self.url,
             ]);
-        cmd.output().unwrap()
+        cmd.args(extra).output().unwrap()
     }
 }
 
@@ -186,10 +190,11 @@ fn command_refusals_get_specific_remedies_without_stale_url_advice() {
         ("READONLY", "primary"),
         ("OOM", "memory"),
         ("MOVED", "Cluster"),
+        ("ASK", "Cluster"),
     ] {
         let fixture = Fixture::new(Reply::RefuseSet(code));
         let output = fixture.init();
-        assert_eq!(output.status.code(), Some(10), "{output:?}");
+        assert_eq!(output.status.code(), Some(8), "{output:?}");
         let text = format!(
             "{}{}",
             String::from_utf8_lossy(&output.stdout),
@@ -214,7 +219,7 @@ fn failed_read_still_cleans_up_the_owned_key() {
     for reply in [Reply::RefuseGet, Reply::Mismatch] {
         let fixture = Fixture::new(reply);
         let output = fixture.init();
-        assert_eq!(output.status.code(), Some(10), "{output:?}");
+        assert_eq!(output.status.code(), Some(8), "{output:?}");
         assert!(
             fixture
                 .commands
@@ -231,7 +236,7 @@ fn failed_read_still_cleans_up_the_owned_key() {
 fn collision_does_not_read_or_delete_an_unowned_key() {
     let fixture = Fixture::new(Reply::Collision);
     let output = fixture.init();
-    assert_eq!(output.status.code(), Some(10), "{output:?}");
+    assert_eq!(output.status.code(), Some(8), "{output:?}");
     assert!(
         !fixture
             .commands
@@ -267,4 +272,47 @@ fn get_transport_timeout_uses_ttl_without_another_cleanup_timeout() {
     assert!(commands.iter().any(|c| c[0] == "GET"));
     assert!(!commands.iter().any(|c| c[0] == "DEL"));
     assert_eq!(fixture.values.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn validation_machine_errors_distinguish_server_refusals_from_connections() {
+    let mut failures = Vec::new();
+    for (reply, code, exit) in [
+        (Reply::RefuseSet("NOAUTH"), "authentication_failed", 4),
+        (Reply::RefuseSet("WRONGPASS"), "authentication_failed", 4),
+        (Reply::RefuseSet("NOPERM"), "api_error", 8),
+        (Reply::RefuseSet("READONLY"), "api_error", 8),
+        (Reply::RefuseSet("OOM"), "api_error", 8),
+        (Reply::RefuseSet("MOVED"), "api_error", 8),
+        (Reply::RefuseSet("ASK"), "api_error", 8),
+        (Reply::RefuseSet("ERR"), "api_error", 8),
+        (Reply::RefuseGet, "api_error", 8),
+        (Reply::Mismatch, "api_error", 8),
+        (Reply::Collision, "api_error", 8),
+    ] {
+        let fixture = Fixture::new(reply);
+        let output = fixture.init_with_args(&["-o", "json"]);
+        let envelope: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        if output.status.code() != Some(exit)
+            || envelope["error"]["code"] != code
+            || envelope["error"]["exit_code"] != exit
+        {
+            failures.push(format!("expected {code}/{exit}: {output:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn validation_connection_failure_retains_network_machine_error() {
+    let mut fixture = Fixture::new(Reply::Normal);
+    let unused = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    fixture.url = format!("redis://{}", unused.local_addr().unwrap());
+    drop(unused);
+    let output = fixture.init_with_args(&["-o", "json"]);
+    let envelope: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(10), "{output:?}");
+    assert_eq!(envelope["error"]["code"], "connection_error");
+    assert_eq!(envelope["error"]["exit_code"], 10);
+    assert!(fixture.commands.lock().unwrap().is_empty());
 }

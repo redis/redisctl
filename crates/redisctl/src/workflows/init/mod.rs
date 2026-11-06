@@ -525,12 +525,7 @@ async fn run_inner(
             ),
             Err(e) => {
                 println!("{} {e}", output::red("✗"));
-                let remedy = e.remedy();
-                return Err(RedisCtlError::init(
-                    "connection_error",
-                    exit_code::NETWORK,
-                    format!("{} {}\n  {remedy}", e.summary(), engine::mask_url(url)),
-                ));
+                return Err(e.into_cli_error(url));
             }
         }
     }
