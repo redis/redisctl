@@ -367,7 +367,7 @@ async fn run_inner(
         .await?;
         // A freshly published endpoint's DNS can lag the API; gate before any
         // OS-resolver lookup so a premature failure never gets negative-cached.
-        dns::wait_for_endpoint_dns(&outcome.url).await;
+        dns::wait_for_endpoint_dns(&outcome.url, outcome.facts.created).await;
         options.url_input = Some(outcome.url);
         options.cloud = Some(outcome.facts);
         cloud_changes = outcome.changes;

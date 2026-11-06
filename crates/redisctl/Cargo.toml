@@ -85,13 +85,13 @@ upload = ["dep:files-sdk"]
 secure-storage = ["redisctl-core/secure-storage", "dep:keyring"]
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 assert_cmd = "2.0"
 predicates = "3.0"
 tempfile = { workspace = true }
 criterion = "0.5"
 serial_test = { workspace = true }
 wiremock = { workspace = true }
-tokio = { workspace = true }
 serde_json = { workspace = true }
 redis = { workspace = true }
 # Using git until testing feature is released
