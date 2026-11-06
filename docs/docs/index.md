@@ -139,10 +139,8 @@ graph LR
 
 === "Binary"
 
-    ``` bash
-    # Download from GitHub Releases
-    curl -L https://github.com/redis/redisctl/releases/latest/download/redisctl-x86_64-unknown-linux-gnu.tar.gz | tar xz
-    ```
+    Download a pinned release archive for your platform: see
+    [Binary Downloads](getting-started/installation.md#binary-downloads).
 
 [:octicons-arrow-right-24: Full installation guide](getting-started/installation.md)
 

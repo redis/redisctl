@@ -8,8 +8,8 @@ The MCP server is a separate binary called `redisctl-mcp`. Install it using one 
 
 ### Installer Script (Recommended)
 
-These examples install **redisctl-mcp 0.12.1** from its
-[MCP release](https://github.com/redis/redisctl/releases/tag/redisctl-mcp-v0.12.1).
+These examples install **redisctl-mcp 0.13.0** from its
+[MCP release](https://github.com/redis/redisctl/releases/tag/redisctl-mcp-v0.13.0).
 For another version, choose its `redisctl-mcp-v<VERSION>` release and matching
 installer. Avoid the repository-wide "latest" link: the CLI and MCP server are
 released separately, so "latest" may contain only CLI assets.
@@ -20,12 +20,12 @@ commands. Maintainers check both installation pages using the
 
 ```bash
 # macOS / Linux
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/redis/redisctl/releases/download/redisctl-mcp-v0.12.1/redisctl-mcp-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/redis/redisctl/releases/download/redisctl-mcp-v0.13.0/redisctl-mcp-installer.sh | sh
 ```
 
 ```powershell
 # Windows
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/redis/redisctl/releases/download/redisctl-mcp-v0.12.1/redisctl-mcp-installer.ps1 | iex"
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/redis/redisctl/releases/download/redisctl-mcp-v0.13.0/redisctl-mcp-installer.ps1 | iex"
 ```
 
 ### Cargo
@@ -37,7 +37,7 @@ cargo install redisctl-mcp
 ### Binary Downloads
 
 Download pre-built binaries from the
-[MCP release](https://github.com/redis/redisctl/releases/tag/redisctl-mcp-v0.12.1),
+[MCP release](https://github.com/redis/redisctl/releases/tag/redisctl-mcp-v0.13.0),
 not the CLI release. Use the archive for your platform and add the extracted
 directory containing `redisctl-mcp` (or `redisctl-mcp.exe` on Windows) to your PATH.
 
