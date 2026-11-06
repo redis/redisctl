@@ -216,7 +216,7 @@ database_tool!(write, seed, "redis_seed",
         pub data_type: String,
         /// Key pattern with {i} placeholder for index (e.g. "user:{i}", "shard:{i:04}:data")
         pub key_pattern: String,
-        /// Number of items to generate
+        /// Number of generation iterations, not distinct keys or members
         #[serde(deserialize_with = "serde_helpers::string_or_u64::deserialize")]
         pub count: u64,
         /// For hash type: field-value pairs to set on each key. Supports {i} in both name and value.
@@ -393,8 +393,18 @@ database_tool!(write, seed, "redis_seed",
             total_commands as f64
         };
 
+        // Substitution changes the pattern iff a supported index placeholder
+        // occurs. Reuse the parser so padded forms follow generation semantics.
+        let key_note = if count > 1
+            && substitute_pattern(&input.key_pattern, 0) == input.key_pattern
+        {
+            "\nNote: key_pattern does not vary with the index; all iterations target one key."
+        } else {
+            ""
+        };
+
         Ok(CallToolResult::text(format!(
-            "Seed complete: {} {} items seeded ({} commands) in {:.2}s ({:.0} cmd/s)\n\n\
+            "Seed complete: {} {} iterations completed ({} commands) in {:.2}s ({:.0} cmd/s){key_note}\n\n\
              Tip: use redis_info with section=\"memory\" to check memory impact, \
              or redis_dbsize to verify key count.",
             count,
