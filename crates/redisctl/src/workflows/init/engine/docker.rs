@@ -414,13 +414,12 @@ pub(crate) async fn apply_database(
     }
 }
 
-/// Connect with a deadline; errors come back as one-line strings for the caller's
-/// failure message.
+/// Connect with a deadline, preserving Redis error codes for validation.
 async fn connect(
     url: &str,
     timeout: Duration,
-) -> Result<redis::aio::MultiplexedConnection, String> {
-    let client = redis::Client::open(url).map_err(|e| e.to_string())?;
+) -> redis::RedisResult<redis::aio::MultiplexedConnection> {
+    let client = redis::Client::open(url)?;
     let config = redis::AsyncConnectionConfig::new().set_response_timeout(timeout);
     match tokio::time::timeout(
         timeout,
@@ -429,16 +428,17 @@ async fn connect(
     .await
     {
         Ok(Ok(conn)) => Ok(conn),
-        Ok(Err(e)) => Err(e.to_string()),
-        Err(_) => Err(format!(
-            "timed out connecting to {}",
-            crate::workflows::init::engine::util::mask_url(url)
-        )),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "timed out connecting to Redis",
+        )
+        .into()),
     }
 }
 
 async fn ping(url: &str, timeout: Duration) -> Result<(), String> {
-    let mut conn = connect(url, timeout).await?;
+    let mut conn = connect(url, timeout).await.map_err(|e| e.to_string())?;
     let pong: String = redis::cmd("PING")
         .query_async(&mut conn)
         .await
@@ -513,34 +513,113 @@ fn is_auth_error(e: &redis::RedisError) -> bool {
         || matches!(e.code(), Some("NOAUTH") | Some("WRONGPASS"))
 }
 
-/// Prove the database actually works: a PING and a SET/GET round trip on a
-/// short-lived key.
-pub async fn validate(url: &str) -> Result<(), String> {
-    let mut conn = connect(url, Duration::from_secs(3)).await?;
+#[derive(Debug, thiserror::Error)]
+pub enum ValidationError {
+    #[error("{0}")]
+    Connection(String),
+    #[error("{operation} failed: {source}")]
+    Command {
+        operation: &'static str,
+        source: redis::RedisError,
+    },
+    #[error("{0}")]
+    Unexpected(&'static str),
+}
+
+impl ValidationError {
+    fn redis(operation: &'static str, source: redis::RedisError) -> Self {
+        if source.is_io_error() || source.kind() == redis::ErrorKind::InvalidClientConfig {
+            Self::Connection(source.to_string())
+        } else {
+            Self::Command { operation, source }
+        }
+    }
+
+    pub fn summary(&self) -> &'static str {
+        match self {
+            Self::Connection(_) => "could not talk to Redis at",
+            _ => "Redis validation failed at",
+        }
+    }
+
+    pub fn remedy(&self) -> &'static str {
+        match self {
+            Self::Connection(message) if crate::workflows::init::dns::is_dns_error(message) => {
+                "The endpoint's DNS record may still be propagating (new databases can take a minute) - wait a moment and re-run.\n  macOS caches failed lookups; clear with: sudo dscacheutil -flushcache && sudo killall -HUP mDNSResponder"
+            }
+            Self::Connection(_) => {
+                "If this URL is stale, remove REDIS_URL from .env and re-run, or pass --url."
+            }
+            Self::Command { source, .. } => match source.code() {
+                Some("NOPERM") => {
+                    "Redis answered, but the ACL user cannot complete the self-check. Use a user allowed to PING and SET/GET redisctl:selfcheck:*; DEL permits immediate cleanup, otherwise the 60-second TTL applies."
+                }
+                Some("READONLY") => {
+                    "Redis answered from a read-only endpoint. Use the primary endpoint for the SET/GET self-check."
+                }
+                Some("OOM") => {
+                    "Redis answered, but cannot allocate memory for the self-check. Check database memory usage and its eviction policy."
+                }
+                Some("MOVED") | Some("ASK") => {
+                    "Redis answered with a Cluster redirect. The init self-check does not follow redirects; use an endpoint that accepts this SET/GET without redirection."
+                }
+                Some("NOAUTH") | Some("WRONGPASS") => {
+                    "Redis rejected authentication. Check the configured user and password."
+                }
+                _ if source.kind() == redis::ErrorKind::AuthenticationFailed => {
+                    "Redis rejected authentication. Check the configured user and password."
+                }
+                _ => {
+                    "Redis answered, but the self-check command failed. Check its reported error and the database permissions and configuration."
+                }
+            },
+            Self::Unexpected(_) => {
+                "Redis answered, but the self-check did not complete. Re-run init; if it persists, check the database and any proxy between it and redisctl."
+            }
+        }
+    }
+}
+
+/// Prove the database works with PING and a SET/GET on a per-run key. NX prevents
+/// overwrites; EX bounds its lifetime if best-effort cleanup cannot run.
+pub async fn validate(url: &str) -> Result<(), ValidationError> {
+    let mut conn = connect(url, Duration::from_secs(3))
+        .await
+        .map_err(|e| ValidationError::redis("connect", e))?;
     let pong: String = redis::cmd("PING")
         .query_async(&mut conn)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ValidationError::redis("PING", e))?;
     if pong != "PONG" {
-        return Err(format!("PING returned {pong:?}"));
+        return Err(ValidationError::Unexpected("PING did not return PONG"));
     }
-    let key = "redisctl:selfcheck";
+    let key = format!("redisctl:selfcheck:{}", uuid::Uuid::new_v4());
     let value = format!("ok {}", chrono::Utc::now().to_rfc3339());
-    redis::cmd("SET")
-        .arg(key)
+    let stored: Option<String> = redis::cmd("SET")
+        .arg(&key)
         .arg(&value)
         .arg("EX")
         .arg(60)
-        .query_async::<()>(&mut conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    let got: Option<String> = redis::cmd("GET")
-        .arg(key)
+        .arg("NX")
         .query_async(&mut conn)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ValidationError::redis("SET", e))?;
+    if stored.as_deref() != Some("OK") {
+        return Err(ValidationError::Unexpected(
+            "self-check key was not reserved; no existing key was changed",
+        ));
+    }
+    let got: redis::RedisResult<Option<String>> =
+        redis::cmd("GET").arg(&key).query_async(&mut conn).await;
+    // Only SET NX success reaches cleanup, including when GET fails. A refused
+    // DEL does not invalidate the round trip: EX remains the cleanup fallback.
+    let _ = redis::cmd("DEL")
+        .arg(&key)
+        .query_async::<u64>(&mut conn)
+        .await;
+    let got = got.map_err(|e| ValidationError::redis("GET", e))?;
     if got.as_deref() != Some(value.as_str()) {
-        return Err(format!("SET/GET round trip failed (got {got:?})"));
+        return Err(ValidationError::Unexpected("SET/GET round trip failed"));
     }
     Ok(())
 }
@@ -548,6 +627,56 @@ pub async fn validate(url: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validation_error_codes_select_remedies() {
+        for (code, expected) in [
+            ("NOPERM", "ACL"),
+            ("READONLY", "primary"),
+            ("OOM", "memory"),
+            ("MOVED", "Cluster"),
+            ("ASK", "Cluster"),
+            ("NOAUTH", "authentication"),
+            ("WRONGPASS", "authentication"),
+            ("ERR", "reported error"),
+        ] {
+            let source =
+                redis::parse_redis_value(format!("-{code} fixture refusal\r\n").as_bytes())
+                    .unwrap()
+                    .extract_error()
+                    .unwrap_err();
+            let error = ValidationError::redis("SET", source);
+            assert!(
+                error.remedy().contains(expected),
+                "{code}: {}",
+                error.remedy()
+            );
+            assert!(!error.remedy().contains("URL is stale"));
+            assert_eq!(error.summary(), "Redis validation failed at");
+        }
+    }
+
+    #[test]
+    fn validation_transport_remedies_preserve_dns_and_stale_url_guidance() {
+        for (kind, message, expected) in [
+            (
+                std::io::ErrorKind::Other,
+                "failed to lookup address",
+                "DNS record",
+            ),
+            (
+                std::io::ErrorKind::ConnectionRefused,
+                "refused",
+                "URL is stale",
+            ),
+            (std::io::ErrorKind::TimedOut, "timed out", "URL is stale"),
+        ] {
+            let error =
+                ValidationError::redis("connect", std::io::Error::new(kind, message).into());
+            assert!(error.remedy().contains(expected));
+            assert_eq!(error.summary(), "could not talk to Redis at");
+        }
+    }
 
     /// A fake Redis that answers every incoming command with `reply` - the client
     /// pipelines CLIENT SETINFO during setup before the PING the probe cares about,

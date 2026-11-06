@@ -525,20 +525,11 @@ async fn run_inner(
             ),
             Err(e) => {
                 println!("{} {e}", output::red("✗"));
-                // A name that does not resolve is almost never stale input - it is
-                // a record still propagating, or an OS cache remembering the gap.
-                let remedy = if dns::is_dns_error(&e) {
-                    "The endpoint's DNS record may still be propagating (new databases can take a minute) - wait a moment and re-run.\n  macOS caches failed lookups; clear with: sudo dscacheutil -flushcache && sudo killall -HUP mDNSResponder"
-                } else {
-                    "If this URL is stale, remove REDIS_URL from .env and re-run, or pass --url."
-                };
+                let remedy = e.remedy();
                 return Err(RedisCtlError::init(
                     "connection_error",
                     exit_code::NETWORK,
-                    format!(
-                        "could not talk to Redis at {}\n  {remedy}",
-                        engine::mask_url(url)
-                    ),
+                    format!("{} {}\n  {remedy}", e.summary(), engine::mask_url(url)),
                 ));
             }
         }
