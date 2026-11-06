@@ -382,6 +382,14 @@ database_tool!(write, json_toggle, "redis_json_toggle",
             .await
             .tool_context("JSON.TOGGLE failed")?;
 
+        if matches!(&result, redis::Value::Nil)
+            || matches!(&result, redis::Value::Array(items) if items.iter().all(|item| matches!(item, redis::Value::Nil)))
+        {
+            return Ok(CallToolResult::text(format!(
+                "Nothing toggled: no boolean values matched '{}' at '{}'", input.key, input.path
+            )));
+        }
+
         Ok(CallToolResult::text(format!(
             "Toggled '{}' at '{}': {}", input.key, input.path, format_value(&result)
         )))
