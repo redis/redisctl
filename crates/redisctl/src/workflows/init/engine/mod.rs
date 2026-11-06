@@ -389,6 +389,9 @@ pub fn plan(options: &Options) -> Result<Plan, InitError> {
         options.agents.as_deref(),
         &project::detect_agents(&options.cwd),
     );
+    if agents.contains(&Agent::Claude) {
+        project_skill::refuse_link_parents(&options.cwd)?;
+    }
 
     let mut file_actions = Vec::new();
     // First, so `.env` is ignored before a credential lands in it.
