@@ -72,6 +72,7 @@ impl FileAction {
 /// (permissions, non-UTF-8) must not be mistaken for a missing one: overwriting it
 /// would destroy user content.
 pub(crate) fn read_for_planning(dir: &Path, rel: &str) -> Result<Option<String>, InitError> {
+    refuse_non_directory_parents(dir, rel)?;
     match read_if(dir, rel) {
         Some(content) => Ok(Some(content)),
         None if dir.join(rel).exists() => Err(InitError::UnreadableFile {
@@ -79,6 +80,29 @@ pub(crate) fn read_for_planning(dir: &Path, rel: &str) -> Result<Option<String>,
         }),
         None => Ok(None),
     }
+}
+
+/// Check root-first: ENOTDIR below an existing file must not look like a missing
+/// output. Follow directory symlinks as before; this is not an ownership check.
+pub(crate) fn refuse_non_directory_parents(dir: &Path, rel: &str) -> Result<(), InitError> {
+    let parents: Vec<_> = Path::new(rel)
+        .ancestors()
+        .skip(1)
+        .filter(|path| !path.as_os_str().is_empty())
+        .collect();
+    for parent in parents.into_iter().rev() {
+        let message = match std::fs::metadata(dir.join(parent)) {
+            Ok(metadata) if metadata.is_dir() => continue,
+            Ok(_) => "exists but is not a directory".to_string(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => format!("cannot inspect parent directory: {error}"),
+        };
+        return Err(InitError::WriteFailed {
+            rel: parent.to_string_lossy().into_owned(),
+            message,
+        });
+    }
+    Ok(())
 }
 
 /// The first `KEY=value` line for `key`: group 1 is the indent and optional
@@ -437,6 +461,41 @@ pub(crate) fn refuse_secret_in_tracked_env(
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn planning_names_the_blocked_parent_without_writing() {
+        for parent in [
+            ".agents",
+            ".agents/skills",
+            ".agents/skills/redis-project-setup",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(parent);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, "user content").unwrap();
+            let error =
+                read_for_planning(dir.path(), ".agents/skills/redis-project-setup/SKILL.md")
+                    .unwrap_err()
+                    .to_string();
+            assert!(error.contains(&format!("'{parent}'")), "{error}");
+            assert!(error.contains("not a directory"), "{error}");
+            assert_eq!(fs::read_to_string(path).unwrap(), "user content");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn planning_keeps_directory_symlinks_supported() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(target.path(), dir.path().join(".agents")).unwrap();
+        assert!(
+            read_for_planning(dir.path(), ".agents/skills/setup/SKILL.md")
+                .unwrap()
+                .is_none()
+        );
+        assert!(std::fs::read_dir(target.path()).unwrap().next().is_none());
+    }
 
     #[test]
     fn read_env_key_handles_export_spaces_and_quotes() {

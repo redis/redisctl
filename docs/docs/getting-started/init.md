@@ -83,8 +83,11 @@ that is a symlink, and a `.env` that is the same file as `.env.example`: each co
 put the password in a committed file or leave `.env` unignored. In a git repository,
 git decides whether `.env` is already ignored. A `.env` that sets one of
 init's keys on more than one line is refused too: dotenv loaders read the last line,
-and so does the MCP launcher. With `--cloud`, these checks and every other check on
-the project's files run before Redis Cloud is asked for a database.
+and so does the MCP launcher. With `--cloud`, these checks and the parent-directory
+checks for planned project files run before Redis Cloud is asked for a database.
+An existing file where an output needs a directory is refused without writing
+project files. Preflight does not reserve the paths: permissions or concurrent
+changes can still cause a write to fail later.
 
 ## Pinned tools
 
