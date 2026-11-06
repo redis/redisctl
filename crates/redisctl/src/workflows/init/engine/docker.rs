@@ -527,6 +527,27 @@ pub enum ValidationError {
 }
 
 impl ValidationError {
+    pub(crate) fn into_cli_error(self, url: &str) -> crate::error::RedisCtlError {
+        use crate::error::{RedisCtlError, exit_code};
+        let (code, exit) = match &self {
+            Self::Connection(_) => ("connection_error", exit_code::NETWORK),
+            Self::Command { source, .. } if is_auth_error(source) => {
+                ("authentication_failed", exit_code::AUTH)
+            }
+            Self::Command { .. } | Self::Unexpected(_) => ("api_error", exit_code::UPSTREAM),
+        };
+        RedisCtlError::init(
+            code,
+            exit,
+            format!(
+                "{} {}\n  {}",
+                self.summary(),
+                super::mask_url(url),
+                self.remedy()
+            ),
+        )
+    }
+
     fn redis(operation: &'static str, source: redis::RedisError) -> Self {
         if source.is_io_error() || source.kind() == redis::ErrorKind::InvalidClientConfig {
             Self::Connection(source.to_string())
@@ -563,10 +584,7 @@ impl ValidationError {
                 Some("MOVED") | Some("ASK") => {
                     "Redis answered with a Cluster redirect. The init self-check does not follow redirects; use an endpoint that accepts this SET/GET without redirection."
                 }
-                Some("NOAUTH") | Some("WRONGPASS") => {
-                    "Redis rejected authentication. Check the configured user and password."
-                }
-                _ if source.kind() == redis::ErrorKind::AuthenticationFailed => {
+                _ if is_auth_error(source) => {
                     "Redis rejected authentication. Check the configured user and password."
                 }
                 _ => {
@@ -657,6 +675,19 @@ mod tests {
             assert!(!error.remedy().contains("URL is stale"));
             assert_eq!(error.summary(), "Redis validation failed at");
         }
+    }
+
+    #[test]
+    fn typed_authentication_failure_keeps_its_machine_classification() {
+        let error = ValidationError::redis(
+            "connect",
+            redis::RedisError::from((redis::ErrorKind::AuthenticationFailed, "fixture refusal")),
+        );
+        assert!(error.remedy().contains("authentication"));
+        let error = error.into_cli_error("redis://default:synthetic-marker@localhost:6379");
+        assert_eq!(error.code(), "authentication_failed");
+        assert_eq!(error.exit_code(), crate::error::exit_code::AUTH);
+        assert!(!error.to_string().contains("synthetic-marker"));
     }
 
     #[test]
