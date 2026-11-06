@@ -1650,3 +1650,270 @@ async fn test_enterprise_database_create_dry_run_uses_query_param() {
 
     // MockServer verifies the `.expect(1)` constraint on drop.
 }
+
+/// Mount the three alert collection routes with the shapes from the Redis
+/// Software REST API reference: cluster alerts keyed by alert name, node and
+/// database alerts keyed by entity UID, then alert name.
+async fn mount_alert_routes(mock_server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/v1/cluster/alerts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "cluster_node_down": {
+                "enabled": true,
+                "state": true,
+                "severity": "ERROR",
+                "change_time": "2026-10-21T10:00:00Z"
+            },
+            "cluster_ram_overcommit": { "enabled": false, "state": null }
+        })))
+        .expect(1)
+        .mount(mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/nodes/alerts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "2": {
+                "node_cpu_utilization": {
+                    "enabled": true,
+                    "state": true,
+                    "severity": "WARNING",
+                    "change_value": { "cpu_util": 91.5, "global_threshold": "80" }
+                }
+            }
+        })))
+        .expect(1)
+        .mount(mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/bdbs/alerts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "1": {
+                "bdb_size": {
+                    "enabled": true,
+                    "state": true,
+                    "threshold": "80",
+                    "severity": "WARNING"
+                }
+            }
+        })))
+        .expect(1)
+        .mount(mock_server)
+        .await;
+}
+
+fn find_alert<'a>(alerts: &'a [serde_json::Value], name: &str) -> &'a serde_json::Value {
+    alerts
+        .iter()
+        .find(|alert| alert["name"] == name)
+        .unwrap_or_else(|| panic!("alert {name} missing from {alerts:?}"))
+}
+
+// `enterprise alerts list` must read the map-shaped alert responses and keep
+// each alert's name (and node/database UID) next to its `type` tag, instead
+// of dropping everything that is not a JSON array.
+#[tokio::test]
+async fn test_enterprise_alerts_list_flattens_alert_maps() {
+    let temp_dir = TempDir::new().unwrap();
+    let mock_server = MockServer::start().await;
+    create_enterprise_profile(&temp_dir, &mock_server.uri()).unwrap();
+    mount_alert_routes(&mock_server).await;
+
+    let output = test_cmd(&temp_dir)
+        .args(["-o", "json", "enterprise", "alerts", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let v: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout under -o json must be valid JSON");
+    let alerts = v.as_array().expect("alerts list prints an array");
+    assert_eq!(alerts.len(), 4, "{alerts:?}");
+
+    let node_down = find_alert(alerts, "cluster_node_down");
+    assert_eq!(node_down["type"], "cluster");
+    assert_eq!(node_down["state"], true);
+    assert_eq!(node_down["severity"], "ERROR");
+    assert!(node_down.get("entity_uid").is_none());
+
+    // Not evaluated yet: no severity, still listed.
+    let overcommit = find_alert(alerts, "cluster_ram_overcommit");
+    assert_eq!(overcommit["type"], "cluster");
+    assert!(overcommit["state"].is_null());
+
+    let cpu = find_alert(alerts, "node_cpu_utilization");
+    assert_eq!(cpu["type"], "node");
+    assert_eq!(cpu["entity_uid"], "2");
+    assert_eq!(cpu["change_value"]["cpu_util"], 91.5);
+
+    let bdb_size = find_alert(alerts, "bdb_size");
+    assert_eq!(bdb_size["type"], "database");
+    assert_eq!(bdb_size["entity_uid"], "1");
+    assert_eq!(bdb_size["threshold"], "80");
+}
+
+// Table output (the default) prints the alert names too.
+#[tokio::test]
+async fn test_enterprise_alerts_list_table_prints_alert_names() {
+    let temp_dir = TempDir::new().unwrap();
+    let mock_server = MockServer::start().await;
+    create_enterprise_profile(&temp_dir, &mock_server.uri()).unwrap();
+    mount_alert_routes(&mock_server).await;
+
+    test_cmd(&temp_dir)
+        .args(["enterprise", "alerts", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cluster_node_down"))
+        .stdout(predicate::str::contains("node_cpu_utilization"))
+        .stdout(predicate::str::contains("bdb_size"));
+}
+
+// `--filter-type` queries only the selected route, and `--severity` filters
+// the flattened records.
+#[tokio::test]
+async fn test_enterprise_alerts_list_filter_type_and_severity() {
+    let temp_dir = TempDir::new().unwrap();
+    let mock_server = MockServer::start().await;
+    create_enterprise_profile(&temp_dir, &mock_server.uri()).unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/v1/bdbs/alerts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "1": { "bdb_size": { "enabled": true, "state": true, "severity": "WARNING" } },
+            "3": { "bdb_high_latency": { "enabled": true, "state": false, "severity": "INFO" } }
+        })))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+    for other in ["/v1/cluster/alerts", "/v1/nodes/alerts"] {
+        Mock::given(method("GET"))
+            .and(path(other))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .expect(0)
+            .mount(&mock_server)
+            .await;
+    }
+
+    let output = test_cmd(&temp_dir)
+        .args([
+            "-o",
+            "json",
+            "enterprise",
+            "alerts",
+            "list",
+            "--filter-type",
+            "bdb",
+            "--severity",
+            "warning",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let v: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout under -o json must be valid JSON");
+    let alerts = v.as_array().expect("alerts list prints an array");
+    assert_eq!(alerts.len(), 1, "{alerts:?}");
+    assert_eq!(alerts[0]["name"], "bdb_size");
+    assert_eq!(alerts[0]["entity_uid"], "1");
+    assert_eq!(alerts[0]["type"], "database");
+}
+
+// A failed request for one source fails the command and names the route,
+// instead of printing a partial list as if it were complete.
+#[tokio::test]
+async fn test_enterprise_alerts_list_reports_failed_source() {
+    let temp_dir = TempDir::new().unwrap();
+    let mock_server = MockServer::start().await;
+    create_enterprise_profile(&temp_dir, &mock_server.uri()).unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/v1/cluster/alerts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "cluster_node_down": { "enabled": true, "state": true, "severity": "ERROR" }
+        })))
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/nodes/alerts"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(json!({
+            "error_code": "insufficient_permissions",
+            "description": "Insufficient permissions"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    test_cmd(&temp_dir)
+        .args(["enterprise", "alerts", "list"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("cluster_node_down").not())
+        .stderr(predicate::str::contains(
+            "Failed to list node alerts from /v1/nodes/alerts",
+        ));
+}
+
+// A response that is not the documented map shape is reported, not dropped.
+#[tokio::test]
+async fn test_enterprise_alerts_list_rejects_unexpected_shape() {
+    let temp_dir = TempDir::new().unwrap();
+    let mock_server = MockServer::start().await;
+    create_enterprise_profile(&temp_dir, &mock_server.uri()).unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/v1/cluster/alerts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .mount(&mock_server)
+        .await;
+
+    test_cmd(&temp_dir)
+        .args(["enterprise", "alerts", "list", "--filter-type", "cluster"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Unexpected response from /v1/cluster/alerts: expected a JSON object, got an array",
+        ));
+}
+
+// An unknown `--filter-type` is an error, not an empty list.
+#[test]
+fn test_enterprise_alerts_list_rejects_unknown_filter_type() {
+    let temp_dir = TempDir::new().unwrap();
+    create_enterprise_profile(&temp_dir, "https://enterprise.invalid:9443").unwrap();
+
+    test_cmd(&temp_dir)
+        .args(["enterprise", "alerts", "list", "--filter-type", "database"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Unknown alert type 'database': expected one of cluster, node, bdb",
+        ));
+}
+
+// `enterprise cluster alerts` must query the real `/v1/cluster/alerts` route
+// (Redis Enterprise has no `/v1/alerts`) and print the map keyed by alert name.
+#[tokio::test]
+async fn test_enterprise_cluster_alerts_uses_cluster_alerts_route() {
+    let temp_dir = TempDir::new().unwrap();
+    let mock_server = MockServer::start().await;
+    create_enterprise_profile(&temp_dir, &mock_server.uri()).unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/v1/cluster/alerts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "cluster_too_many_nodes": { "state": false, "severity": "WARNING" }
+        })))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    test_cmd(&temp_dir)
+        .args(["enterprise", "cluster", "alerts"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cluster_too_many_nodes"));
+}

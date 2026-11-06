@@ -225,7 +225,7 @@ fn port_is_free(port: u16) -> bool {
 }
 
 fn free_port(start: u16) -> Option<u16> {
-    (start..start + 100).find(|p| port_is_free(*p))
+    (start..=start.saturating_add(99)).find(|p| port_is_free(*p))
 }
 
 /// Decide the action for a `.env` that already carries a URL. A leftover container
@@ -825,14 +825,29 @@ mod tests {
         // with "port is already allocated".
         let listener = std::net::TcpListener::bind(("::", 0)).unwrap();
         let taken = listener.local_addr().unwrap().port();
+        // The scan covers 100 ports above `taken`; skip draws too close to u16::MAX.
+        if taken > u16::MAX - 100 {
+            return;
+        }
         let free = free_port(taken).unwrap();
         assert!(free > taken, "picked the ipv6-held port {taken}");
+    }
+
+    #[test]
+    fn free_port_does_not_overflow_at_the_top_of_the_port_range() {
+        // Only the top port is probed; it must neither panic nor return a port
+        // below `start`.
+        assert!(matches!(free_port(u16::MAX), None | Some(u16::MAX)));
     }
 
     #[test]
     fn free_port_finds_an_unused_port() {
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let taken = listener.local_addr().unwrap().port();
+        // The scan covers 100 ports above `taken`; skip draws too close to u16::MAX.
+        if taken > u16::MAX - 100 {
+            return;
+        }
         let free = free_port(taken).unwrap();
         assert!(free > taken);
     }

@@ -234,6 +234,22 @@ pub(crate) fn require_positive_ttl(seconds: i64, target: &str, remedy: &str) -> 
     ))
 }
 
+/// Refuse a result limit of zero before any key is scanned.
+///
+/// A limit of 0 truncates every result to nothing, so `redis_keys` and `redis_scan`
+/// would report "No keys found" for a pattern that does match. The caller is told
+/// to pass a positive limit instead.
+pub(crate) fn require_positive_limit(limit: usize) -> Result<(), String> {
+    if limit > 0 {
+        return Ok(());
+    }
+    Err(
+        "limit must be at least 1: a limit of 0 returns no keys, which would be \
+         reported as no matches. Use a positive limit."
+            .to_string(),
+    )
+}
+
 /// Build an MCP sub-router containing all Redis database tools
 pub fn router(state: Arc<AppState>) -> McpRouter {
     McpRouter::new()
@@ -246,6 +262,24 @@ pub fn router(state: Arc<AppState>) -> McpRouter {
         .merge(bulk::router(state.clone()))
         .merge(raw::router(state.clone()))
         .merge(aliases::router(state))
+}
+
+#[cfg(test)]
+mod limit_tests {
+    use super::require_positive_limit;
+
+    #[test]
+    fn zero_limit_is_rejected() {
+        let msg = require_positive_limit(0).unwrap_err();
+        assert!(msg.contains("limit must be at least 1"), "{msg}");
+    }
+
+    #[test]
+    fn positive_limits_are_accepted() {
+        for limit in [1, 100, usize::MAX] {
+            assert_eq!(require_positive_limit(limit), Ok(()));
+        }
+    }
 }
 
 #[cfg(test)]
