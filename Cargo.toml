@@ -44,9 +44,10 @@ create-release = true
 install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = false
-# Keep the Redis Homebrew tap update outside the generated release workflow.
-publish-jobs = ["./update-homebrew"]
-github-custom-job-permissions = { "update-homebrew" = { contents = "read" } }
+# The Redis Homebrew tap update and the npm wrapper publish run outside the
+# generated release workflow.
+publish-jobs = ["./update-homebrew", "./publish-npm"]
+github-custom-job-permissions = { "update-homebrew" = { contents = "read" }, "publish-npm" = { contents = "read", id-token = "write" } }
 
 [workspace.metadata.dist.github-action-commits]
 # Dependabot updates the generated workflow references. Copy those revisions
