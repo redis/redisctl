@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0](https://github.com/redis/redisctl/compare/redisctl-v0.13.0...redisctl-v0.14.0) - 2026-11-06
+
+### Added
+
+- *(init)* print the telemetry notice before anything is sent, and build the key into releases ([#1297](https://github.com/redis/redisctl/pull/1297))
+
+### Fixed
+
+- *(cli)* stop polling unknown authoritative DNS results ([#1321](https://github.com/redis/redisctl/pull/1321))
+- *(cli)* preserve init validation error classifications ([#1320](https://github.com/redis/redisctl/pull/1320))
+- *(cli)* isolate init self-check keys and report write refusals ([#1315](https://github.com/redis/redisctl/pull/1315))
+- *(init)* require https for product endpoints and do not follow redirects ([#1307](https://github.com/redis/redisctl/pull/1307))
+- *(cli)* refuse non-directory parents during init preflight ([#1312](https://github.com/redis/redisctl/pull/1312))
+- *(cli)* read map-shaped responses in enterprise alerts list ([#1311](https://github.com/redis/redisctl/pull/1311))
+- *(init)* avoid free_port u16 overflow and correct SKILL.md wording ([#1304](https://github.com/redis/redisctl/pull/1304))
+- *(enterprise)* query /v1/cluster/alerts in 'cluster alerts' ([#1306](https://github.com/redis/redisctl/pull/1306))
+- *(core)* [**breaking**] preserve configuration value round trips ([#1188](https://github.com/redis/redisctl/pull/1188))
+- *(cli)* let init-cluster create the default database when version discovery fails ([#1273](https://github.com/redis/redisctl/pull/1273))
+- *(init)* keep a same-named skill dir that a --skills-repo copy does not own ([#1300](https://github.com/redis/redisctl/pull/1300))
+
+### Other
+
+- *(cli)* carry ZIP module-archive contract tests forward from #1256 ([#1292](https://github.com/redis/redisctl/pull/1292))
+
 ## [0.12.1](https://github.com/redis/redisctl/compare/redisctl-v0.12.0...redisctl-v0.12.1) - 2026-10-01
 
 ### Other
