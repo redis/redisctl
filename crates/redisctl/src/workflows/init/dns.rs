@@ -16,7 +16,7 @@ use hickory_resolver::config::{ConnectionConfig, NameServerConfig, ResolverConfi
 use hickory_resolver::lookup::Lookup;
 use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use hickory_resolver::net::{DnsError, NetError};
-use hickory_resolver::proto::op::ResponseCode;
+use hickory_resolver::proto::op::{Message, ResponseCode};
 use hickory_resolver::proto::rr::{RData, RecordType};
 
 use super::output;
@@ -108,17 +108,38 @@ enum Visibility {
 
 fn classify_lookup(result: Result<Lookup, NetError>) -> Visibility {
     match result {
-        Ok(answer) if !answer.answers().is_empty() => Visibility::Visible,
-        Ok(_) => Visibility::Absent,
+        Ok(answer) => classify_answer(answer.message()),
         Err(NetError::Dns(DnsError::NoRecordsFound(records)))
             if matches!(
                 records.response_code,
                 ResponseCode::NXDomain | ResponseCode::NoError
-            ) =>
+            ) && (records.soa.is_some() || records.ns.is_none()) =>
         {
             Visibility::Absent
         }
         Err(_) => Visibility::Unknown,
+    }
+}
+
+fn classify_answer(answer: &Message) -> Visibility {
+    if answer.metadata.truncation {
+        return Visibility::Unknown;
+    }
+    if !answer.answers.is_empty() {
+        return Visibility::Visible;
+    }
+    let referral = answer
+        .authorities
+        .iter()
+        .any(|r| r.record_type() == RecordType::NS);
+    let soa = answer
+        .authorities
+        .iter()
+        .any(|r| r.record_type() == RecordType::SOA);
+    if referral && !soa {
+        Visibility::Unknown
+    } else {
+        Visibility::Absent
     }
 }
 
@@ -202,9 +223,12 @@ pub(crate) async fn wait_for_endpoint_dns(url: &str, created: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hickory_resolver::net::NoRecords;
-    use hickory_resolver::proto::op::Query;
-    use hickory_resolver::proto::rr::{Name, Record, rdata::A};
+    use hickory_resolver::net::{ForwardNSData, NoRecords};
+    use hickory_resolver::proto::op::{OpCode, Query};
+    use hickory_resolver::proto::rr::{
+        Name, Record,
+        rdata::{A, NS},
+    };
 
     #[test]
     fn lookup_classification_distinguishes_absence_from_infrastructure_errors() {
@@ -228,6 +252,37 @@ mod tests {
         ] {
             assert_eq!(classify_lookup(Err(error)), Visibility::Unknown);
         }
+    }
+
+    #[test]
+    fn referral_and_truncated_answers_are_not_confirmed_absence() {
+        let name = Name::from_ascii("example.test.").unwrap();
+        let ns = Record::from_rdata(name.clone(), 60, NS(name.clone()));
+        let mut records = NoRecords::new(Query::query(name, RecordType::A), ResponseCode::NoError);
+        records.ns = Some(
+            vec![ForwardNSData {
+                ns: ns.clone().into_record_of_rdata(),
+                glue: Vec::new().into(),
+            }]
+            .into(),
+        );
+        assert_eq!(classify_lookup(Err(records.into())), Visibility::Unknown);
+        let mut message = Message::response(1, OpCode::Query);
+        message.add_authority(ns.into_record_of_rdata());
+        assert_eq!(classify_answer(&message), Visibility::Unknown);
+        message.authorities.clear();
+        message.metadata.truncation = true;
+        assert_eq!(classify_answer(&message), Visibility::Unknown);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn planned_cloud_placeholder_and_literal_urls_skip_the_gate() {
+        let start = tokio::time::Instant::now();
+        let planned = crate::workflows::init::cloud::PLANNED_URL;
+        assert!(host_of(planned).is_none());
+        wait_for_endpoint_dns(planned, true).await;
+        wait_for_endpoint_dns("redis://127.0.0.1:6379", true).await;
+        assert_eq!(start.elapsed(), Duration::ZERO);
     }
 
     async fn simulated_gate(

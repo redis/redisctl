@@ -72,7 +72,8 @@ up before.
 ## Cloud endpoint DNS
 
 Before connecting to a Cloud database, init checks its authoritative DNS record.
-A confirmed missing record is polled for up to 150 seconds. A timeout, refusal or
+A confirmed missing record is polled on a 150-second deadline (a query in flight
+can finish after that deadline). A timeout, refusal or
 other DNS infrastructure failure is not reported as a missing record: init stops
 polling and continues to normal connection validation. Newly created databases
 wait one additional 3-second interval first; reused databases do not. That short
