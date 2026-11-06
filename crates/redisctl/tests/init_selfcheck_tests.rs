@@ -14,6 +14,7 @@ enum Reply {
     Mismatch,
     RefuseDel,
     StallGet,
+    CloseOnConnect,
 }
 
 struct Fixture {
@@ -46,6 +47,10 @@ impl Fixture {
                     }
                     Err(e) => panic!("fixture accept: {e}"),
                 };
+                if matches!(reply, Reply::CloseOnConnect) {
+                    drop(stream);
+                    continue;
+                }
                 stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(std::time::Duration::from_secs(5)))
@@ -266,8 +271,11 @@ fn denied_cleanup_uses_ttl_fallback_without_failing_validation() {
 #[test]
 fn get_transport_timeout_uses_ttl_without_another_cleanup_timeout() {
     let fixture = Fixture::new(Reply::StallGet);
-    let output = fixture.init();
+    let output = fixture.init_with_args(&["-o", "json"]);
     assert_eq!(output.status.code(), Some(10), "{output:?}");
+    let envelope: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(envelope["error"]["code"], "connection_error");
+    assert_eq!(envelope["error"]["exit_code"], 10);
     let commands = fixture.commands.lock().unwrap();
     assert!(commands.iter().any(|c| c[0] == "GET"));
     assert!(!commands.iter().any(|c| c[0] == "DEL"));
@@ -305,10 +313,7 @@ fn validation_machine_errors_distinguish_server_refusals_from_connections() {
 
 #[test]
 fn validation_connection_failure_retains_network_machine_error() {
-    let mut fixture = Fixture::new(Reply::Normal);
-    let unused = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    fixture.url = format!("redis://{}", unused.local_addr().unwrap());
-    drop(unused);
+    let fixture = Fixture::new(Reply::CloseOnConnect);
     let output = fixture.init_with_args(&["-o", "json"]);
     let envelope: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(output.status.code(), Some(10), "{output:?}");

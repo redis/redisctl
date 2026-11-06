@@ -125,7 +125,7 @@ Built on the standard `redisctl` [exit codes](../reference/agent-error-codes.md#
 | 7 | Redis Cloud conflict: a paid `redisctl-<name>` subscription, the free plan already used up, a quota reached |
 | 8 | any other Redis Cloud API or server error, including a refused database self-check command or an unsuccessful PING or SET/GET round trip |
 | 9 | Redis Cloud rate limit |
-| 10 | database validation could not reach Redis: connection/DNS failure |
+| 10 | database validation connection/DNS failure, or the connection failed or timed out during the self-check |
 | 12 | cancelled at a wizard question or the Cloud picker |
 
 A failure inside the browser sign-in itself comes from `redisctl cloud auth login`
