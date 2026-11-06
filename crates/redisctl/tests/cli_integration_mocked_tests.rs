@@ -1893,3 +1893,27 @@ fn test_enterprise_alerts_list_rejects_unknown_filter_type() {
             "Unknown alert type 'database': expected one of cluster, node, bdb",
         ));
 }
+
+// `enterprise cluster alerts` must query the real `/v1/cluster/alerts` route
+// (Redis Enterprise has no `/v1/alerts`) and print the map keyed by alert name.
+#[tokio::test]
+async fn test_enterprise_cluster_alerts_uses_cluster_alerts_route() {
+    let temp_dir = TempDir::new().unwrap();
+    let mock_server = MockServer::start().await;
+    create_enterprise_profile(&temp_dir, &mock_server.uri()).unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/v1/cluster/alerts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "cluster_too_many_nodes": { "state": false, "severity": "WARNING" }
+        })))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    test_cmd(&temp_dir)
+        .args(["enterprise", "cluster", "alerts"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cluster_too_many_nodes"));
+}
