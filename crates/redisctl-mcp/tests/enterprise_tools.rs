@@ -310,6 +310,118 @@ async fn test_get_enterprise_database() {
     assert_eq!(result["name"], "cache-primary");
 }
 
+fn redaction_fixture() -> serde_json::Value {
+    json!({
+        "uid": 7, "name": "redaction-primary", "status": "active", "memory_size": 1024,
+        "authentication_redis_pass": "synthetic-redis-marker",
+        "authentication_admin_pass": "synthetic-admin-marker",
+        "authentication_sasl_pass": "synthetic-sasl-marker",
+        "authentication_sasl_uname": "public-username", "data_internode_encryption": true
+    })
+}
+
+fn assert_redacted_database_result(result: &tower_mcp::CallToolResult) -> serde_json::Value {
+    assert!(!result.is_error, "synthetic read must succeed");
+    let complete = serde_json::to_string(result).unwrap();
+    for marker in [
+        "synthetic-redis-marker",
+        "synthetic-admin-marker",
+        "synthetic-sasl-marker",
+    ] {
+        assert!(
+            !complete.contains(marker),
+            "credential marker must be absent from every result channel"
+        );
+    }
+    let text: serde_json::Value =
+        serde_json::from_str(result.content[0].as_text().unwrap()).unwrap();
+    assert_eq!(result.structured_content.as_ref(), Some(&text));
+    text
+}
+
+#[tokio::test]
+async fn read_response_redaction_covers_enterprise_list_and_preserves_filters() {
+    for (input, expected_count) in [
+        (json!({}), 2),
+        (
+            json!({"name_filter": "primary", "status_filter": "active"}),
+            1,
+        ),
+    ] {
+        let server = MockEnterpriseServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/bdbs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                redaction_fixture(), {"uid": 8, "name": "other", "status": "pending"}
+            ])))
+            .expect(1)
+            .mount(server.inner())
+            .await;
+        let state = Arc::new(AppState::with_enterprise_client(server.client()));
+        let result = enterprise::list_databases(state).call(input).await;
+        let data = assert_redacted_database_result(&result);
+        assert_eq!(data["count"], expected_count);
+        let primary = data["databases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|db| db["uid"] == 7)
+            .unwrap();
+        for field in [
+            "authentication_redis_pass",
+            "authentication_admin_pass",
+            "authentication_sasl_pass",
+        ] {
+            assert_eq!(primary[field], "[REDACTED]");
+        }
+        assert_eq!(primary["memory_size"], 1024);
+        assert_eq!(primary["authentication_sasl_uname"], "public-username");
+        assert_eq!(primary["data_internode_encryption"], true);
+    }
+}
+
+#[tokio::test]
+async fn read_response_redaction_covers_enterprise_get_and_preserves_unset_values() {
+    for populated in [true, false] {
+        let server = MockEnterpriseServer::start().await;
+        let mut fixture = redaction_fixture();
+        if !populated {
+            fixture["authentication_redis_pass"] = serde_json::Value::Null;
+            fixture["authentication_admin_pass"] = json!("");
+            fixture
+                .as_object_mut()
+                .unwrap()
+                .remove("authentication_sasl_pass");
+        }
+        Mock::given(method("GET"))
+            .and(path("/v1/bdbs/7"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(fixture))
+            .expect(1)
+            .mount(server.inner())
+            .await;
+        let state = Arc::new(AppState::with_enterprise_client(server.client()));
+        let result = enterprise::get_database(state)
+            .call(json!({"uid": 7}))
+            .await;
+        let data = assert_redacted_database_result(&result);
+        assert_eq!(data["uid"], 7);
+        assert_eq!(data["name"], "redaction-primary");
+        if populated {
+            for field in [
+                "authentication_redis_pass",
+                "authentication_admin_pass",
+                "authentication_sasl_pass",
+            ] {
+                assert_eq!(data[field], "[REDACTED]");
+            }
+        } else {
+            assert_eq!(data["authentication_redis_pass"], serde_json::Value::Null);
+            assert_eq!(data["authentication_admin_pass"], "");
+            assert_eq!(data["authentication_sasl_pass"], serde_json::Value::Null);
+        }
+    }
+}
+
 // ============================================================================
 // Node Tests
 // ============================================================================

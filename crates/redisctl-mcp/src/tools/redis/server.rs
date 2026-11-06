@@ -160,7 +160,7 @@ database_tool!(read_only, slowlog, "redis_slowlog",
 
 database_tool!(read_only, config_get, "redis_config_get",
     "Get configuration parameter values (CONFIG GET). \
-     Supports glob-style patterns.",
+     Supports glob-style patterns. Authentication and TLS key passphrases are redacted.",
     {
         /// Configuration parameter pattern (e.g. "maxmemory", "save", "*")
         pub parameter: String,
@@ -179,9 +179,20 @@ database_tool!(read_only, config_get, "redis_config_get",
             )));
         }
 
+        let sensitive_fields = [
+            "requirepass", "masterauth", "tls-key-file-pass", "tls-client-key-file-pass",
+        ].map(str::to_string);
         let output = result
             .iter()
-            .map(|(k, v)| format!("{}: {}", k, v))
+            .map(|(k, v)| {
+                // Match each returned name, not the requested glob pattern.
+                let redacted = crate::audit::redact_response_value(
+                    &serde_json::json!({(k): v}), &sensitive_fields,
+                );
+                let safe_value = redacted.get(k).and_then(serde_json::Value::as_str)
+                    .unwrap_or("[REDACTED]");
+                format!("{}: {}", k, safe_value)
+            })
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -359,3 +370,159 @@ database_tool!(destructive, flushdb, "redis_flushdb",
         )))
     }
 );
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use serde_json::json;
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::{TcpListener, tcp::OwnedReadHalf};
+
+    use crate::state::AppState;
+
+    async fn read_command(reader: &mut BufReader<OwnedReadHalf>) -> Vec<String> {
+        let mut line = String::new();
+        assert_ne!(reader.read_line(&mut line).await.unwrap(), 0);
+        assert!(line.starts_with('*'));
+        let count: usize = line[1..].trim_end().parse().unwrap();
+        let mut command = Vec::with_capacity(count);
+        for _ in 0..count {
+            line.clear();
+            reader.read_line(&mut line).await.unwrap();
+            assert!(line.starts_with('$'));
+            let length: usize = line[1..].trim_end().parse().unwrap();
+            let mut bytes = vec![0; length + 2];
+            reader.read_exact(&mut bytes).await.unwrap();
+            assert_eq!(&bytes[length..], b"\r\n");
+            bytes.truncate(length);
+            command.push(String::from_utf8(bytes).unwrap());
+        }
+        command
+    }
+
+    async fn call_config_get(
+        parameter: &str,
+        values: &[(&str, &str)],
+    ) -> tower_mcp::CallToolResult {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let expected = parameter.to_string();
+        let mut reply = format!("*{}\r\n", values.len() * 2);
+        for (name, value) in values {
+            for part in [name, value] {
+                reply.push_str(&format!("${}\r\n{}\r\n", part.len(), part));
+            }
+        }
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let (read, mut write) = socket.into_split();
+            let mut reader = BufReader::new(read);
+            for field in ["LIB-NAME", "LIB-VER"] {
+                let command = read_command(&mut reader).await;
+                assert_eq!(command.len(), 4);
+                assert_eq!(&command[..3], &["CLIENT", "SETINFO", field]);
+                write.write_all(b"+OK\r\n").await.unwrap();
+            }
+            assert_eq!(
+                read_command(&mut reader).await,
+                ["CONFIG", "GET", &expected]
+            );
+            write.write_all(reply.as_bytes()).await.unwrap();
+            let mut byte = [0];
+            match reader.read(&mut byte).await {
+                Ok(0) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                    ) => {}
+                other => panic!("unexpected extra command or close error: {other:?}"),
+            }
+        });
+        // No default config, real credentials or live client lookup.
+        let mut state = AppState::without_config_for_tests(AppState::test_policy());
+        state.database_url = Some(format!("redis://{addr}"));
+        let state = Arc::new(state);
+        let result = tokio::time::timeout(Duration::from_secs(5), async {
+            super::config_get(state.clone())
+                .call(json!({"parameter": parameter}))
+                .await
+        })
+        .await
+        .expect("synthetic CONFIG GET must complete");
+        drop(state);
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("fixture connection must close")
+            .expect("fixture assertions must pass");
+        assert!(
+            !result.is_error,
+            "synthetic tool read must succeed: {result:?}"
+        );
+        result
+    }
+
+    #[tokio::test]
+    async fn read_response_redaction_covers_direct_and_wildcard_config_get() {
+        let sensitive = [
+            "requirepass",
+            "masterauth",
+            "tls-key-file-pass",
+            "tls-client-key-file-pass",
+        ];
+        for name in sensitive {
+            let result = call_config_get(name, &[(name, "synthetic-config-marker")]).await;
+            assert!(
+                !serde_json::to_string(&result)
+                    .unwrap()
+                    .contains("synthetic-config-marker")
+            );
+            assert_eq!(
+                result.content[0].as_text(),
+                Some(format!("Configuration (1 parameter(s)):\n{name}: [REDACTED]").as_str())
+            );
+        }
+        let result = call_config_get(
+            "*",
+            &[
+                ("masterauth", "synthetic-master-marker"),
+                ("requirepass", "synthetic-require-marker"),
+                ("tls-key-file-pass", "synthetic-tls-marker"),
+                ("TLS-CLIENT-KEY-FILE-PASS", "synthetic-client-marker"),
+                ("maxmemory", "1024"),
+                ("masteruser", "public-user"),
+            ],
+        )
+        .await;
+        assert!(
+            !serde_json::to_string(&result)
+                .unwrap()
+                .contains("synthetic-")
+        );
+        assert_eq!(
+            result.content[0].as_text(),
+            Some(concat!(
+                "Configuration (6 parameter(s)):\nmasterauth: [REDACTED]\nrequirepass: [REDACTED]\n",
+                "tls-key-file-pass: [REDACTED]\nTLS-CLIENT-KEY-FILE-PASS: [REDACTED]\n",
+                "maxmemory: 1024\nmasteruser: public-user"
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn read_response_redaction_preserves_empty_config_values_and_no_matches() {
+        let result =
+            call_config_get("*pass*", &[("requirepass", ""), ("tls-key-file-pass", "")]).await;
+        assert_eq!(
+            result.content[0].as_text(),
+            Some("Configuration (2 parameter(s)):\nrequirepass: \ntls-key-file-pass: ")
+        );
+        let result = call_config_get("synthetic-no-match", &[]).await;
+        assert_eq!(
+            result.content[0].as_text(),
+            Some("No configuration parameters matching 'synthetic-no-match'")
+        );
+    }
+}
