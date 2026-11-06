@@ -1,11 +1,126 @@
 //! Implementation of enterprise alerts commands
 
-use anyhow::Result as AnyhowResult;
-use serde_json::Value;
+use anyhow::{Context, Result as AnyhowResult};
+use serde_json::{Map, Value};
 
 use crate::cli::OutputFormat;
 use crate::connection::ConnectionManager;
 use crate::error::RedisCtlError;
+
+/// One alert source queried by `enterprise alerts list`.
+struct AlertSource {
+    /// Value accepted by `--filter-type`.
+    filter: &'static str,
+    /// Value written to each alert's `type` field.
+    type_tag: &'static str,
+    /// REST route listing every alert state for this source.
+    path: &'static str,
+    /// `true` when the response is keyed by entity UID, then alert name
+    /// (`{"1": {"node_cpu_utilization": {...}}}`). `false` when it is keyed
+    /// by alert name only (`{"cluster_node_down": {...}}`).
+    per_entity: bool,
+}
+
+/// Response shapes follow the Redis Software REST API reference for
+/// `GET /v1/cluster/alerts`, `GET /v1/nodes/alerts` and `GET /v1/bdbs/alerts`.
+const ALERT_SOURCES: [AlertSource; 3] = [
+    AlertSource {
+        filter: "cluster",
+        type_tag: "cluster",
+        path: "/v1/cluster/alerts",
+        per_entity: false,
+    },
+    AlertSource {
+        filter: "node",
+        type_tag: "node",
+        path: "/v1/nodes/alerts",
+        per_entity: true,
+    },
+    AlertSource {
+        filter: "bdb",
+        type_tag: "database",
+        path: "/v1/bdbs/alerts",
+        per_entity: true,
+    },
+];
+
+/// Flatten one source's alert map into a list of alert records.
+///
+/// Each record carries `type`, the alert `name` (the map key) and, for node
+/// and database alerts, `entity_uid` (the node or database UID map key),
+/// followed by the alert state fields as the server returned them.
+fn flatten_alerts(source: &AlertSource, response: Value) -> AnyhowResult<Vec<Value>> {
+    let Value::Object(map) = response else {
+        anyhow::bail!(
+            "Unexpected response from {}: expected a JSON object, got {}",
+            source.path,
+            json_kind(&response)
+        );
+    };
+
+    let mut alerts = Vec::new();
+    if source.per_entity {
+        for (entity_uid, entity_alerts) in map {
+            let Value::Object(entity_alerts) = entity_alerts else {
+                anyhow::bail!(
+                    "Unexpected response from {}: expected an object of alerts for UID {}, got {}",
+                    source.path,
+                    entity_uid,
+                    json_kind(&entity_alerts)
+                );
+            };
+            for (name, state) in entity_alerts {
+                alerts.push(alert_record(source, name, Some(&entity_uid), state)?);
+            }
+        }
+    } else {
+        for (name, state) in map {
+            alerts.push(alert_record(source, name, None, state)?);
+        }
+    }
+    Ok(alerts)
+}
+
+fn alert_record(
+    source: &AlertSource,
+    name: String,
+    entity_uid: Option<&str>,
+    state: Value,
+) -> AnyhowResult<Value> {
+    let Value::Object(fields) = state else {
+        anyhow::bail!(
+            "Unexpected response from {}: expected an object for alert {}, got {}",
+            source.path,
+            name,
+            json_kind(&state)
+        );
+    };
+
+    let mut record = Map::new();
+    record.insert(
+        "type".to_string(),
+        Value::String(source.type_tag.to_string()),
+    );
+    record.insert("name".to_string(), Value::String(name));
+    if let Some(uid) = entity_uid {
+        record.insert("entity_uid".to_string(), Value::String(uid.to_string()));
+    }
+    for (key, value) in fields {
+        record.entry(key).or_insert(value);
+    }
+    Ok(Value::Object(record))
+}
+
+fn json_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "a boolean",
+        Value::Number(_) => "a number",
+        Value::String(_) => "a string",
+        Value::Array(_) => "an array",
+        Value::Object(_) => "an object",
+    }
+}
 
 pub async fn list_alerts(
     conn_mgr: &ConnectionManager,
@@ -15,51 +130,31 @@ pub async fn list_alerts(
     output_format: OutputFormat,
     query: Option<&str>,
 ) -> AnyhowResult<()> {
+    if let Some(filter) = filter_type
+        && !ALERT_SOURCES.iter().any(|source| source.filter == filter)
+    {
+        anyhow::bail!(
+            "Unknown alert type '{}': expected one of cluster, node, bdb",
+            filter
+        );
+    }
+
     let client = conn_mgr.create_enterprise_client(profile_name).await?;
 
-    // Get alerts from all sources and combine
+    // Get alerts from every selected source and combine them. A failed
+    // request fails the command rather than silently dropping that source.
     let mut all_alerts = Vec::new();
-
-    // Get cluster alerts
-    if (filter_type.is_none() || filter_type == Some("cluster"))
-        && let Ok(cluster_alerts) = client.get::<Value>("/v1/cluster/alerts").await
-        && let Some(alerts) = cluster_alerts.as_array()
-    {
-        for alert in alerts {
-            let mut alert = alert.clone();
-            if let Some(obj) = alert.as_object_mut() {
-                obj.insert("type".to_string(), Value::String("cluster".to_string()));
-            }
-            all_alerts.push(alert);
+    for source in &ALERT_SOURCES {
+        if filter_type.is_some_and(|filter| filter != source.filter) {
+            continue;
         }
-    }
-
-    // Get node alerts
-    if (filter_type.is_none() || filter_type == Some("node"))
-        && let Ok(node_alerts) = client.get::<Value>("/v1/nodes/alerts").await
-        && let Some(alerts) = node_alerts.as_array()
-    {
-        for alert in alerts {
-            let mut alert = alert.clone();
-            if let Some(obj) = alert.as_object_mut() {
-                obj.insert("type".to_string(), Value::String("node".to_string()));
-            }
-            all_alerts.push(alert);
-        }
-    }
-
-    // Get database alerts
-    if (filter_type.is_none() || filter_type == Some("bdb"))
-        && let Ok(bdb_alerts) = client.get::<Value>("/v1/bdbs/alerts").await
-        && let Some(alerts) = bdb_alerts.as_array()
-    {
-        for alert in alerts {
-            let mut alert = alert.clone();
-            if let Some(obj) = alert.as_object_mut() {
-                obj.insert("type".to_string(), Value::String("database".to_string()));
-            }
-            all_alerts.push(alert);
-        }
+        let response = client.get::<Value>(source.path).await.with_context(|| {
+            format!(
+                "Failed to list {} alerts from {}",
+                source.type_tag, source.path
+            )
+        })?;
+        all_alerts.extend(flatten_alerts(source, response)?);
     }
 
     // Filter by severity if specified
