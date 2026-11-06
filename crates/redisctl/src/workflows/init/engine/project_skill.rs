@@ -477,6 +477,16 @@ pub(crate) fn refuse_unreadable(cwd: &Path) -> Result<(), InitError> {
     read_for_planning(cwd, &rel()).map(drop)
 }
 
+/// Validate the Unix link destination before apply can write the env files.
+pub(crate) fn refuse_link_parents(cwd: &Path) -> Result<(), InitError> {
+    // A whole-directory symlink is deliberately left to Claude's discovery, and
+    // Windows skips link creation. Keep those existing behaviors unchanged.
+    if cfg!(unix) && !cwd.join(".claude/skills").is_symlink() {
+        super::env::refuse_non_directory_parents(cwd, &format!(".claude/skills/{NAME}"))?;
+    }
+    Ok(())
+}
+
 fn plan_file(cwd: &Path, facts: &SkillFacts) -> Result<FileAction, InitError> {
     let rel = rel();
     let existing = read_for_planning(cwd, &rel)?;

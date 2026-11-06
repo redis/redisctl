@@ -5,14 +5,16 @@
   "license": "MIT OR Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/redis/redisctl",
+    "url": "git+https://github.com/redis/redisctl.git",
     "directory": "npm/redisctl"
   },
   "bin": {
     "redisctl": "bin/redisctl.js"
   },
   "files": [
-    "bin"
+    "bin",
+    "LICENSE-APACHE",
+    "LICENSE-MIT"
   ],
   "engines": {
     "node": ">=18"
