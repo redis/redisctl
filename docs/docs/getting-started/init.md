@@ -33,7 +33,12 @@ redisctl init              # apply it
    via the standard skills CLI, a generated `redis-project-setup` skill carrying this
    project's specific facts, and a credential-free `redis` MCP server registration
    per agent config.
-5. **Proves it works**: a live PING and SET/GET round trip.
+5. **Proves it works**: a live PING and SET/GET round trip on a per-run
+   `redisctl:selfcheck:<uuid>` key. SET uses NX to avoid overwriting an existing key
+   and a 60-second TTL. init attempts DEL after GET, including command refusals;
+   if cleanup is denied or the connection drops, the TTL removes the key.
+   Validation requires write access. Command refusals such as NOPERM, READONLY,
+   OOM and Cluster redirects get their own remedies, rather than stale-URL advice.
 
 Re-running with the same choices preserves the existing setup. An explicit database
 choice replaces `REDIS_URL`; other env values are kept, including placeholders
@@ -120,7 +125,7 @@ Built on the standard `redisctl` [exit codes](../reference/agent-error-codes.md#
 | 7 | Redis Cloud conflict: a paid `redisctl-<name>` subscription, the free plan already used up, a quota reached |
 | 8 | any other Redis Cloud API or server error |
 | 9 | Redis Cloud rate limit |
-| 10 | the database cannot be reached (for a stale `.env` value, the message names it) |
+| 10 | database validation failed: connection/DNS failure, a refused self-check command, or an unsuccessful PING or SET/GET round trip |
 | 12 | cancelled at a wizard question or the Cloud picker |
 
 A failure inside the browser sign-in itself comes from `redisctl cloud auth login`
