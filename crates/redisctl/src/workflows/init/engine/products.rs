@@ -469,6 +469,20 @@ mod tests {
         assert!(matches!(err, InitError::InsecureProductEndpoint { .. }));
     }
 
+    #[test]
+    fn insecure_endpoint_error_masks_the_password() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".env"),
+            "CONTEXT_RETRIEVER_MCP_URL=http://user:s3cret@mcp.example.com\nCONTEXT_RETRIEVER_AGENT_KEY=k\n",
+        )
+        .unwrap();
+        let err = wire_one(dir.path(), &SPECS[2], None, None, &|_: &str| None).unwrap_err();
+        let msg = err.to_string();
+        assert!(!msg.contains("s3cret"), "{msg}");
+        assert!(msg.contains("user:****@mcp.example.com"), "{msg}");
+    }
+
     #[tokio::test]
     async fn validation_does_not_follow_redirects_with_the_api_key() {
         use wiremock::matchers::any;

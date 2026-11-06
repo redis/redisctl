@@ -75,7 +75,8 @@ pub enum InitError {
     ProductIncomplete { label: String, needed: String },
 
     #[error(
-        "{label} endpoint must use https:// (plain http is only allowed for localhost), got {url}."
+        "{label} endpoint must use https:// (plain http is only allowed for localhost), got {}.",
+        mask_url(.url)
     )]
     InsecureProductEndpoint { label: String, url: String },
 
