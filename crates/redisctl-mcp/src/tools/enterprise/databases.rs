@@ -41,8 +41,20 @@ mcp_module! {
 // Database Read Operations
 // ============================================================================
 
+fn redact_database_credentials<T: serde::Serialize>(database: &T) -> tower_mcp::Result<Value> {
+    let value =
+        serde_json::to_value(database).tool_context("Failed to format database response")?;
+    let fields = [
+        "authentication_redis_pass",
+        "authentication_admin_pass",
+        "authentication_sasl_pass",
+    ]
+    .map(str::to_string);
+    Ok(crate::audit::redact_response_value(&value, &fields))
+}
+
 enterprise_tool!(read_only, list_databases, "list_enterprise_databases",
-    "List all databases. Supports filtering by name and status.",
+    "List all databases. Supports filtering by name and status. Credential values are redacted.",
     {
         /// Optional filter by database name (case-insensitive substring match)
         #[serde(default)]
@@ -79,12 +91,14 @@ enterprise_tool!(read_only, list_databases, "list_enterprise_databases",
             })
             .collect();
 
-        CallToolResult::from_list("databases", &filtered)
+        let redacted = filtered.iter().map(redact_database_credentials)
+            .collect::<tower_mcp::Result<Vec<_>>>()?;
+        CallToolResult::from_list("databases", &redacted)
     }
 );
 
 enterprise_tool!(read_only, get_database, "get_enterprise_database",
-    "Get database details by UID.",
+    "Get database details by UID. Credential values are redacted.",
     {
         /// Database UID
         pub uid: u32,
@@ -95,7 +109,7 @@ enterprise_tool!(read_only, get_database, "get_enterprise_database",
             .await
             .tool_context("Failed to get database")?;
 
-        CallToolResult::from_serialize(&database)
+        CallToolResult::from_serialize(&redact_database_credentials(&database)?)
     }
 );
 
