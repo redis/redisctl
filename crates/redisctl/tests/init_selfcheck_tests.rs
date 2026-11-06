@@ -13,6 +13,7 @@ enum Reply {
     RefuseGet,
     Mismatch,
     RefuseDel,
+    StallGet,
 }
 
 struct Fixture {
@@ -66,6 +67,9 @@ impl Fixture {
                         args.push(String::from_utf8(bytes[..len].to_vec()).unwrap());
                     }
                     seen.lock().unwrap().push(args.clone());
+                    if matches!(reply, Reply::StallGet) && args[0] == "GET" {
+                        continue;
+                    }
                     let mut values = data.lock().unwrap();
                     let response = match args[0].as_str() {
                         "HELLO" => "-ERR unknown command 'HELLO'\r\n".into(),
@@ -251,5 +255,16 @@ fn denied_cleanup_uses_ttl_fallback_without_failing_validation() {
             .iter()
             .any(|c| c[0] == "DEL")
     );
+    assert_eq!(fixture.values.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn get_transport_timeout_uses_ttl_without_another_cleanup_timeout() {
+    let fixture = Fixture::new(Reply::StallGet);
+    let output = fixture.init();
+    assert_eq!(output.status.code(), Some(10), "{output:?}");
+    let commands = fixture.commands.lock().unwrap();
+    assert!(commands.iter().any(|c| c[0] == "GET"));
+    assert!(!commands.iter().any(|c| c[0] == "DEL"));
     assert_eq!(fixture.values.lock().unwrap().len(), 2);
 }

@@ -35,7 +35,7 @@ redisctl init              # apply it
    per agent config.
 5. **Proves it works**: a live PING and SET/GET round trip on a per-run
    `redisctl:selfcheck:<uuid>` key. SET uses NX to avoid overwriting an existing key
-   and a 60-second TTL. init attempts DEL after GET, including when GET fails;
+   and a 60-second TTL. init attempts DEL after GET, including command refusals;
    if cleanup is denied or the connection drops, the TTL removes the key.
    Validation requires write access. Command refusals such as NOPERM, READONLY,
    OOM and Cluster redirects get their own remedies, rather than stale-URL advice.

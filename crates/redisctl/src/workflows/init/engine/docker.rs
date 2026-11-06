@@ -611,12 +611,15 @@ pub async fn validate(url: &str) -> Result<(), ValidationError> {
     }
     let got: redis::RedisResult<Option<String>> =
         redis::cmd("GET").arg(&key).query_async(&mut conn).await;
-    // Only SET NX success reaches cleanup, including when GET fails. A refused
-    // DEL does not invalidate the round trip: EX remains the cleanup fallback.
-    let _ = redis::cmd("DEL")
-        .arg(&key)
-        .query_async::<u64>(&mut conn)
-        .await;
+    // Clean up only after SET NX success. A GET transport failure leaves EX as
+    // the fallback rather than adding another response timeout on a broken
+    // connection. Command refusals still permit a best-effort DEL.
+    if !matches!(&got, Err(error) if error.is_io_error()) {
+        let _ = redis::cmd("DEL")
+            .arg(&key)
+            .query_async::<u64>(&mut conn)
+            .await;
+    }
     let got = got.map_err(|e| ValidationError::redis("GET", e))?;
     if got.as_deref() != Some(value.as_str()) {
         return Err(ValidationError::Unexpected("SET/GET round trip failed"));
