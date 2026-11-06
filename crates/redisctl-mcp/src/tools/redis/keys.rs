@@ -59,10 +59,12 @@ database_tool!(read_only, keys, "redis_keys",
         /// Key pattern to match (default: "*")
         #[serde(default = "default_pattern")]
         pub pattern: String,
-        /// Maximum number of keys to return (default: 100)
+        /// Maximum number of keys to return (default: 100, must be at least 1)
         #[serde(default = "default_limit", deserialize_with = "serde_helpers::string_or_usize::deserialize")]
         pub limit: usize,
     } => |conn, input| {
+        super::require_positive_limit(input.limit).map_err(tower_mcp::Error::tool)?;
+
         // Use SCAN to safely iterate keys
         let mut cursor: u64 = 0;
         let mut all_keys: Vec<String> = Vec::new();
@@ -113,10 +115,12 @@ database_tool!(read_only, scan, "redis_scan",
         /// Filter by key type (e.g., "string", "list", "set", "zset", "hash", "stream")
         #[serde(default)]
         pub key_type: Option<String>,
-        /// Maximum number of keys to return (default: 100)
+        /// Maximum number of keys to return (default: 100, must be at least 1)
         #[serde(default = "default_limit", deserialize_with = "serde_helpers::string_or_usize::deserialize")]
         pub limit: usize,
     } => |conn, input| {
+        super::require_positive_limit(input.limit).map_err(tower_mcp::Error::tool)?;
+
         let mut cursor: u64 = 0;
         let mut all_keys: Vec<String> = Vec::new();
 

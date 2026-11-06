@@ -412,7 +412,8 @@ description: >-
 
 # Redis setup in this project
 
-Set up by `redisctl init`; re-running it is safe and never clobbers existing content.
+Set up by `redisctl init`. Re-running it is safe, but it regenerates this file, so keep
+hand-written notes in another file.
 Every credential lives in `.env` and nowhere else - not in code, not in a committed
 file.
 {database}{products}{iris}"#,
@@ -474,6 +475,16 @@ fn rel() -> String {
 /// Refuse a skill file that exists but cannot be read, before anything is written.
 pub(crate) fn refuse_unreadable(cwd: &Path) -> Result<(), InitError> {
     read_for_planning(cwd, &rel()).map(drop)
+}
+
+/// Validate the Unix link destination before apply can write the env files.
+pub(crate) fn refuse_link_parents(cwd: &Path) -> Result<(), InitError> {
+    // A whole-directory symlink is deliberately left to Claude's discovery, and
+    // Windows skips link creation. Keep those existing behaviors unchanged.
+    if cfg!(unix) && !cwd.join(".claude/skills").is_symlink() {
+        super::env::refuse_non_directory_parents(cwd, &format!(".claude/skills/{NAME}"))?;
+    }
+    Ok(())
 }
 
 fn plan_file(cwd: &Path, facts: &SkillFacts) -> Result<FileAction, InitError> {

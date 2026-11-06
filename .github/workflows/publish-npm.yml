@@ -1,0 +1,54 @@
+name: Publish npm wrapper
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: cargo-dist plan JSON
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish-npm:
+    if: ${{ startsWith(fromJson(inputs.plan).announcement_tag, 'redisctl-v') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Trusted publishing needs npm 11.5.1 or later, which current Node 24
+      # releases ship.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      # npm signs in with the workflow's OIDC token and adds provenance, so the
+      # package's trusted publisher on npmjs.com must name release.yml, the
+      # workflow that calls this one.
+      - name: Publish @redis/redisctl
+        env:
+          TAG: ${{ fromJson(inputs.plan).announcement_tag }}
+        run: |
+          VERSION="${TAG#redisctl-v}"
+          if ! out=$(npm view @redis/redisctl name 2>&1); then
+            if [[ "$out" == *E404* ]]; then
+              echo "::notice::@redis/redisctl is not on npm yet, so $VERSION is not published - the first version is published by hand"
+              exit 0
+            fi
+            echo "$out"
+            exit 1
+          fi
+          if npm view "@redis/redisctl@$VERSION" version > /dev/null 2>&1; then
+            echo "::notice::@redis/redisctl $VERSION is already published"
+            exit 0
+          fi
+          cp LICENSE-MIT LICENSE-APACHE npm/redisctl/
+          cd npm/redisctl
+          npm pkg set version="$VERSION"
+          npm test
+          npm publish --access public

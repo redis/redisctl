@@ -137,6 +137,28 @@ This pre-1.0 decision does not weaken the 1.x compatibility rules above. Release
 the change keep their existing behavior; check the release notes and discovered schemas when
 upgrading.
 
+### Credential values in database read responses
+
+Enterprise `list_enterprise_databases` and `get_enterprise_database` now replace populated
+`authentication_redis_pass`, `authentication_admin_pass`, and `authentication_sasl_pass` values
+with `[REDACTED]` before constructing either MCP text or structured content. Database identifiers,
+health/security flags, usernames, filtering and result counts remain available. Null and empty
+credential values retain their existing representation, so an unset credential is not reported
+as a populated one. Existing nested credential-name and Redis URL redaction is also applied.
+
+`redis_config_get` similarly redacts populated `requirepass`, `masterauth`, `tls-key-file-pass`,
+and `tls-client-key-file-pass` values. Redaction uses the returned parameter names, including
+wildcard results; parameter labels/counts, empty values and non-secret configuration values
+remain available. These names cover the sensitive password/passphrase parameters in Redis 8.2;
+they are not a promise that arbitrary module configuration or all future parameters are safe.
+
+This is intentional output-compatibility tightening. Clients must treat `[REDACTED]` as a display
+marker, never as a reusable credential. Workflows that previously retrieved credentials through
+these MCP reads must use a separate authorized credential-management channel. There is no
+model-visible secret-display override. This change does not modify CLI/API-client output,
+credential storage, audit behavior, tool schemas, policy tiers or connection selection, nor does
+it certify other read-only tools or raw API responses as secret-free.
+
 ### Security exception: arbitrary Redis command surfaces
 
 `redis_alias_run` was previously advertised as read-only and idempotent, and `redis_bulk_load` as

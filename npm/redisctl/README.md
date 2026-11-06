@@ -52,15 +52,34 @@ cargo install redisctl
 It never runs redisctl through a shell, so pasted connection URLs with `&`, `|`,
 `^` or spaces stay single arguments on every platform.
 
-## Publishing checklist
+## Publishing
 
-1. Publish from the release workflow, after the GitHub release exists, with this
-   package's `version` set to the release version: the wrapper downloads the
-   installer of the release with its own version.
-2. Include the repository LICENSE files in the tarball (`files` ships `bin/` only).
-3. `npm publish --tag alpha` for a dress rehearsal, then promote to `latest`.
+The release workflow publishes this package for each `redisctl-v*` release, after
+the GitHub release exists, with `version` set to the release version: the wrapper
+downloads the installer of the release with its own version. The tarball carries
+the repository LICENSE files. The job signs in to npm with
+[trusted publishing](https://docs.npmjs.com/trusted-publishers), so no npm token
+is stored, and npm adds provenance.
 
-Publish only a version whose release has the `init` command.
+npm takes a trusted publisher only for a package that exists, so the job skips
+until the first version is on npm. Set it up just before a release, since a
+release between steps 1 and 2 fails the npm job:
+
+1. From an account that can publish to `@redis`, in this directory, publish a
+   released version by hand:
+
+   ```sh
+   cp ../../LICENSE-MIT ../../LICENSE-APACHE .
+   npm pkg set version=<released version>
+   npm publish --access public
+   git checkout package.json && rm LICENSE-MIT LICENSE-APACHE
+   ```
+
+2. In the `@redis/redisctl` settings on npmjs.com, add a GitHub Actions trusted
+   publisher: organization `redis`, repository `redisctl`, workflow
+   `release.yml`. npm checks the workflow that calls `publish-npm.yml`.
+3. Release within 2 days. A trusted publisher that publishes nothing in 2 days
+   expires and must be added again.
 
 Test the wrapper itself with `npm pack` +
 `npx --yes --package=./redis-redisctl-0.0.0.tgz redisctl init --dry-run` against

@@ -105,17 +105,53 @@ async fn empty_jsonpath_reply_reports_no_increment_without_claiming_a_missing_ke
 }
 
 #[tokio::test]
+async fn null_only_jsonpath_replies_report_no_numeric_matches() {
+    let mut mismatches = Vec::new();
+    for path in [Some("$.n"), Some("$..n"), None] {
+        for payload in ["[null]", "[null,null]", " \n[ null , null ]\t"] {
+            let mut input = json!({"key": "synthetic", "value": 2});
+            if let Some(path) = path {
+                input["path"] = json!(path);
+            }
+            let result = call_tool(input, bulk_reply(payload)).await;
+            assert!(
+                !result.is_error,
+                "non-numeric matches are not server errors: {result:?}"
+            );
+            assert_eq!(result.content.len(), 1);
+            let expected = format!(
+                "Nothing incremented: path '{}' matched no numeric values",
+                path.unwrap_or("$")
+            );
+            if result.content[0].as_text() != Some(expected.as_str()) {
+                mismatches.push((
+                    path,
+                    payload,
+                    result.content[0].as_text().map(str::to_owned),
+                ));
+            }
+        }
+    }
+    assert!(
+        mismatches.is_empty(),
+        "incorrect no-op output: {mismatches:?}"
+    );
+}
+
+#[tokio::test]
 async fn nonempty_and_legacy_replies_preserve_original_text_and_argument_defaults() {
     for (path, payload) in [
         (Some("$..a"), " [null,4,7,null] "),
         (Some("$.n"), "[0]"),
-        (Some("$.n"), "[null]"),
+        (Some("$.n"), "[null,0]"),
         (Some("$.n"), "null"),
         (Some("$.n"), "\"[]\""),
+        (Some("$.n"), "\"[null]\""),
         (Some("$.n"), "["),
         (Some(".n"), "42"),
         (Some(".n"), "1.25e+3"),
         (Some(".n"), "[]"),
+        (Some(".n"), "[null]"),
         (None, "[3]"),
     ] {
         let mut input = json!({"key": "synthetic", "value": 2});
