@@ -1028,6 +1028,53 @@ async fn test_cloud_database_modules() {
 }
 
 #[tokio::test]
+async fn test_cloud_database_list_warns_when_subscription_fetch_fails() {
+    let temp_dir = TempDir::new().unwrap();
+    let mock_server = MockServer::start().await;
+
+    create_cloud_profile(&temp_dir, &mock_server.uri()).unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "subscriptions": [
+                {"id": 1, "name": "sub-ok"},
+                {"id": 2, "name": "sub-broken"}
+            ]
+        })))
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/fixed/subscriptions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"subscriptions": []})))
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/1/databases"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!([{"databaseId": 11, "name": "db-ok"}])),
+        )
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/2/databases"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(json!({"error": "forbidden"})))
+        .mount(&mock_server)
+        .await;
+
+    test_cmd(&temp_dir)
+        .args(["-o", "json", "cloud", "database", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("db-ok"))
+        .stderr(predicate::str::contains("subscription 2"))
+        .stderr(predicate::str::contains("sub-broken"));
+}
+
+#[tokio::test]
 async fn test_enterprise_crdb_operations() {
     let temp_dir = TempDir::new().unwrap();
     let mock_server = MockServer::start().await;
