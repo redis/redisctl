@@ -907,3 +907,31 @@ mod line_tests {
         assert_eq!(note, "LANGCACHE_API_KEY filled in");
     }
 }
+
+#[cfg(all(test, unix))]
+mod atomic_tests {
+    use super::*;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    #[test]
+    fn init_replaces_existing_env_atomically() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".env");
+        std::fs::write(&path, "OTHER_SECRET=keep\nREDIS_URL=old\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let original = std::fs::File::open(&path).unwrap();
+        let content = "OTHER_SECRET=keep\nREDIS_URL=new\n";
+        FileAction::Write {
+            rel: ".env".into(),
+            content: content.into(),
+            status: Status::Updated,
+            note: String::new(),
+        }
+        .perform(dir.path())
+        .unwrap();
+        let metadata = std::fs::metadata(&path).unwrap();
+        assert_ne!(original.metadata().unwrap().ino(), metadata.ino());
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o640);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
+    }
+}

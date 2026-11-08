@@ -6,6 +6,7 @@
 //! dependency on the API layer so it can be unit-tested in isolation.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
@@ -260,9 +261,24 @@ fn upsert_vars(original: &str, vars: &[(&str, &str)]) -> (String, bool) {
     (out, replaced_any)
 }
 
+#[cfg(unix)]
 fn write_new_private(path: &Path, contents: &str) -> Result<(), DeliveryError> {
-    crate::atomic_file::write_atomic(path, contents.as_bytes(), true)
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|e| DeliveryError::io(path, e))?;
+    file.write_all(contents.as_bytes())
         .map_err(|e| DeliveryError::io(path, e))
+}
+
+// Windows has no POSIX mode bits; create the file normally and rely on the user profile's
+// ACLs. Documented limitation (PRD §5.3).
+#[cfg(not(unix))]
+fn write_new_private(path: &Path, contents: &str) -> Result<(), DeliveryError> {
+    fs::write(path, contents).map_err(|e| DeliveryError::io(path, e))
 }
 
 /// Tighten an existing credentials file to owner-only on Unix.
