@@ -1,7 +1,6 @@
 //! The `.env` / `.gitignore` contract: mutations are decided read-only at plan time
 //! and performed at apply time, so a dry run renders exactly what a real run does.
 
-use std::io::Write;
 use std::path::Path;
 
 use crate::workflows::init::engine::InitError;
@@ -50,15 +49,7 @@ impl FileAction {
                     message: e.to_string(),
                 })?;
             }
-            let mut file = std::fs::OpenOptions::new();
-            file.write(true).create(true).truncate(true);
-            // Applies only when the file is created; an existing .env keeps its mode.
-            #[cfg(unix)]
-            if rel == ".env" {
-                std::os::unix::fs::OpenOptionsExt::mode(&mut file, 0o600);
-            }
-            file.open(&path)
-                .and_then(|mut file| file.write_all(content.as_bytes()))
+            redisctl_core::atomic_file::write_atomic(&path, content.as_bytes(), rel == ".env")
                 .map_err(|e| InitError::WriteFailed {
                     rel: rel.clone(),
                     message: e.to_string(),
