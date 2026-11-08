@@ -6,7 +6,7 @@
 //! dependency on the API layer so it can be unit-tested in isolation.
 
 use std::fs;
-use std::io::Write;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
@@ -281,7 +281,7 @@ fn write_new_private(path: &Path, contents: &str) -> Result<(), DeliveryError> {
     fs::write(path, contents).map_err(|e| DeliveryError::io(path, e))
 }
 
-/// Tighten an existing credentials file to owner-only on Unix.
+/// Tighten an existing credentials file to owner-only (`0o600`) on unix. No-op elsewhere.
 #[cfg(unix)]
 fn restrict_permissions(path: &Path) -> Result<(), DeliveryError> {
     use std::os::unix::fs::PermissionsExt;
