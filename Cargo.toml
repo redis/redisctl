@@ -49,6 +49,10 @@ install-updater = false
 publish-jobs = ["./update-homebrew", "./publish-npm"]
 github-custom-job-permissions = { "update-homebrew" = { contents = "read" }, "publish-npm" = { contents = "read", id-token = "write" } }
 
+[workspace.metadata.dist.github-custom-runners]
+# GitHub no longer accepts the macos-14 label that dist 0.32 picks by default.
+aarch64-apple-darwin = "macos-15"
+
 [workspace.metadata.dist.github-action-commits]
 # Dependabot updates the generated workflow references. Copy those revisions
 # here and rerun `dist generate --mode ci` so this remains the source of truth.
