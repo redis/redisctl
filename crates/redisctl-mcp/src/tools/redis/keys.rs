@@ -3,6 +3,8 @@
 //! unlink, copy, dump, restore, randomkey, touch, incr, decr, append, strlen, getrange, setrange,
 //! setnx)
 
+use std::collections::HashSet;
+
 use tower_mcp::CallToolResult;
 
 use super::RedisResultExt;
@@ -53,6 +55,32 @@ fn default_limit() -> usize {
     100
 }
 
+/// Append SCAN results to `all_keys`, skipping keys already seen. SCAN may return the
+/// same key more than once across iterations, so duplicates must not count toward `limit`.
+fn extend_unique(all_keys: &mut Vec<String>, seen: &mut HashSet<String>, page: Vec<String>) {
+    for key in page {
+        if seen.insert(key.clone()) {
+            all_keys.push(key);
+        }
+    }
+}
+
+/// Truncate to `limit` and report whether more keys may exist (the scan did not finish,
+/// or collected keys were dropped by the truncation).
+fn finish_scan(all_keys: &mut Vec<String>, limit: usize, cursor: u64) -> bool {
+    let truncated = all_keys.len() > limit;
+    all_keys.truncate(limit);
+    truncated || cursor != 0
+}
+
+/// Hint appended to results when the listing is incomplete.
+fn more_keys_note(limit: usize) -> String {
+    format!(
+        "\n\nShowing the first {} key(s); more may exist. Raise `limit` or narrow the pattern to see them.",
+        limit
+    )
+}
+
 database_tool!(read_only, keys, "redis_keys",
     "List keys matching a pattern using SCAN (production-safe, non-blocking).",
     {
@@ -68,6 +96,7 @@ database_tool!(read_only, keys, "redis_keys",
         // Use SCAN to safely iterate keys
         let mut cursor: u64 = 0;
         let mut all_keys: Vec<String> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
 
         loop {
             let (new_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
@@ -80,7 +109,7 @@ database_tool!(read_only, keys, "redis_keys",
                 .await
                 .tool_context("SCAN failed")?;
 
-            all_keys.extend(keys);
+            extend_unique(&mut all_keys, &mut seen, keys);
             cursor = new_cursor;
 
             if cursor == 0 || all_keys.len() >= input.limit {
@@ -88,18 +117,21 @@ database_tool!(read_only, keys, "redis_keys",
             }
         }
 
-        // Truncate to limit
-        all_keys.truncate(input.limit);
+        let more = finish_scan(&mut all_keys, input.limit, cursor);
 
         let output = if all_keys.is_empty() {
             format!("No keys found matching pattern '{}'", input.pattern)
         } else {
-            format!(
+            let mut out = format!(
                 "Found {} key(s) matching '{}'\n\n{}",
                 all_keys.len(),
                 input.pattern,
                 all_keys.join("\n")
-            )
+            );
+            if more {
+                out.push_str(&more_keys_note(input.limit));
+            }
+            out
         };
 
         Ok(CallToolResult::text(output))
@@ -123,6 +155,7 @@ database_tool!(read_only, scan, "redis_scan",
 
         let mut cursor: u64 = 0;
         let mut all_keys: Vec<String> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
 
         loop {
             let mut cmd = redis::cmd("SCAN");
@@ -142,7 +175,7 @@ database_tool!(read_only, scan, "redis_scan",
                 .await
                 .tool_context("SCAN failed")?;
 
-            all_keys.extend(keys);
+            extend_unique(&mut all_keys, &mut seen, keys);
             cursor = new_cursor;
 
             if cursor == 0 || all_keys.len() >= input.limit {
@@ -150,7 +183,7 @@ database_tool!(read_only, scan, "redis_scan",
             }
         }
 
-        all_keys.truncate(input.limit);
+        let more = finish_scan(&mut all_keys, input.limit, cursor);
 
         let type_info = input
             .key_type
@@ -164,13 +197,17 @@ database_tool!(read_only, scan, "redis_scan",
                 type_info, input.pattern
             )
         } else {
-            format!(
+            let mut out = format!(
                 "Found {} key(s){} matching '{}'\n\n{}",
                 all_keys.len(),
                 type_info,
                 input.pattern,
                 all_keys.join("\n")
-            )
+            );
+            if more {
+                out.push_str(&more_keys_note(input.limit));
+            }
+            out
         };
 
         Ok(CallToolResult::text(output))
@@ -931,3 +968,48 @@ database_tool!(write, setnx, "redis_setnx",
         }
     }
 );
+
+#[cfg(test)]
+mod scan_tests {
+    use super::*;
+
+    fn keys(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn extend_unique_skips_repeated_keys() {
+        let mut all = Vec::new();
+        let mut seen = HashSet::new();
+        extend_unique(&mut all, &mut seen, keys(&["a", "b"]));
+        extend_unique(&mut all, &mut seen, keys(&["b", "c", "a"]));
+        assert_eq!(all, keys(&["a", "b", "c"]));
+    }
+
+    #[test]
+    fn finish_scan_reports_more_when_truncated() {
+        let mut all = keys(&["a", "b", "c"]);
+        assert!(finish_scan(&mut all, 2, 0));
+        assert_eq!(all, keys(&["a", "b"]));
+    }
+
+    #[test]
+    fn finish_scan_reports_more_when_cursor_not_exhausted() {
+        let mut all = keys(&["a", "b"]);
+        assert!(finish_scan(&mut all, 2, 17));
+    }
+
+    #[test]
+    fn finish_scan_complete_when_cursor_zero_and_within_limit() {
+        let mut all = keys(&["a", "b"]);
+        assert!(!finish_scan(&mut all, 2, 0));
+        assert_eq!(all, keys(&["a", "b"]));
+    }
+
+    #[test]
+    fn more_keys_note_mentions_limit() {
+        let note = more_keys_note(5);
+        assert!(note.contains("first 5 key(s)"));
+        assert!(note.contains("more may exist"));
+    }
+}
