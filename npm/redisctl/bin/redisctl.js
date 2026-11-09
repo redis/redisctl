@@ -47,8 +47,6 @@ function mapArgs(argv) {
 }
 
 const args = mapArgs(process.argv.slice(2));
-// A redisctl from before init answers it with a usage error.
-const needsInit = args[subcommandIndex(args)] === 'init';
 
 // npm exec exports its flags as npm_config_* to every descendant; the package
 // pinning (`--package=@redis/redisctl`) would make redisctl's own npm/npx calls
@@ -95,14 +93,23 @@ function owned(command) {
   return path.dirname(command) === installDir;
 }
 
+function parseVersion(text) {
+  const match = /^redisctl (\d+)\.(\d+)\.(\d+)/.exec(text);
+  return match && match.slice(1).map(Number);
+}
+const ours = parseVersion(`redisctl ${version}`);
+
 // The wrapper's own copy follows the wrapper's version, since nothing else updates
-// it; a copy the user installed only needs init.
+// it. A copy the user installed runs at this version or newer, so
+// `npx @redis/redisctl@X` never runs a redisctl older than X.
 function usable(command) {
-  if (owned(command)) {
-    const ran = spawnSync(command, ['--version'], { encoding: 'utf8', env });
-    return ran.status === 0 && ran.stdout.trim() === `redisctl ${version}`;
-  }
-  return !needsInit || spawnSync(command, ['init', '--help'], { stdio: 'ignore', env }).status === 0;
+  const ran = spawnSync(command, ['--version'], { encoding: 'utf8', env });
+  const reported = ran.status === 0 ? ran.stdout.trim() : '';
+  if (owned(command)) return reported === `redisctl ${version}`;
+  const theirs = parseVersion(reported);
+  if (!theirs) return false;
+  const first = theirs.findIndex((part, i) => part !== ours[i]);
+  return first === -1 || theirs[first] > ours[first];
 }
 
 function fail(message) {
@@ -167,7 +174,7 @@ async function main() {
         ? `redisctl is not installed - installing redisctl ${version}`
         : owned(found[0])
           ? `updating ${found[0]} to redisctl ${version}`
-          : `${found[0]} has no init command - installing redisctl ${version}; that copy stays as it is`
+          : `${found[0]} is not redisctl ${version} or newer - installing redisctl ${version}; that copy stays as it is`
     );
     command = await install();
   }
