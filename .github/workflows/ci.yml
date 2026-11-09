@@ -50,6 +50,11 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Check experimental plugin generation and packaging
+        run: |
+          python3 plugins/build_plugin.py --check
+          python3 -m unittest discover -s plugins/tests -p 'test_*.py' -v
+
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
@@ -113,6 +118,11 @@ jobs:
 
       - name: Run integration tests
         run: cargo test --workspace --test '*' --all-features
+
+      - name: Run no-credential plugin protocol checks
+        run: |
+          python3 plugins/tests/smoke_stdio.py --binary target/debug/redisctl-mcp --client claude
+          python3 plugins/tests/smoke_stdio.py --binary target/debug/redisctl-mcp --client codex
 
       - name: Install local Redis for the opt-in MCP pilot
         run: sudo apt-get update && sudo apt-get install -y redis-server openssl
