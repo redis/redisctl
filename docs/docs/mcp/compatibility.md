@@ -5,12 +5,12 @@ documented feature set. The all-features catalog is recorded in
 [`mcp-catalog-v1.json`](https://github.com/redis/redisctl/blob/main/crates/redisctl-mcp/tests/fixtures/mcp-catalog-v1.json)
 and checked in CI.
 
-The current all-features baseline contains 377 tools:
+The current all-features baseline contains 376 tools:
 
 | Toolset | Tools |
 | --- | ---: |
 | Cloud | 150 |
-| Enterprise | 85 |
+| Enterprise | 84 |
 | Database | 132 |
 | App/profile | 8 |
 | System | 2 |
@@ -92,7 +92,7 @@ The change in [PR #1225](https://github.com/redis/redisctl/pull/1225) intentiona
 tightens input acceptance before 1.0. Unknown properties in application tool inputs and typed
 nested argument objects now produce an `Invalid input: unknown field ...` error instead of being
 silently ignored. This is a breaking input-acceptance change, not merely an additive schema
-refresh. It affects 375 application/tool inputs in this baseline; the two system tools are
+refresh. It affects application/tool inputs; the two system tools are
 unchanged. It does not change safety tiers or authorize additional operations.
 
 Clients adopting a build with this change should:
@@ -185,6 +185,17 @@ Clients migrating from the earlier catalog should account for these changes:
 
 This exception makes the catalog more restrictive to close an authorization bypass. It does not
 rename or remove a tool or change its input schema.
+
+### Pre-1.0 migration: unsupported alert acknowledgement
+
+`acknowledge_enterprise_alert` is removed from the catalog. Its
+`DELETE /v1/alerts/{uid}` route does not exist in the Enterprise REST API, which has no
+documented alert acknowledgement operation to substitute. This is an intentional breaking
+catalog removal before 1.0.
+
+Clients must refresh `tools/list` and remove calls to this tool from saved workflows. Use
+`list_alerts` to read the current cluster alert states. The remaining Enterprise observability
+tools remain available under their existing policy tiers.
 
 ## Reviewing an intentional catalog change
 

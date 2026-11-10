@@ -87,7 +87,7 @@ The server resolves which toolsets to load in this order:
 | Toolset | Sub-modules | Total Tools |
 |---------|-------------|-------------|
 | `cloud` | `subscriptions`, `account`, `networking`, `fixed`, `provisioning`, `raw` | 150 |
-| `enterprise` | `cluster`, `databases`, `rbac`, `observability`, `proxy`, `services`, `raw` | 85 |
+| `enterprise` | `cluster`, `databases`, `rbac`, `observability`, `proxy`, `services`, `raw` | 84 |
 | `database` | `server`, `keys`, `structures`, `diagnostics`, `json`, `search`, `aliases`, `bulk`, `raw` | 132 |
 | `app` | *(none -- flat toolset)* | 8 |
 | *(system)* | *(always loaded)* | 2 |
@@ -108,7 +108,7 @@ redisctl-mcp --profile my-cloud --tools cloud
 redisctl-mcp --profile my-cloud --tools cloud:subscriptions,cloud:networking
 ```
 
-**Enterprise monitoring** -- cluster info + observability (36 tools + system):
+**Enterprise monitoring** -- cluster info + observability (35 tools + system):
 
 ```bash
 redisctl-mcp --profile my-re --tools enterprise:cluster,enterprise:observability
