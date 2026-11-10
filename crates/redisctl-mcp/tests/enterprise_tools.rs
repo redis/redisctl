@@ -3,13 +3,14 @@
 
 mod support;
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use redis_enterprise::testing::{
     ClusterFixture, DatabaseFixture, LicenseFixture, MockEnterpriseServer, NodeFixture, UserFixture,
 };
 use serde_json::json;
-use tower_mcp::Tool;
+use tower_mcp::{TestClient, Tool};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
@@ -2935,43 +2936,63 @@ async fn test_list_shards_by_node() {
 }
 
 // ============================================================================
-// Alert Write Tests
+// Alert Catalog Tests
 // ============================================================================
 
 #[tokio::test]
-async fn test_acknowledge_enterprise_alert() {
+async fn unsupported_alert_acknowledgement_is_absent_from_discovery_and_invocation() {
     let server = MockEnterpriseServer::start().await;
+    let state = full_policy_state(server.client());
+    let remaining_tools = [
+        "list_alerts",
+        "list_logs",
+        "get_all_nodes_stats",
+        "get_all_databases_stats",
+        "get_shard_stats",
+        "get_all_shards_stats",
+        "list_shards",
+        "get_shard",
+        "list_shards_by_database",
+        "list_shards_by_node",
+        "list_modules",
+        "get_module",
+    ];
 
-    // acknowledge_enterprise_alert uses client.delete(), so the HTTP method is DELETE.
-    Mock::given(method("DELETE"))
-        .and(path("/v1/alerts/high_memory_usage"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
-        .mount(server.inner())
-        .await;
+    let metadata = enterprise::sub_tool_names("observability").unwrap();
+    assert!(!metadata.contains(&"acknowledge_enterprise_alert"));
+    for name in remaining_tools {
+        assert!(
+            metadata.contains(&name),
+            "{name} missing from tool metadata"
+        );
+    }
 
-    let client = server.client();
-    let mut state = AppState::with_enterprise_client(client);
-    state.set_test_policy(AppState::test_write_policy());
-    let state = Arc::new(state);
-    let tool = enterprise::acknowledge_enterprise_alert(state);
+    for router in [
+        enterprise::sub_router("observability", state.clone()).unwrap(),
+        enterprise::router(state),
+    ] {
+        let mut client = TestClient::from_router(router);
+        client.initialize().await;
+        let names = client
+            .list_tools()
+            .await
+            .into_iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_string())
+            .collect::<HashSet<_>>();
+        assert!(!names.contains("acknowledge_enterprise_alert"));
+        for name in remaining_tools {
+            assert!(names.contains(name), "{name} missing from discovery");
+        }
 
-    let result = call_tool_json(&tool, json!({"alert_uid": "high_memory_usage"})).await;
+        let error = client
+            .call_tool_expect_error(
+                "acknowledge_enterprise_alert",
+                json!({"alert_uid": "high_memory_usage"}),
+            )
+            .await
+            .to_string();
+        assert!(error.to_ascii_lowercase().contains("not found"), "{error}");
+    }
 
-    assert!(result.get("message").is_some());
-    assert_eq!(result["alert_uid"], "high_memory_usage");
-}
-
-#[tokio::test]
-async fn test_acknowledge_enterprise_alert_blocked_in_read_only() {
-    let server = MockEnterpriseServer::start().await;
-
-    let state = Arc::new(AppState::with_enterprise_client(server.client()));
-    let tool = enterprise::acknowledge_enterprise_alert(state);
-
-    let result = tool.call(json!({"alert_uid": "some_alert"})).await;
-
-    assert!(
-        result.is_error,
-        "acknowledge alert should be blocked under read-only policy"
-    );
+    assert!(server.inner().received_requests().await.unwrap().is_empty());
 }

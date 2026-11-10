@@ -83,39 +83,6 @@
       }
     },
     {
-      "name": "acknowledge_enterprise_alert",
-      "toolset": "enterprise",
-      "submodule": "observability",
-      "requiredTier": "read-write",
-      "inputSchema": {
-        "required": [
-          "alert_uid"
-        ],
-        "additionalProperties": false,
-        "type": "object",
-        "properties": {
-          "profile": {
-            "default": null,
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "alert_uid": {
-            "type": "string"
-          }
-        }
-      },
-      "outputSchema": null,
-      "annotations": {
-        "title": null,
-        "readOnlyHint": false,
-        "destructiveHint": false,
-        "idempotentHint": false,
-        "openWorldHint": true
-      }
-    },
-    {
       "name": "add_aa_private_link_principals",
       "toolset": "cloud",
       "submodule": "networking",

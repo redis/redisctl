@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- [**breaking**] Remove `acknowledge_enterprise_alert`, whose Enterprise REST route does not exist. Refresh `tools/list` and remove calls to this tool from saved workflows. Use `list_alerts` to read current cluster alert states.
+
 ## [0.14.0](https://github.com/redis/redisctl/compare/redisctl-mcp-v0.13.0...redisctl-mcp-v0.14.0) - 2026-11-09
 
 ### Added
