@@ -18,7 +18,7 @@ impl Drop for Temporary {
 /// Write through a fresh sibling, sync it, then rename it over the destination.
 /// Existing symlinks are followed so the link itself survives. Callers remain responsible
 /// for deciding which symlinks are allowed. `private` gives new files mode 0600 on Unix;
-/// existing files retain their permissions.
+/// existing files retain their permissions and must be writable.
 pub fn write_atomic(path: &Path, bytes: &[u8], private: bool) -> io::Result<()> {
     write_with(path, private, |file| file.write_all(bytes))
 }
@@ -39,6 +39,8 @@ fn write_with(
             if !metadata.is_file() {
                 return Err(io::Error::other("destination is not a regular file"));
             }
+            // Preserve effective write refusals, including ACLs, without truncating the original.
+            OpenOptions::new().write(true).open(&path)?;
             Some(metadata.permissions())
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
@@ -86,6 +88,82 @@ fn write_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_read_only_destinations_and_symlinks_without_replacing_them() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".env.example");
+        fs::write(&path, "ORIGINAL=keep\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
+        let link = dir.path().join("link");
+        symlink(".env.example", &link).unwrap();
+
+        for destination in [&path, &link] {
+            let error = write_atomic(destination, b"replacement", false).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+            assert_eq!(fs::read(&path).unwrap(), b"ORIGINAL=keep\n");
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o444
+            );
+            assert!(
+                fs::symlink_metadata(&link)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replaces_write_only_destinations_and_preserves_their_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("target");
+        fs::write(&path, "original").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o200)).unwrap();
+        write_atomic(&path, b"replacement", false).unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o200
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"replacement");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn refuses_acl_denied_writes_without_replacing_the_destination() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("target");
+        fs::write(&path, "original").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(
+            std::process::Command::new("/bin/chmod")
+                .args(["+a", "everyone deny write"])
+                .arg(&path)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+        let error = write_atomic(&path, b"replacement", false).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
 
     #[test]
     fn failed_write_preserves_original_and_cleans_up() {
