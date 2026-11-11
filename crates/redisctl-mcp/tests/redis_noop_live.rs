@@ -243,9 +243,28 @@ async fn increment_cases(
         assert_eq!(reply, expected, "live {protocol} reply shape for {path}");
         eprintln!("increment wire {protocol} {path}: {reply:?}");
     }
+    set_document(conn, key, &initial).await;
+    let legacy_reply: ::redis::Value = ::redis::cmd("JSON.NUMINCRBY")
+        .arg(key)
+        .arg(".n")
+        .arg(2.0)
+        .query_async(conn)
+        .await
+        .unwrap();
+    assert_eq!(
+        legacy_reply,
+        if protocol == "resp2" {
+            ::redis::Value::BulkString(b"5.0".to_vec())
+        } else {
+            ::redis::Value::Array(vec![::redis::Value::Double(5.0)])
+        }
+    );
+    eprintln!("increment wire {protocol} .n: {legacy_reply:?}");
     for (path, reason) in [
         ("$.missing", "no values"),
         ("$.nonnumeric[*]", "no numeric values"),
+        (".missing", "no values"),
+        (".nonnumeric[*]", "no numeric values"),
     ] {
         let before = set_document(conn, key, &initial).await;
         let result = call(
@@ -253,11 +272,22 @@ async fn increment_cases(
             json!({"key":key,"path":path,"value":2}),
         )
         .await;
-        assert!(!result.is_error, "no-op is not a Redis error: {result:?}");
-        assert_eq!(
-            text(&result),
-            format!("Nothing incremented: path '{path}' matched {reason}")
-        );
+        if protocol == "resp2" && !path.starts_with('$') {
+            assert!(
+                result.is_error,
+                "legacy RESP2 failures must remain errors: {result:?}"
+            );
+            assert!(
+                text(&result).contains("JSON.NUMINCRBY failed"),
+                "{result:?}"
+            );
+        } else {
+            assert!(!result.is_error, "no-op is not a Redis error: {result:?}");
+            assert_eq!(
+                text(&result),
+                format!("Nothing incremented: path '{path}' matched {reason}")
+            );
+        }
         assert_eq!(
             document(conn, key).await,
             before,
@@ -274,6 +304,20 @@ async fn increment_cases(
         (
             "$.mixed[*]",
             "[null,5.0,null,2.0]",
+            json!({"n":3,"nonnumeric":[null,"x",true],"mixed":[null,5.0,"x",2.0]}),
+        ),
+        (
+            ".n",
+            if protocol == "resp2" { "5.0" } else { "[5.0]" },
+            json!({"n":5.0,"nonnumeric":[null,"x",true],"mixed":[null,3,"x",0]}),
+        ),
+        (
+            ".mixed[*]",
+            if protocol == "resp2" {
+                "2.0"
+            } else {
+                "[null,5.0,null,2.0]"
+            },
             json!({"n":3,"nonnumeric":[null,"x",true],"mixed":[null,5.0,"x",2.0]}),
         ),
     ] {
