@@ -9,7 +9,6 @@ use crate::tools::macros::{enterprise_tool, mcp_module};
 
 mcp_module! {
     list_alerts => "list_alerts",
-    acknowledge_enterprise_alert => "acknowledge_enterprise_alert",
     list_logs => "list_logs",
     get_all_nodes_stats => "get_all_nodes_stats",
     get_all_databases_stats => "get_all_databases_stats",
@@ -48,26 +47,6 @@ enterprise_tool!(read_only, list_alerts, "list_alerts",
             "count": alerts.len(),
             "active_count": active_count,
             "alerts": alerts,
-        }))
-    }
-);
-
-enterprise_tool!(write, acknowledge_enterprise_alert, "acknowledge_enterprise_alert",
-    "Acknowledge (clear) a specific alert by ID.",
-    {
-        /// Alert UID to acknowledge
-        pub alert_uid: String,
-    } => |client, input| {
-        // The `AlertHandler::clear` convenience method was removed upstream;
-        // delete the alert directly to preserve this tool.
-        client
-            .delete(&format!("/v1/alerts/{}", input.alert_uid))
-            .await
-            .tool_context("Failed to acknowledge alert")?;
-
-        CallToolResult::from_serialize(&serde_json::json!({
-            "message": "Alert acknowledged successfully",
-            "alert_uid": input.alert_uid
         }))
     }
 );

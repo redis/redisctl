@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- [**breaking**] Remove `acknowledge_enterprise_alert`, whose Enterprise REST route does not exist. Refresh `tools/list` and remove calls to this tool from saved workflows. Use `list_alerts` to read current cluster alert states.
+
+## [0.14.0](https://github.com/redis/redisctl/compare/redisctl-mcp-v0.13.0...redisctl-mcp-v0.14.0) - 2026-11-09
+
+### Added
+
+- *(mcp)* add a bounded read-only guided tour ([#1250](https://github.com/redis/redisctl/pull/1250))
+
+### Fixed
+
+- *(mcp)* report seed iterations without claiming stored cardinality ([#1317](https://github.com/redis/redisctl/pull/1317))
+- *(mcp)* report null-only JSON increment results as no-ops ([#1318](https://github.com/redis/redisctl/pull/1318))
+- *(mcp)* report JSON toggle no-ops without claiming a mutation ([#1316](https://github.com/redis/redisctl/pull/1316))
+- *(mcp)* redact credential-bearing read responses ([#1309](https://github.com/redis/redisctl/pull/1309))
+- *(mcp)* reject limit 0 in redis_keys and redis_scan instead of reporting no keys ([#1305](https://github.com/redis/redisctl/pull/1305))
+- *(core)* [**breaking**] preserve configuration value round trips ([#1188](https://github.com/redis/redisctl/pull/1188))
+- *(mcp)* report unmatched JSON increment paths explicitly ([#1236](https://github.com/redis/redisctl/pull/1236))
+- *(mcp)* query cluster alerts at /v1/cluster/alerts ([#1258](https://github.com/redis/redisctl/pull/1258))
+- *(mcp)* report empty list and stream range results without key-state guesses ([#1240](https://github.com/redis/redisctl/pull/1240))
+- *(mcp)* reject incomplete sorted-set pagination pairs ([#1235](https://github.com/redis/redisctl/pull/1235))
+- *(mcp)* [**breaking**] reject unknown tool inputs and give ft_aggregate a structured pipeline ([#1225](https://github.com/redis/redisctl/pull/1225))
+
+### Other
+
+- *(mcp)* gate config_set_guard and tour_contract on test-support ([#1314](https://github.com/redis/redisctl/pull/1314))
+- *(mcp)* check that skills only name declared tool inputs ([#1301](https://github.com/redis/redisctl/pull/1301))
+
 ## [0.12.1](https://github.com/redis/redisctl/compare/redisctl-mcp-v0.12.0...redisctl-mcp-v0.12.1) - 2026-10-01
 
 ### Fixed

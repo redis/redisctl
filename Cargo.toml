@@ -15,7 +15,7 @@ default-members = [
 version = "0.4.1"
 
 [workspace.package]
-version = "0.13.0"
+version = "0.14.0"
 edition = "2024"
 rust-version = "1.90"
 authors = ["Josh Rotenberg <josh.rotenberg@redis.com>"]
@@ -48,6 +48,10 @@ install-updater = false
 # generated release workflow.
 publish-jobs = ["./update-homebrew", "./publish-npm"]
 github-custom-job-permissions = { "update-homebrew" = { contents = "read" }, "publish-npm" = { contents = "read", id-token = "write" } }
+
+[workspace.metadata.dist.github-custom-runners]
+# GitHub no longer accepts the macos-14 label that dist 0.32 picks by default.
+aarch64-apple-darwin = "macos-15"
 
 [workspace.metadata.dist.github-action-commits]
 # Dependabot updates the generated workflow references. Copy those revisions
