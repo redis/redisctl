@@ -62,6 +62,10 @@ name = "json_empty_increment"
 required-features = ["database", "test-support"]
 
 [[test]]
+name = "json_array_noop"
+required-features = ["database", "test-support"]
+
+[[test]]
 name = "zrange_pagination"
 required-features = ["database", "test-support"]
 
