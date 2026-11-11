@@ -13,12 +13,17 @@ use crate::error::{RedisCtlError, Result as CliResult};
 /// Re-export the single OutputFormat enum from cli.
 pub use crate::cli::OutputFormat;
 
-/// Global JMESPath runtime with extended functions
+/// Global JMESPath runtime with standard and extended functions
 static JMESPATH_RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
-/// Get or initialize the JMESPath runtime with extended functions
+/// Get or initialize the JMESPath runtime with standard and extended functions
 pub fn get_jmespath_runtime() -> &'static Runtime {
-    JMESPATH_RUNTIME.get_or_init(|| Runtime::builder().with_all_extensions().build())
+    JMESPATH_RUNTIME.get_or_init(|| {
+        Runtime::builder()
+            .with_standard()
+            .with_all_extensions()
+            .build()
+    })
 }
 
 /// Normalize backtick literals in JMESPath expressions.
@@ -210,6 +215,46 @@ fn format_value(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_jmespath_object_keys() {
+        let data = json!({"zeta": {"enabled": false}, "alpha": {"enabled": true}});
+        let result = apply_jmespath(&data, "keys(@)").unwrap();
+        let mut keys: Vec<String> = serde_json::from_value(result).unwrap();
+        keys.sort();
+
+        assert_eq!(keys, vec!["alpha", "zeta"]);
+    }
+
+    #[test]
+    fn test_jmespath_composed_standard_functions() {
+        let data = json!({"zeta": {"enabled": false}, "alpha": {"enabled": true}});
+        let result = handle_output(
+            data,
+            OutputFormat::Json,
+            Some("{names: sort(keys(@)), count: length(keys(@))}"),
+        )
+        .unwrap();
+
+        assert_eq!(result, json!({"names": ["alpha", "zeta"], "count": 2}));
+    }
+
+    #[test]
+    fn test_jmespath_standard_functions_with_extension() {
+        let data = json!({"zeta": 1, "alpha": 2});
+        let expr = compile_jmespath("map(&upper(@), sort(keys(@)))").unwrap();
+
+        assert_eq!(expr.search(&data).unwrap(), json!(["ALPHA", "ZETA"]));
+    }
+
+    #[test]
+    fn test_jmespath_extension_function() {
+        assert_eq!(
+            apply_jmespath(&json!({"status": "active"}), "upper(status)").unwrap(),
+            json!("ACTIVE")
+        );
+    }
 
     #[test]
     fn test_normalize_backtick_unquoted_string() {
