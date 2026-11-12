@@ -107,12 +107,14 @@ database_tool!(read_only, keys, "redis_keys",
 );
 
 database_tool!(read_only, scan, "redis_scan",
-    "Scan keys with optional type filter. Prefer over redis_keys when filtering by type.",
+    "Scan keys with optional type filter. JSON keys accept json (ASCII case-insensitive) or ReJSON-RL. Prefer over redis_keys when filtering by type.",
     {
         /// Key pattern to match (default: "*")
         #[serde(default = "default_pattern")]
         pub pattern: String,
         /// Filter by key type (e.g., "string", "list", "set", "zset", "hash", "stream")
+        /// JSON keys accept "json" (ASCII case-insensitive) or native "ReJSON-RL".
+        /// Other type names are passed through unchanged.
         #[serde(default)]
         pub key_type: Option<String>,
         /// Maximum number of keys to return (default: 100, must be at least 1)
@@ -134,7 +136,11 @@ database_tool!(read_only, scan, "redis_scan",
 
             // Add TYPE filter if specified
             if let Some(ref key_type) = input.key_type {
-                cmd.arg("TYPE").arg(key_type);
+                cmd.arg("TYPE").arg(if key_type.eq_ignore_ascii_case("json") {
+                    "ReJSON-RL"
+                } else {
+                    key_type.as_str()
+                });
             }
 
             let (new_cursor, keys): (u64, Vec<String>) = cmd
