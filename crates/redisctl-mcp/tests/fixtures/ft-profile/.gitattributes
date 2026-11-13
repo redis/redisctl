@@ -1,2 +1,3 @@
 # RESP captures require their original CRLF framing on every platform.
 *.resp binary
+*.txt text eol=lf
