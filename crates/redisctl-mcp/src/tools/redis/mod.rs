@@ -209,11 +209,17 @@ pub(crate) trait RedisResultExt<T> {
 impl<T> RedisResultExt<T> for Result<T, redis::RedisError> {
     fn tool_context(self, context: impl Into<String>) -> Result<T, tower_mcp::Error> {
         self.map_err(|err| {
-            tower_mcp::Error::Tool(ToolError::new(format!(
+            let mut message = format!(
                 "{}: {}",
                 context.into(),
                 describe_redis_error(&err)
-            )))
+            );
+            if err.code() == Some("WRONGTYPE") {
+                message.push_str(
+                    "\nHint: Check the affected key types with redis_type, if permitted, then use a command compatible with those types.",
+                );
+            }
+            tower_mcp::Error::Tool(ToolError::new(message))
         })
     }
 }
@@ -304,6 +310,9 @@ mod ttl_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod wrongtype_tests;
 
 #[cfg(test)]
 mod error_format_tests {
