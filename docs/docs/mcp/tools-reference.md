@@ -1,6 +1,6 @@
 # Tools Reference
 
-The redisctl MCP server exposes **377 tools** across 4 toolsets and 2 system tools for managing Redis Cloud, Redis Enterprise, and direct database operations. The machine-checked [MCP catalog](compatibility.md) is the compatibility source of truth.
+The redisctl MCP server exposes **376 tools** across 4 toolsets and 2 system tools for managing Redis Cloud, Redis Enterprise, and direct database operations. The machine-checked [MCP catalog](compatibility.md) is the compatibility source of truth.
 
 Tools are organized into **toolsets** (Cloud, Enterprise, Database, App) and further into **sub-modules** that can be selectively loaded with the [`--tools` flag](configuration.md#the-tools-flag).
 
@@ -112,7 +112,7 @@ free database without a subscription of its own.
 |------|-------------|
 | `cloud_raw_api` | Execute arbitrary Redis Cloud REST API requests |
 
-## Enterprise Toolset (85 tools)
+## Enterprise Toolset (84 tools)
 
 Redis Enterprise cluster management tools. Select with `--tools enterprise` or target specific sub-modules.
 
@@ -160,14 +160,13 @@ Role-based access control -- users, roles, ACL rules, and LDAP configuration.
 | `list_enterprise_acls` | List ACL rules |
 | `get_enterprise_ldap_config` | Get LDAP configuration |
 
-### `enterprise:observability` (13 tools)
+### `enterprise:observability` (12 tools)
 
 Monitoring -- alerts, audit logs, aggregate stats for nodes/databases/shards, and module listing.
 
 | Representative Tools | Description |
 |---------------------|-------------|
 | `list_alerts` | List cluster alert states keyed by alert name |
-| `acknowledge_enterprise_alert` | Acknowledge an alert *(write)* |
 | `list_logs` | Get cluster event logs |
 | `get_all_nodes_stats` | Get aggregate node statistics |
 | `get_all_databases_stats` | Get aggregate database statistics |
@@ -376,11 +375,11 @@ Profile and configuration management tools. Always compiled in; no sub-modules.
 | Toolset | Sub-modules | Tools |
 |---------|-------------|-------|
 | Cloud | `subscriptions` (36), `account` (33), `networking` (51), `fixed` (27), `raw` (1) | **148** |
-| Enterprise | `cluster` (23), `databases` (19), `rbac` (19), `observability` (13), `proxy` (3), `services` (7), `raw` (1) | **85** |
+| Enterprise | `cluster` (23), `databases` (19), `rbac` (19), `observability` (12), `proxy` (3), `services` (7), `raw` (1) | **84** |
 | Database | `server` (14), `keys` (31), `structures` (42), `diagnostics` (4), `json` (16), `search` (18), `aliases` (4), `bulk` (2), `raw` (1) | **132** |
 | App | *(flat)* | **8** |
 | System | *(always on)* | **2** |
-| **Total** | | **375** |
+| **Total** | | **374** |
 
 ## Example Tool Usage
 
