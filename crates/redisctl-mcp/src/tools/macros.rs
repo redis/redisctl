@@ -63,7 +63,7 @@ macro_rules! database_tool {
             #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
             #[serde(deny_unknown_fields)]
             pub struct [<$fn_name:camel Input>] {
-                /// Optional Redis URL (overrides profile, uses configured URL if not provided)
+                /// Optional Redis URL override (requires operator policy database.allow_url_override = true; otherwise use a configured URL or profile)
                 #[serde(default)]
                 pub url: Option<String>,
                 /// Optional profile name to resolve connection from (uses default profile if not set)
@@ -108,7 +108,7 @@ macro_rules! database_tool {
             #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
             #[serde(deny_unknown_fields)]
             pub struct [<$fn_name:camel Input>] {
-                /// Optional Redis URL (overrides profile, uses configured URL if not provided)
+                /// Optional Redis URL override (requires operator policy database.allow_url_override = true; otherwise use a configured URL or profile)
                 #[serde(default)]
                 pub url: Option<String>,
                 /// Optional profile name to resolve connection from (uses default profile if not set)

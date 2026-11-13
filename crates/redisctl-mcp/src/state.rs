@@ -1,5 +1,8 @@
 //! Application state and credential resolution
 
+#[cfg(all(test, feature = "database"))]
+mod database_url_policy_tests;
+
 #[cfg(any(feature = "cloud", feature = "enterprise", feature = "database"))]
 use std::collections::HashMap;
 use std::sync::Arc;
