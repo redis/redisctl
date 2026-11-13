@@ -250,6 +250,21 @@ pub(crate) fn require_positive_limit(limit: usize) -> Result<(), String> {
     )
 }
 
+/// Refuse a zero value for a named count parameter before it is sent to Redis.
+///
+/// Same idea as [`require_positive_limit`], for tools whose count parameter is not
+/// called `limit` (`count`): 0 makes Redis return nothing, which would be reported
+/// as "no results".
+pub(crate) fn require_positive_param(name: &str, value: usize) -> Result<(), String> {
+    if value > 0 {
+        return Ok(());
+    }
+    Err(format!(
+        "{name} must be at least 1: a value of 0 returns nothing, which would be \
+         reported as no results. Use a positive {name}."
+    ))
+}
+
 /// Build an MCP sub-router containing all Redis database tools
 pub fn router(state: Arc<AppState>) -> McpRouter {
     McpRouter::new()
@@ -266,7 +281,14 @@ pub fn router(state: Arc<AppState>) -> McpRouter {
 
 #[cfg(test)]
 mod limit_tests {
-    use super::require_positive_limit;
+    use super::{require_positive_limit, require_positive_param};
+
+    #[test]
+    fn zero_named_param_is_rejected() {
+        let msg = require_positive_param("count", 0).unwrap_err();
+        assert!(msg.contains("count must be at least 1"), "{msg}");
+        assert_eq!(require_positive_param("count", 5), Ok(()));
+    }
 
     #[test]
     fn zero_limit_is_rejected() {

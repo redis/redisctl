@@ -132,3 +132,32 @@ async fn keys_positive_limit_still_scans() {
     assert!(!result.is_error, "unexpected tool error: {result:?}");
     assert_eq!(text(&result), "Found 1 key(s) matching 'k*'\n\nk1");
 }
+
+#[tokio::test]
+async fn xrange_and_slowlog_refuse_zero_count_without_querying() {
+    for (make_tool, name, input) in [
+        (
+            redis::xrange as fn(_) -> Tool,
+            "redis_xrange",
+            json!({"key": "s", "count": 0}),
+        ),
+        (
+            redis::xrange as fn(_) -> Tool,
+            "redis_xrange",
+            json!({"key": "s", "count": "0"}),
+        ),
+        (
+            redis::slowlog as fn(_) -> Tool,
+            "redis_slowlog",
+            json!({"count": 0}),
+        ),
+    ] {
+        let result = run(make_tool, input, None).await;
+        assert!(result.is_error, "{name}: expected tool error: {result:?}");
+        let message = text(&result);
+        assert!(
+            message.contains("count must be at least 1"),
+            "{name}: {message}"
+        );
+    }
+}
