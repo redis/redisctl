@@ -165,6 +165,8 @@ pub(crate) async fn get_connection(
         .map_err(|e| ToolError::new(format!("Connection failed: {}", e)))
 }
 
+const MEMORY_INTERPRETATION_NOTE: &str = "\n\nMemory interpretation: A high fragmentation ratio alone does not establish a memory problem. Consider absolute overhead in bytes, allocator metrics and prior peak usage, especially when current allocation is small.";
+
 /// Helper to format Redis values for display
 pub(crate) fn format_value(v: &redis::Value) -> String {
     match v {
