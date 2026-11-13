@@ -114,6 +114,11 @@ jobs:
       - name: Run integration tests
         run: cargo test --workspace --test '*' --all-features
 
+      - name: Run extended-attribute size-query regression tests
+        env:
+          REDISCTL_XATTR_TEST_DIR: /dev/shm
+        run: cargo test -p redisctl --all-features --test unix_xattr_roundtrip -- --ignored
+
       - name: Install local Redis for the opt-in MCP pilot
         run: sudo apt-get update && sudo apt-get install -y redis-server openssl
 
