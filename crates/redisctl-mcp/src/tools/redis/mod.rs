@@ -115,7 +115,7 @@ pub fn sub_router(name: &str, state: Arc<AppState>) -> Option<McpRouter> {
 /// Resolve a Redis URL from the provided inputs.
 ///
 /// Resolution order:
-/// 1. If `url` is provided, use it directly (backward compatible)
+/// 1. If `url` is provided, require operator opt-in before using it directly
 /// 2. If `profile` is provided, resolve via profile system
 /// 3. Fall back to `state.database_url`
 pub(crate) fn resolve_redis_url(
@@ -124,6 +124,12 @@ pub(crate) fn resolve_redis_url(
     state: &AppState,
 ) -> Result<String, ToolError> {
     if let Some(url) = url {
+        if !state.policy().allows_database_url_override() {
+            return Err(ToolError::new(format!(
+                "{} Per-call Redis URL overrides are disabled; use the configured database URL or a configured profile",
+                crate::policy::POLICY_DENIED_PREFIX
+            )));
+        }
         return Ok(url);
     }
     if let Some(profile_name) = profile {

@@ -19,7 +19,7 @@ pub struct RedisCommandInput {
     /// Command arguments
     #[serde(default)]
     pub args: Vec<String>,
-    /// Optional Redis URL (overrides profile)
+    /// Optional Redis URL override (requires operator policy database.allow_url_override = true; otherwise use a configured URL or profile)
     #[serde(default)]
     pub url: Option<String>,
     /// Optional profile name to resolve connection from
