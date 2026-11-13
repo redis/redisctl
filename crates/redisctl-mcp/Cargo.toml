@@ -58,6 +58,10 @@ name = "keys_limit_guard"
 required-features = ["database", "test-support"]
 
 [[test]]
+name = "ft_profile_format"
+required-features = ["database", "test-support"]
+
+[[test]]
 name = "json_empty_increment"
 required-features = ["database", "test-support"]
 

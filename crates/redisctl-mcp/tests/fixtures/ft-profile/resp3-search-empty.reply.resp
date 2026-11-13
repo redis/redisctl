@@ -1,0 +1,69 @@
+%2
++Results
+%5
++attributes
+*0
++format
++STRING
++results
+*0
++total_results
+:0
++warning
+*0
++Profile
+%2
++Shards
+*1
+%7
++Total profile time
+,0.009167
++Parsing time
+,0.004625
++Workers queue time
+,0
++Pipeline creation time
+,0.000542
++Warning
+*1
++None
++Iterators profile
+%3
++Type
++EMPTY
++Time
+,0.000125
++Number of reading operations
+:0
++Result processors profile
+*4
+%3
++Type
++Index
++Time
+,0.00025
++Results processed
+:0
+%3
++Type
++Scorer
++Time
+,0
++Results processed
+:0
+%3
++Type
++Sorter
++Time
+,0.000125
++Results processed
+:0
+%3
++Type
++Loader
++Time
+,4.0999999999999967e-5
++Results processed
+:0
++Coordinator
+%0

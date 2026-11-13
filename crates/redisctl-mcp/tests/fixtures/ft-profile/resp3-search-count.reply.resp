@@ -1,0 +1,81 @@
+%2
++Results
+%5
++attributes
+*0
++format
++STRING
++results
+*0
++total_results
+:30
++warning
+*0
++Profile
+%2
++Shards
+*1
+%7
++Total profile time
+,0.076
++Parsing time
+,0.047041
++Workers queue time
+,0
++Pipeline creation time
+,0.001417
++Warning
+*1
++None
++Iterators profile
+%5
++Type
++UNION
++Query type
++UNION
++Time
+,0.007419
++Number of reading operations
+:30
++Child iterators
+*2
+%5
++Type
++TEXT
++Term
++redis
++Time
+,0.001999
++Number of reading operations
+:30
++Estimated number of matches
+:30
+%5
++Type
++TEXT
++Term
+++redi
++Time
+,0.001206
++Number of reading operations
+:30
++Estimated number of matches
+:30
++Result processors profile
+*2
+%3
++Type
++Index
++Time
+,0.021877
++Results processed
+:30
+%3
++Type
++Counter
++Time
+,0.001580999999999999
++Results processed
+:1
++Coordinator
+%0
