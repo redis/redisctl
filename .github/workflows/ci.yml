@@ -156,6 +156,11 @@ jobs:
           REUSE_CONTAINERS: "1"
         run: cargo test -p redisctl-mcp --test redis_stack_tools --all-features test_search_tools -- --ignored --test-threads=1
 
+      - name: Run live JSON SCAN alias regressions
+        run: |
+          docker pull redis:8.6.7@sha256:e6dae84f7db289dde3384fdb18d182556784e5a681df3a3f54d1289952364ce8
+          cargo test -p redisctl-mcp --all-features --test scan_json_alias -- --ignored --nocapture
+
   # Required Linux build and full tests run alongside unit/integration jobs.
   build-linux:
     name: Build - ubuntu-latest
