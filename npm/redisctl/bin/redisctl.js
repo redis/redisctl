@@ -94,8 +94,33 @@ function owned(command) {
 }
 
 function parseVersion(text) {
-  const match = /^redisctl (\d+)\.(\d+)\.(\d+)/.exec(text);
-  return match && match.slice(1).map(Number);
+  const match = /^redisctl (0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(text);
+  if (!match) return null;
+  const prerelease = match[4] ? match[4].split('.') : [];
+  if (prerelease.some((part) => /^0\d+$/.test(part))) return null;
+  return { core: match.slice(1, 4).map(BigInt), prerelease };
+}
+
+function compareVersions(left, right) {
+  for (let i = 0; i < left.core.length; i++) {
+    if (left.core[i] !== right.core[i]) return left.core[i] < right.core[i] ? -1 : 1;
+  }
+  // A release is newer than any prerelease with the same core version.
+  if (!left.prerelease.length || !right.prerelease.length) {
+    if (left.prerelease.length === right.prerelease.length) return 0;
+    return left.prerelease.length ? -1 : 1;
+  }
+  for (let i = 0; i < Math.min(left.prerelease.length, right.prerelease.length); i++) {
+    const a = left.prerelease[i];
+    const b = right.prerelease[i];
+    if (a === b) continue;
+    const aNumeric = /^\d+$/.test(a);
+    const bNumeric = /^\d+$/.test(b);
+    if (aNumeric && bNumeric) return BigInt(a) < BigInt(b) ? -1 : 1;
+    if (aNumeric !== bNumeric) return aNumeric ? -1 : 1;
+    return a < b ? -1 : 1;
+  }
+  return Math.sign(left.prerelease.length - right.prerelease.length);
 }
 const ours = parseVersion(`redisctl ${version}`);
 
@@ -107,9 +132,7 @@ function usable(command) {
   const reported = ran.status === 0 ? ran.stdout.trim() : '';
   if (owned(command)) return reported === `redisctl ${version}`;
   const theirs = parseVersion(reported);
-  if (!theirs) return false;
-  const first = theirs.findIndex((part, i) => part !== ours[i]);
-  return first === -1 || theirs[first] > ours[first];
+  return !!theirs && !!ours && compareVersions(theirs, ours) >= 0;
 }
 
 function fail(message) {

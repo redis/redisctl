@@ -356,6 +356,41 @@ test('a redisctl the user installed runs at this release or newer; an older one 
   }
 });
 
+test('the installed version floor follows SemVer prerelease and build precedence', () => {
+  for (const [release, installed, runs] of [
+    ['0.14.0', '0.14.0-rc.1', false],
+    ['0.14.0-rc.2', '0.14.0-rc.1', false],
+    ['0.14.0-rc.2', '0.14.0-rc.10', true],
+    ['0.14.0-rc.10', '0.14.0-rc.2', false],
+    ['0.14.0-rc.1', '0.14.0', true],
+    ['0.14.0-rc.1', '0.14.0-rc.1', true],
+    ['0.14.0-alpha.1', '0.14.0-alpha.beta', true],
+    ['0.14.0-alpha.beta', '0.14.0-alpha.1', false],
+    ['0.14.0-alpha', '0.14.0-alpha.1', true],
+    ['0.14.0-alpha.1', '0.14.0-alpha', false],
+    ['0.14.0-rc.A', '0.14.0-rc.a', true],
+    ['0.14.0-rc.a', '0.14.0-rc.A', false],
+    ['0.14.0+wrapper.1', '0.14.0+native.2', true],
+    ['0.14.0-rc.1+wrapper', '0.14.0-rc.1+native', true],
+    ['0.14.0', '0.15.0-alpha', true],
+    ['0.14.0-rc.9007199254740993', '0.14.0-rc.9007199254740992', false],
+    ['0.14.0', '0.14.0garbage', false],
+    ['0.14.0', '00.14.0', false],
+    ['0.14.0-rc.1', '0.14.0-rc.01', false],
+    ['0.14.0-rc.1', '0.14.0-rc..2', false],
+  ]) {
+    const wrapper = path.join(packageAt(release), 'bin', 'redisctl.js');
+    const copy = fakeRedisctl(0, { version: installed });
+    const result = run(['init', '--dry-run'], copy.dir, wrapper);
+    const label = `${installed} against ${release}: ${result.stderr}`;
+    assert.strictEqual(fs.existsSync(copy.argsFile), runs, label);
+    assert.strictEqual(result.status, runs ? 0 : 1, label);
+    assert.ok(fs.existsSync(path.join(copy.dir, 'redisctl')), 'the installed copy is kept');
+    if (runs) assert.deepStrictEqual(childArgs(copy.argsFile), ['init', '--dry-run']);
+    else assert.ok(result.stderr.includes(`installing redisctl ${release}`), label);
+  }
+});
+
 test('an installer that leaves no runnable redisctl exits 1 with the hint', async (t) => {
   for (const [script, reason] of [
     ['#!/bin/sh\nexit 0\n', /installer left no usable redisctl in .*\/bin\n/],
