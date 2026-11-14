@@ -128,7 +128,8 @@ pub fn deliver_vars(path: &Path, vars: &[(&str, &str)]) -> Result<DeliveryOutcom
         let original = fs::read_to_string(path).map_err(|e| DeliveryError::io(path, e))?;
         let (rewritten, replaced) = upsert_vars(&original, vars);
         if rewritten != original {
-            fs::write(path, &rewritten).map_err(|e| DeliveryError::io(path, e))?;
+            crate::atomic_file::write_atomic(path, rewritten.as_bytes(), true)
+                .map_err(|e| DeliveryError::io(path, e))?;
         }
         // The file holds credentials now — ensure it isn't group/world-readable, even if it
         // pre-existed with looser permissions (a fresh file is created 0600 below, but an
@@ -199,7 +200,8 @@ pub fn ensure_gitignored(path: &Path) -> Result<bool, DeliveryError> {
     }
     contents.push_str(&entry);
     contents.push('\n');
-    fs::write(&gitignore, &contents).map_err(|e| DeliveryError::io(&gitignore, e))?;
+    crate::atomic_file::write_atomic(&gitignore, contents.as_bytes(), false)
+        .map_err(|e| DeliveryError::io(&gitignore, e))?;
     Ok(true)
 }
 
@@ -320,6 +322,22 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+    #[cfg(unix)]
+    #[test]
+    fn delivery_replaces_the_file_atomically() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".env");
+        fs::write(&path, "OTHER=keep\n").unwrap();
+        let old = fs::File::open(&path).unwrap();
+        deliver(&path, "REDIS_URL", "redis://localhost").unwrap();
+        assert_ne!(
+            old.metadata().unwrap().ino(),
+            fs::metadata(&path).unwrap().ino()
+        );
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
 
     #[test]
     fn creates_fresh_file_with_marker() {

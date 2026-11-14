@@ -1,7 +1,6 @@
 //! The `.env` / `.gitignore` contract: mutations are decided read-only at plan time
 //! and performed at apply time, so a dry run renders exactly what a real run does.
 
-use std::io::Write;
 use std::path::Path;
 
 use crate::workflows::init::engine::InitError;
@@ -50,15 +49,7 @@ impl FileAction {
                     message: e.to_string(),
                 })?;
             }
-            let mut file = std::fs::OpenOptions::new();
-            file.write(true).create(true).truncate(true);
-            // Applies only when the file is created; an existing .env keeps its mode.
-            #[cfg(unix)]
-            if rel == ".env" {
-                std::os::unix::fs::OpenOptionsExt::mode(&mut file, 0o600);
-            }
-            file.open(&path)
-                .and_then(|mut file| file.write_all(content.as_bytes()))
+            redisctl_core::atomic_file::write_atomic(&path, content.as_bytes(), rel == ".env")
                 .map_err(|e| InitError::WriteFailed {
                     rel: rel.clone(),
                     message: e.to_string(),
@@ -914,5 +905,33 @@ mod line_tests {
             "A=1\r\n\r\nexport LANGCACHE_API_KEY=\"S3cretKey\"\r\nB=2\r\n"
         );
         assert_eq!(note, "LANGCACHE_API_KEY filled in");
+    }
+}
+
+#[cfg(all(test, unix))]
+mod atomic_tests {
+    use super::*;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    #[test]
+    fn init_replaces_existing_env_atomically() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".env");
+        std::fs::write(&path, "OTHER_SECRET=keep\nREDIS_URL=old\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let original = std::fs::File::open(&path).unwrap();
+        let content = "OTHER_SECRET=keep\nREDIS_URL=new\n";
+        FileAction::Write {
+            rel: ".env".into(),
+            content: content.into(),
+            status: Status::Updated,
+            note: String::new(),
+        }
+        .perform(dir.path())
+        .unwrap();
+        let metadata = std::fs::metadata(&path).unwrap();
+        assert_ne!(original.metadata().unwrap().ino(), metadata.ino());
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o640);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
     }
 }
