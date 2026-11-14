@@ -213,7 +213,9 @@ database_tool!(read_only, memory_stats, "redis_memory_stats",
             .await
             .tool_context("MEMORY STATS failed")?;
 
-        Ok(CallToolResult::text(super::format_value(&result)))
+        let mut output = super::format_value(&result);
+        output.push_str(super::MEMORY_INTERPRETATION_NOTE);
+        Ok(CallToolResult::text(output))
     }
 );
 

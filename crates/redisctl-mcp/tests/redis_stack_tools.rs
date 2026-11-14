@@ -1032,14 +1032,14 @@ async fn test_ft_profile() {
         "ft_profile header: {}",
         text
     );
-    // The result/profile sections are rendered as "[0]:" and "[1]:" markers.
+    // Named sections also retain a raw fallback for older profile layouts.
     assert!(
-        text.contains("[0]:"),
+        text.contains("Results:\n"),
         "ft_profile results section: {}",
         text
     );
     assert!(
-        text.contains("[1]:"),
+        text.contains("Profile:\n"),
         "ft_profile profile section: {}",
         text
     );

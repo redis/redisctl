@@ -250,6 +250,7 @@ tier = "read-only"
 [database]
 tier = "read-only"
 allow = ["redis_set", "redis_expire"]  # allow specific writes despite read-only tier
+allow_url_override = false  # require operator opt-in for per-call Redis URLs
 
 [app]
 # app toolset has no sub-modules; omit to use global defaults
@@ -269,6 +270,27 @@ redact_fields = ["password", "secret_key"]  # redact sensitive fields
 ```
 
 All fields are optional. An empty file is equivalent to the default read-only policy.
+
+### Per-call Redis URLs
+
+The legacy database tools retain their optional `url` input, but reject an explicit
+per-call URL by default, before profile resolution or connection/cache access.
+Configure a startup target with `--database-url` or `REDIS_URL`, or select a
+configured profile with the tool's `profile` input.
+
+Operators who need the legacy URL precedence can enable it in the policy file:
+
+```toml
+[database]
+allow_url_override = true
+```
+
+With this setting, an explicit tool `url` takes precedence over `profile` and the
+startup target. The setting is independent of safety tiers and tool allow lists:
+`tier = "full"` and an explicit tool allow do not enable URL overrides. Tool
+arguments cannot change the setting. It is honored only in `[database]`; the
+experimental `redis-mcp` backend keeps its fixed-target contract. `show_policy`
+reports the resolved setting as `database_url_override_allowed`.
 
 ### Evaluation Order
 

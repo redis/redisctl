@@ -1,0 +1,375 @@
+*2
+*21
+:14
+$13
+profile:doc:0
+*6
+$5
+title
+$24
+redis profiling sample 0
+$8
+category
+$1
+a
+$5
+price
+$1
+0
+$13
+profile:doc:1
+*6
+$5
+title
+$24
+redis profiling sample 1
+$8
+category
+$1
+b
+$5
+price
+$1
+1
+$13
+profile:doc:3
+*6
+$5
+title
+$24
+redis profiling sample 3
+$8
+category
+$1
+a
+$5
+price
+$1
+3
+$13
+profile:doc:4
+*6
+$5
+title
+$24
+redis profiling sample 4
+$8
+category
+$1
+b
+$5
+price
+$1
+4
+$13
+profile:doc:6
+*6
+$5
+title
+$24
+redis profiling sample 6
+$8
+category
+$1
+a
+$5
+price
+$1
+6
+$13
+profile:doc:7
+*6
+$5
+title
+$24
+redis profiling sample 7
+$8
+category
+$1
+b
+$5
+price
+$1
+7
+$13
+profile:doc:9
+*6
+$5
+title
+$24
+redis profiling sample 9
+$8
+category
+$1
+a
+$5
+price
+$1
+9
+$14
+profile:doc:10
+*6
+$5
+title
+$25
+redis profiling sample 10
+$8
+category
+$1
+b
+$5
+price
+$2
+10
+$14
+profile:doc:12
+*6
+$5
+title
+$25
+redis profiling sample 12
+$8
+category
+$1
+a
+$5
+price
+$2
+12
+$14
+profile:doc:13
+*6
+$5
+title
+$25
+redis profiling sample 13
+$8
+category
+$1
+b
+$5
+price
+$2
+13
+*4
++Shards
+*1
+*14
++Total profile time
+$8
+0.073208
++Parsing time
+$8
+0.044583
++Workers queue time
+$1
+0
++Pipeline creation time
+$8
+0.001709
++Warning
+*1
++None
++Iterators profile
+*8
++Type
++INTERSECT
++Time
+$8
+0.010415
++Number of reading operations
+:14
++Child iterators
+*3
+*10
++Type
++UNION
++Query type
++TAG
++Time
+$8
+0.001497
++Number of reading operations
+:15
++Child iterators
+*2
+*10
++Type
++TAG
++Term
++a
++Time
+$8
+0.000334
++Number of reading operations
+:8
++Estimated number of matches
+:10
+*10
++Type
++TAG
++Term
++b
++Time
+$8
+0.000125
++Number of reading operations
+:8
++Estimated number of matches
+:10
+*10
++Type
++UNION
++Query type
++NUMERIC
++Time
+$8
+0.002625
++Number of reading operations
+:14
++Child iterators
+*2
+*10
++Type
++NUMERIC
++Term
++0 - 6
++Time
+$8
+0.001123
++Number of reading operations
+:5
++Estimated number of matches
+:7
+*10
++Type
++NUMERIC
++Term
++7 - 29
++Time
+$8
+0.000917
++Number of reading operations
+:9
++Estimated number of matches
+:23
+*10
++Type
++UNION
++Query type
++UNION
++Time
+$8
+0.004749
++Number of reading operations
+:14
++Child iterators
+*2
+*10
++Type
++UNION
++Query type
++UNION
++Time
+$8
+0.002083
++Number of reading operations
+:14
++Child iterators
+*2
+*10
++Type
++TEXT
++Term
++redis
++Time
+$8
+0.000623
++Number of reading operations
+:14
++Estimated number of matches
+:30
+*10
++Type
++TEXT
++Term
+++redi
++Time
+$8
+0.000419
++Number of reading operations
+:14
++Estimated number of matches
+:30
+*10
++Type
++UNION
++Query type
++UNION
++Time
+$7
+0.00175
++Number of reading operations
+:14
++Child iterators
+*2
+*10
++Type
++TEXT
++Term
++profiling
++Time
+$8
+0.000583
++Number of reading operations
+:14
++Estimated number of matches
+:30
+*10
++Type
++TEXT
++Term
+++profil
++Time
+$8
+0.000417
++Number of reading operations
+:14
++Estimated number of matches
+:30
++Result processors profile
+*4
+*6
++Type
++Index
++Time
+$8
+0.011375
++Results processed
+:14
+*6
++Type
++Scorer
++Time
+$21
+0.0013330000000000009
++Results processed
+:14
+*6
++Type
++Sorter
++Time
+$21
+0.0015399999999999997
++Results processed
+:10
+*6
++Type
++Loader
++Time
+$7
+0.00571
++Results processed
+:10
++Coordinator
+*0

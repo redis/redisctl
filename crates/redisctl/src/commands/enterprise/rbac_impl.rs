@@ -882,11 +882,7 @@ pub async fn list_sessions(
 ) -> CliResult<()> {
     let client = conn_mgr.create_enterprise_client(profile_name).await?;
 
-    let sessions = client.get_raw("/v1/sessions").await.unwrap_or_else(|_| {
-        serde_json::json!({
-            "message": "Sessions endpoint not available"
-        })
-    });
+    let sessions = client.get_raw("/v1/sessions").await?;
 
     let data = handle_output(sessions, output_format, query)?;
     print_formatted_output(data, output_format)?;
@@ -920,11 +916,7 @@ pub async fn revoke_all_user_sessions(
 
     client
         .delete_raw(&format!("/v1/users/{}/sessions", user_id))
-        .await
-        .unwrap_or_else(|_| {
-            println!("Note: Session revocation endpoint may not be available");
-            serde_json::Value::Null
-        });
+        .await?;
 
     println!("All sessions for user {} revoked", user_id);
     Ok(())

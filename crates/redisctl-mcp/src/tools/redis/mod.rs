@@ -115,7 +115,7 @@ pub fn sub_router(name: &str, state: Arc<AppState>) -> Option<McpRouter> {
 /// Resolve a Redis URL from the provided inputs.
 ///
 /// Resolution order:
-/// 1. If `url` is provided, use it directly (backward compatible)
+/// 1. If `url` is provided, require operator opt-in before using it directly
 /// 2. If `profile` is provided, resolve via profile system
 /// 3. Fall back to `state.database_url`
 pub(crate) fn resolve_redis_url(
@@ -124,6 +124,12 @@ pub(crate) fn resolve_redis_url(
     state: &AppState,
 ) -> Result<String, ToolError> {
     if let Some(url) = url {
+        if !state.policy().allows_database_url_override() {
+            return Err(ToolError::new(format!(
+                "{} Per-call Redis URL overrides are disabled; use the configured database URL or a configured profile",
+                crate::policy::POLICY_DENIED_PREFIX
+            )));
+        }
         return Ok(url);
     }
     if let Some(profile_name) = profile {
@@ -164,6 +170,8 @@ pub(crate) async fn get_connection(
         .await
         .map_err(|e| ToolError::new(format!("Connection failed: {}", e)))
 }
+
+const MEMORY_INTERPRETATION_NOTE: &str = "\n\nMemory interpretation: A high fragmentation ratio alone does not establish a memory problem. Consider absolute overhead in bytes, allocator metrics and prior peak usage, especially when current allocation is small.";
 
 /// Helper to format Redis values for display
 pub(crate) fn format_value(v: &redis::Value) -> String {
@@ -209,11 +217,17 @@ pub(crate) trait RedisResultExt<T> {
 impl<T> RedisResultExt<T> for Result<T, redis::RedisError> {
     fn tool_context(self, context: impl Into<String>) -> Result<T, tower_mcp::Error> {
         self.map_err(|err| {
-            tower_mcp::Error::Tool(ToolError::new(format!(
+            let mut message = format!(
                 "{}: {}",
                 context.into(),
                 describe_redis_error(&err)
-            )))
+            );
+            if err.code() == Some("WRONGTYPE") {
+                message.push_str(
+                    "\nHint: Check the affected key types with redis_type, if permitted, then use a command compatible with those types.",
+                );
+            }
+            tower_mcp::Error::Tool(ToolError::new(message))
         })
     }
 }
@@ -304,6 +318,9 @@ mod ttl_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod wrongtype_tests;
 
 #[cfg(test)]
 mod error_format_tests {
