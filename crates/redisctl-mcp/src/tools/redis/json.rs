@@ -65,6 +65,11 @@ fn decode_numincrby_reply(reply: redis::Value) -> redis::RedisResult<String> {
     }
 }
 
+fn array_mutation_noop(result: &redis::Value) -> bool {
+    matches!(result, redis::Value::Nil)
+        || matches!(result, redis::Value::Array(items) if items.iter().all(|item| matches!(item, redis::Value::Nil)))
+}
+
 // ---------------------------------------------------------------------------
 // Read-only tools
 // ---------------------------------------------------------------------------
@@ -359,6 +364,12 @@ database_tool!(write, json_arrappend, "redis_json_arrappend",
             .await
             .tool_context("JSON.ARRAPPEND failed")?;
 
+        if array_mutation_noop(&result) {
+            return Ok(CallToolResult::text(format!(
+                "Nothing appended: no array values matched '{}' at '{}'", input.key, input.path
+            )));
+        }
+
         Ok(CallToolResult::text(format!(
             "New array length: {}", format_value(&result)
         )))
@@ -392,6 +403,12 @@ database_tool!(write, json_arrinsert, "redis_json_arrinsert",
             .query_async(&mut conn)
             .await
             .tool_context("JSON.ARRINSERT failed")?;
+
+        if array_mutation_noop(&result) {
+            return Ok(CallToolResult::text(format!(
+                "Nothing inserted: no array values matched '{}' at '{}'", input.key, input.path
+            )));
+        }
 
         Ok(CallToolResult::text(format!(
             "New array length: {}", format_value(&result)
@@ -556,6 +573,12 @@ database_tool!(destructive, json_arrtrim, "redis_json_arrtrim",
             .query_async(&mut conn)
             .await
             .tool_context("JSON.ARRTRIM failed")?;
+
+        if array_mutation_noop(&result) {
+            return Ok(CallToolResult::text(format!(
+                "Nothing trimmed: no array values matched '{}' at '{}'", input.key, input.path
+            )));
+        }
 
         Ok(CallToolResult::text(format!(
             "Trimmed array at '{}': new length {}", input.path, format_value(&result)
