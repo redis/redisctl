@@ -262,6 +262,21 @@ pub(crate) fn require_positive_limit(limit: usize) -> Result<(), String> {
     )
 }
 
+/// Refuse a sample size of zero before any key is scanned.
+///
+/// A sample size of 0 truncates the scanned keys to nothing, so `redis_hotkeys`
+/// would report "No keys found" for a pattern that does match.
+pub(crate) fn require_positive_sample_size(sample_size: usize) -> Result<(), String> {
+    if sample_size > 0 {
+        return Ok(());
+    }
+    Err(
+        "sample_size must be at least 1: a sample size of 0 samples no keys, which \
+         would be reported as no matches. Use a positive sample_size."
+            .to_string(),
+    )
+}
+
 /// Build an MCP sub-router containing all Redis database tools
 pub fn router(state: Arc<AppState>) -> McpRouter {
     McpRouter::new()
