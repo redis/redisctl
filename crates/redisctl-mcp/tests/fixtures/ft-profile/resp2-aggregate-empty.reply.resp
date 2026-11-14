@@ -1,0 +1,43 @@
+*2
+*1
+:0
+*4
++Shards
+*1
+*14
++Total profile time
+$8
+0.010375
++Parsing time
+$8
+0.007583
++Workers queue time
+$1
+0
++Pipeline creation time
+$8
+0.000375
++Warning
+*1
++None
++Iterators profile
+*6
++Type
++EMPTY
++Time
+$8
+0.000042
++Number of reading operations
+:0
++Result processors profile
+*1
+*6
++Type
++Index
++Time
+$8
+0.000167
++Results processed
+:0
++Coordinator
+*0
