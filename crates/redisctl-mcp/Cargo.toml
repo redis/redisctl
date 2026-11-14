@@ -74,6 +74,10 @@ name = "config_set_guard"
 required-features = ["database", "test-support"]
 
 [[test]]
+name = "memory_guidance"
+required-features = ["database", "test-support"]
+
+[[test]]
 name = "tour_contract"
 required-features = ["test-support"]
 
