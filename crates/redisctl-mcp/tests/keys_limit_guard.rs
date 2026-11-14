@@ -133,6 +133,79 @@ async fn keys_positive_limit_still_scans() {
     assert_eq!(text(&result), "Found 1 key(s) matching 'k*'\n\nk1");
 }
 
+const SCAN_KEYS: [&str; 6] = ["SCAN", "0", "MATCH", "k*", "COUNT", "100"];
+
+#[tokio::test]
+async fn keys_and_scan_flag_truncated_listing() {
+    for (make_tool, name) in [
+        (redis::keys as fn(_) -> Tool, "redis_keys"),
+        (redis::scan as fn(_) -> Tool, "redis_scan"),
+    ] {
+        // Cursor 5 means the keyspace has not been fully scanned.
+        let result = run(
+            make_tool,
+            json!({"pattern": "k*", "limit": 1}),
+            Some((&SCAN_KEYS, "*2\r\n$1\r\n5\r\n*1\r\n$2\r\nk1\r\n")),
+        )
+        .await;
+        assert!(
+            !result.is_error,
+            "{name}: unexpected tool error: {result:?}"
+        );
+        let output = text(&result);
+        assert!(output.starts_with("Found 1 key(s)"), "{name}: {output}");
+        assert!(output.contains("more may exist"), "{name}: {output}");
+    }
+}
+
+#[tokio::test]
+async fn keys_and_scan_omit_note_when_listing_complete() {
+    for (make_tool, name) in [
+        (redis::keys as fn(_) -> Tool, "redis_keys"),
+        (redis::scan as fn(_) -> Tool, "redis_scan"),
+    ] {
+        let result = run(
+            make_tool,
+            json!({"pattern": "k*", "limit": 5}),
+            Some((&SCAN_KEYS, "*2\r\n$1\r\n0\r\n*1\r\n$2\r\nk1\r\n")),
+        )
+        .await;
+        assert!(
+            !result.is_error,
+            "{name}: unexpected tool error: {result:?}"
+        );
+        let output = text(&result);
+        assert_eq!(output, "Found 1 key(s) matching 'k*'\n\nk1", "{name}");
+    }
+}
+
+#[tokio::test]
+async fn keys_and_scan_dedupe_repeated_keys() {
+    for (make_tool, name) in [
+        (redis::keys as fn(_) -> Tool, "redis_keys"),
+        (redis::scan as fn(_) -> Tool, "redis_scan"),
+    ] {
+        let result = run(
+            make_tool,
+            json!({"pattern": "k*", "limit": 5}),
+            Some((
+                &SCAN_KEYS,
+                "*2\r\n$1\r\n0\r\n*2\r\n$2\r\nk1\r\n$2\r\nk1\r\n",
+            )),
+        )
+        .await;
+        assert!(
+            !result.is_error,
+            "{name}: unexpected tool error: {result:?}"
+        );
+        assert_eq!(
+            text(&result),
+            "Found 1 key(s) matching 'k*'\n\nk1",
+            "{name}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn xrange_and_slowlog_refuse_zero_count_without_querying() {
     for (make_tool, name, input) in [
