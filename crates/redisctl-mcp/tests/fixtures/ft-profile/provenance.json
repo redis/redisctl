@@ -1,0 +1,391 @@
+{
+  "redis_version": "8.6.7",
+  "search_version": "8.6.8",
+  "search_revision": "03edbf8abd587b8e11731dcc23f9e6ae97ee45b9",
+  "image_digest": "redis@sha256:e6dae84f7db289dde3384fdb18d182556784e5a681df3a3f54d1289952364ce8",
+  "capture": "Direct RESP2 and RESP3 replies from a standalone server with 30 synthetic HASH documents. Group, LOAD, LIMITED and LIMIT captures exercise reply shapes; the MCP tool still sends only index, command, QUERY and query. Mutated warnings, multiple shards and unknown structures in the Rust tests are synthetic, not captured deployment behavior.",
+  "timing_source": "https://github.com/RediSearch/RediSearch/blob/03edbf8abd587b8e11731dcc23f9e6ae97ee45b9/src/profile/profile.c",
+  "files": [
+    {
+      "file": "resp2-aggregate-bare.reply.resp",
+      "sha256": "d53e0d2e4f8992b0080b498f0e28916637ed2a618ed4242af060d3b6430342b4",
+      "bytes": 517,
+      "command": [
+        "FT.PROFILE",
+        "profile_idx",
+        "AGGREGATE",
+        "QUERY",
+        "*"
+      ]
+    },
+    {
+      "file": "resp2-aggregate-empty.reply.resp",
+      "sha256": "d757516c62685a7bd8891227830998c4a0a1ac6e992d83be06e428164f38fcfb",
+      "bytes": 395,
+      "command": [
+        "FT.PROFILE",
+        "profile_idx",
+        "AGGREGATE",
+        "QUERY",
+        "nomatchzzzz"
+      ]
+    },
+    {
+      "file": "resp2-aggregate-group.reply.resp",
+      "sha256": "dc00bf2f950b63a9ee75ca0246ca3b71e162e404b2a2cadd011556690d49e669",
+      "bytes": 757,
+      "command": [
+        "FT.PROFILE",
+        "profile_idx",
+        "AGGREGATE",
+        "QUERY",
+        "*",
+        "GROUPBY",
+        "1",
+        "@category",
+        "REDUCE",
+        "COUNT",
+        "0",
+        "AS",
+        "n",
+        "SORTBY",
+        "2",
+        "@n",
+        "DESC"
+      ]
+    },
+    {
+      "file": "resp2-aggregate-load.reply.resp",
+      "sha256": "fffb867a4cdff99e0856ae703879931ad5f65c8d4b7d665270aeeb3aad50175d",
+      "bytes": 839,
+      "command": [
+        "FT.PROFILE",
+        "profile_idx",
+        "AGGREGATE",
+        "QUERY",
+        "*",
+        "LOAD",
+        "2",
+        "@title",
+        "@price",
+        "SORTBY",
+        "2",
+        "@price",
+        "DESC",
+        "LIMIT",
+        "1",
+        "3"
+      ]
+    },
+    {
+      "file": "resp2-aggregate-reducer-error.reply.resp",
+      "sha256": "4aa608e465f94ed6a717ddfdcb423f219b828835845758d03a51e6812df06940",
+      "bytes": 33,
+      "command": [
+        "FT.PROFILE",
+        "profile_idx",
+        "AGGREGATE",
+        "QUERY",
+        "*",
+        "GROUPBY",
+        "0",
+        "REDUCE",
+        "NOT_A_REDUCER",
+        "0",
+        "AS",
+        "n"
+      ]
+    },
+    {
+      "file": "resp2-command-error.reply.resp",
+      "sha256": "9900290ec8ff87dc9748095d5acf46b697315bb061da07a1861c10493d93bb70",
+      "bytes": 49,
+      "command": [
+        "FT.PROFILE",
+        "profile_idx",
+        "BOGUS",
+        "QUERY",
+        "*"
+      ]
+    },
+    {
+      "file": "resp2-missing-index-error.reply.resp",
+      "sha256": "7629d26e4b9958d1ba9b8e328013072328c1818bc96418e411d7e9cbdbf79b8b",
+      "bytes": 37,
+      "command": [
+        "FT.PROFILE",
+        "missing_profile_idx",
+        "SEARCH",
+        "QUERY",
+        "*"
+      ]
+    },
+    {
+      "file": "resp2-search-basic.reply.resp",
+      "sha256": "20aab1e0410546d59c7c51b0fb38e4fa6a7b998b9c2d04acaab2259888862a44",
+      "bytes": 1955,
+      "command": [
+        "FT.PROFILE",
+        "profile_idx",
+        "SEARCH",
+        "QUERY",
+        "redis"
+      ]
+    },
+    {
+      "file": "resp2-search-count.reply.resp",
+      "sha256": "43695141d3698f7402a97735e4b72d527a3bc5186580f6fe26ed0d326aa8919e",
+      "bytes": 770,
+      "command": [
+        "FT.PROFILE",
+        "profile_idx",
+        "SEARCH",
+        "QUERY",
+        "redis",
+        "LIMIT",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "file": "resp2-search-empty.reply.resp",
+      "sha256": "2e50142748ece6c3ad6bad652e088d25d780672af8f038e70a2e1e7288c0ad0f",
+      "bytes": 629,
+      "command": [
+        "FT.PROFILE",
+        "profile_idx",
+        "SEARCH",
+        "QUERY",
+        "nomatchzzzz"
+      ]
+    },
+    {
+      "file": "resp2-search-limited.reply.resp",
+      "sha256": "e861c0a6f37d589e15b3c4f0aff17af4f0c3c8d1020598c30327bff71db58b24",
+      "bytes": 2908,
+      "command": [
+        "FT.PROFILE",
+        "profile_idx",
+        "SEARCH",
+        "LIMITED",
+        "QUERY",
+        "(@title:(redis|profiling) @category:{a|b}) @price:[0 20]"
+      ]
+    },
+    {
+      "file": "resp2-search-nested.reply.resp",
+      "sha256": "607e8762ec891fd194eb582840bcd21f25cc1fccf8309e46cbc5834e476fd51a",
+      "bytes": 3314,
+      "command": [
+        "FT.PROFILE",
+        "profile_idx",
+        "SEARCH",
+        "QUERY",
+        "(@title:(redis|profiling) @category:{a|b}) @price:[0 20]"
+      ]
+    },
+    {
+      "file": "resp2-search-syntax-error.reply.resp",
+      "sha256": "dc29f290a4e56ba39efb314f0f473547880be5c83a738662ebee3eab11f73bf3",
+      "bytes": 33,
+      "command": [
+        "FT.PROFILE",
+        "profile_idx",
+        "SEARCH",
+        "QUERY",
+        "("
+      ]
+    },
+    {
+      "file": "resp3-aggregate-bare.reply.resp",
+      "sha256": "dd1ad2f64a4326d7bba23c05acd0f4a2cd09203b1d6dc602da25dbfca64c7993",
+      "bytes": 1680,
+      "command": [
+        "FT.PROFILE",
+        "profile_idx",
+        "AGGREGATE",
+        "QUERY",
+        "*"
+      ]
+    },
+    {
+      "file": "resp3-aggregate-empty.reply.resp",
+      "sha256": "5b8821aab90e1fc40414806b437c7a9feecc49283eb7e7c9a63e452d119e3792",
+      "bytes": 473,
+      "command": [
+        "FT.PROFILE",
+        "profile_idx",
+        "AGGREGATE",
+        "QUERY",
+        "nomatchzzzz"
+      ]
+    },
+    {
+      "file": "resp3-aggregate-group.reply.resp",
+      "sha256": "9b6d698a0f5449f2167df15eb9ab17ad190f8db8276afebc13510a6638ff031b",
+      "bytes": 908,
+      "command": [
+        "FT.PROFILE",
+        "profile_idx",
+        "AGGREGATE",
+        "QUERY",
+        "*",
+        "GROUPBY",
+        "1",
+        "@category",
+        "REDUCE",
+        "COUNT",
+        "0",
+        "AS",
+        "n",
+        "SORTBY",
+        "2",
+        "@n",
+        "DESC"
+      ]
+    },
+    {
+      "file": "resp3-aggregate-load.reply.resp",
+      "sha256": "8d71447365f30430e5c3f139dca5eda590b67eabe544e812bae7b9ea3148d0e8",
+      "bytes": 1006,
+      "command": [
+        "FT.PROFILE",
+        "profile_idx",
+        "AGGREGATE",
+        "QUERY",
+        "*",
+        "LOAD",
+        "2",
+        "@title",
+        "@price",
+        "SORTBY",
+        "2",
+        "@price",
+        "DESC",
+        "LIMIT",
+        "1",
+        "3"
+      ]
+    },
+    {
+      "file": "resp3-aggregate-reducer-error.reply.resp",
+      "sha256": "4aa608e465f94ed6a717ddfdcb423f219b828835845758d03a51e6812df06940",
+      "bytes": 33,
+      "command": [
+        "FT.PROFILE",
+        "profile_idx",
+        "AGGREGATE",
+        "QUERY",
+        "*",
+        "GROUPBY",
+        "0",
+        "REDUCE",
+        "NOT_A_REDUCER",
+        "0",
+        "AS",
+        "n"
+      ]
+    },
+    {
+      "file": "resp3-command-error.reply.resp",
+      "sha256": "9900290ec8ff87dc9748095d5acf46b697315bb061da07a1861c10493d93bb70",
+      "bytes": 49,
+      "command": [
+        "FT.PROFILE",
+        "profile_idx",
+        "BOGUS",
+        "QUERY",
+        "*"
+      ]
+    },
+    {
+      "file": "resp3-missing-index-error.reply.resp",
+      "sha256": "7629d26e4b9958d1ba9b8e328013072328c1818bc96418e411d7e9cbdbf79b8b",
+      "bytes": 37,
+      "command": [
+        "FT.PROFILE",
+        "missing_profile_idx",
+        "SEARCH",
+        "QUERY",
+        "*"
+      ]
+    },
+    {
+      "file": "resp3-search-basic.reply.resp",
+      "sha256": "ddd4c3f91db586049f011c7fcce3ea3f7c3dbb18a0f30e6420924da6247fd29a",
+      "bytes": 2424,
+      "command": [
+        "FT.PROFILE",
+        "profile_idx",
+        "SEARCH",
+        "QUERY",
+        "redis"
+      ]
+    },
+    {
+      "file": "resp3-search-count.reply.resp",
+      "sha256": "0a2f5baabf3eadd14a844cd83d9f7cf3aff8d04040139d7d07c0d924e94be28f",
+      "bytes": 837,
+      "command": [
+        "FT.PROFILE",
+        "profile_idx",
+        "SEARCH",
+        "QUERY",
+        "redis",
+        "LIMIT",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "file": "resp3-search-empty.reply.resp",
+      "sha256": "da040cf555eab638ed546c727300d3107334d1beddc03a9dd4459e002f201973",
+      "bytes": 666,
+      "command": [
+        "FT.PROFILE",
+        "profile_idx",
+        "SEARCH",
+        "QUERY",
+        "nomatchzzzz"
+      ]
+    },
+    {
+      "file": "resp3-search-limited.reply.resp",
+      "sha256": "74e9e54be3da8eb62852fce5dcc75164781828c70d70192bffe6c4e0df9e60bd",
+      "bytes": 3353,
+      "command": [
+        "FT.PROFILE",
+        "profile_idx",
+        "SEARCH",
+        "LIMITED",
+        "QUERY",
+        "(@title:(redis|profiling) @category:{a|b}) @price:[0 20]"
+      ]
+    },
+    {
+      "file": "resp3-search-nested.reply.resp",
+      "sha256": "db669e0d90dc9c38e53751a61725d2c16e1e9a739bf84fc31a3e2dd39e8d670e",
+      "bytes": 3754,
+      "command": [
+        "FT.PROFILE",
+        "profile_idx",
+        "SEARCH",
+        "QUERY",
+        "(@title:(redis|profiling) @category:{a|b}) @price:[0 20]"
+      ]
+    },
+    {
+      "file": "resp3-search-syntax-error.reply.resp",
+      "sha256": "dc29f290a4e56ba39efb314f0f473547880be5c83a738662ebee3eab11f73bf3",
+      "bytes": 33,
+      "command": [
+        "FT.PROFILE",
+        "profile_idx",
+        "SEARCH",
+        "QUERY",
+        "("
+      ]
+    }
+  ],
+  "expected_output": "The two .txt files specify formatted MCP output for captured empty aggregate replies; they are not Redis wire captures."
+}

@@ -1,0 +1,94 @@
+*2
+*4
+:30
+*4
+$5
+title
+$25
+redis profiling sample 28
+$5
+price
+$2
+28
+*4
+$5
+title
+$25
+redis profiling sample 27
+$5
+price
+$2
+27
+*4
+$5
+title
+$25
+redis profiling sample 26
+$5
+price
+$2
+26
+*4
++Shards
+*1
+*14
++Total profile time
+$6
+0.0195
++Parsing time
+$8
+0.002667
++Workers queue time
+$1
+0
++Pipeline creation time
+$8
+0.000916
++Warning
+*1
++None
++Iterators profile
+*6
++Type
++WILDCARD
++Time
+$8
+0.000458
++Number of reading operations
+:30
++Result processors profile
+*4
+*6
++Type
++Index
++Time
+$7
+0.00196
++Results processed
+:30
+*6
++Type
++Loader
++Time
+$20
+0.006750000000000001
++Results processed
+:30
+*6
++Type
++Sorter
++Time
+$20
+0.002664999999999999
++Results processed
+:3
+*6
++Type
++Pager/Limiter
++Time
+$21
+3.7500000000000033e-4
++Results processed
+:3
++Coordinator
+*0

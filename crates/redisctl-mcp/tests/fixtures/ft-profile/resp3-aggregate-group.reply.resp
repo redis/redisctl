@@ -1,0 +1,108 @@
+%2
++Results
+%5
++attributes
+*0
++format
++STRING
++results
+*3
+%2
++extra_attributes
+%2
+$8
+category
+$1
+c
+$1
+n
+$2
+10
++values
+*0
+%2
++extra_attributes
+%2
+$8
+category
+$1
+a
+$1
+n
+$2
+10
++values
+*0
+%2
++extra_attributes
+%2
+$8
+category
+$1
+b
+$1
+n
+$2
+10
++values
+*0
++total_results
+:3
++warning
+*0
++Profile
+%2
++Shards
+*1
+%7
++Total profile time
+,0.083584
++Parsing time
+,0.005625
++Workers queue time
+,0
++Pipeline creation time
+,0.001917
++Warning
+*1
++None
++Iterators profile
+%3
++Type
++WILDCARD
++Time
+,0.001376
++Number of reading operations
+:30
++Result processors profile
+*4
+%3
++Type
++Index
++Time
+,0.021375
++Results processed
+:30
+%3
++Type
++Loader
++Time
+,0.02467
++Results processed
+:30
+%3
++Type
++Grouper
++Time
+,0.010789
++Results processed
+:3
+%3
++Type
++Sorter
++Time
+,0.0018329999999999944
++Results processed
+:3
++Coordinator
+%0
