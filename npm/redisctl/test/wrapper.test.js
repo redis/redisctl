@@ -21,9 +21,9 @@ function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'redisctl-wrapper-test-'));
 }
 
-// A redisctl that records each run. `init --help` and `--version` are the
-// wrapper's probes: they answer without recording.
-function fakeRedisctl(exitCode, { dir = tempDir(), hasInit = true, version = VERSION } = {}) {
+// A redisctl that records each run. `--version` is the wrapper's probe: it
+// answers without recording.
+function fakeRedisctl(exitCode, { dir = tempDir(), version = VERSION } = {}) {
   fs.mkdirSync(dir, { recursive: true });
   const argsFile = path.join(dir, 'args.json');
   const envFile = path.join(dir, 'env.json');
@@ -32,7 +32,6 @@ function fakeRedisctl(exitCode, { dir = tempDir(), hasInit = true, version = VER
     recorder,
     `const fs = require('node:fs');
 const argv = process.argv.slice(2);
-if (argv.join(' ') === 'init --help') process.exit(${hasInit ? 0 : 2});
 if (argv.join(' ') === '--version') {
   console.log('redisctl ${version}');
   process.exit(0);
@@ -63,17 +62,17 @@ function testEnv(pathDir, extra = {}) {
   };
 }
 
-function run(extraArgs, pathDir) {
-  return spawnSync(process.execPath, [WRAPPER, ...extraArgs], {
+function run(extraArgs, pathDir, wrapper = WRAPPER) {
+  return spawnSync(process.execPath, [wrapper, ...extraArgs], {
     encoding: 'utf8',
     env: testEnv(pathDir),
   });
 }
 
 // Async, so the in-process release server can answer the wrapper's download.
-function runAsync(extraArgs, env) {
+function runAsync(extraArgs, env, [command, ...before] = [process.execPath, WRAPPER]) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [WRAPPER, ...extraArgs], { env });
+    const child = spawn(command, [...before, ...extraArgs], { env });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk) => (stdout += chunk));
@@ -83,11 +82,11 @@ function runAsync(extraArgs, env) {
 }
 
 // Serves `installer` as this version's release installer; returns the base URL.
-async function releaseServer(t, installer) {
+async function releaseServer(t, installer, version = VERSION) {
   const requests = [];
   const server = http.createServer((req, res) => {
     requests.push(req.url);
-    if (installer !== undefined && req.url === `/redisctl-v${VERSION}/redisctl-installer.sh`) {
+    if (installer !== undefined && req.url === `/redisctl-v${version}/redisctl-installer.sh`) {
       res.end(installer);
     } else {
       res.statusCode = 404;
@@ -102,8 +101,8 @@ async function releaseServer(t, installer) {
 // An installer that drops a recording redisctl where REDISCTL_UNMANAGED_INSTALL
 // points, the way the release installer does, and talks on stdout like it. It
 // records the install-location settings it was given.
-function installerScript() {
-  const fake = fakeRedisctl(0, { dir: path.join(tempDir(), 'payload') });
+function installerScript(version = VERSION) {
+  const fake = fakeRedisctl(0, { dir: path.join(tempDir(), 'payload'), version });
   const settings = path.join(tempDir(), 'settings');
   return {
     fake,
@@ -113,6 +112,38 @@ printf '%s|%s|%s|%s' "$REDISCTL_UNMANAGED_INSTALL" "\${REDISCTL_INSTALL_DIR:-}" 
 echo "installing to $REDISCTL_UNMANAGED_INSTALL"
 mkdir -p "$REDISCTL_UNMANAGED_INSTALL" && cp "${fake.dir}/redisctl" "$REDISCTL_UNMANAGED_INSTALL/redisctl"
 `,
+  };
+}
+
+// This package at a release version. The checked-in package.json says 0.0.0, and
+// no installed copy is older than that.
+function packageAt(version) {
+  const dir = tempDir();
+  fs.cpSync(path.dirname(WRAPPER), path.join(dir, 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ ...require('../package.json'), version }));
+  return dir;
+}
+
+function packed(t, dir = path.join(__dirname, '..')) {
+  const work = tempDir();
+  t.after(() => fs.rmSync(work, { recursive: true, force: true }));
+  const npmCache = { npm_config_cache: path.join(work, 'cache'), npm_config_update_notifier: 'false' };
+  const result = spawnSync('npm', ['pack', '--silent', '--pack-destination', work], {
+    cwd: dir,
+    encoding: 'utf8',
+    env: { ...process.env, ...npmCache },
+  });
+  assert.strictEqual(result.status, 0, result.stderr);
+  // Only node and npx: the host's npx folder can also hold a real redisctl (Homebrew).
+  const npxDir = path.join(work, 'npx-bin');
+  fs.mkdirSync(npxDir);
+  const npx = process.env.PATH.split(path.delimiter).map((d) => path.join(d, 'npx')).find((f) => fs.existsSync(f));
+  fs.symlinkSync(fs.realpathSync(npx), path.join(npxDir, 'npx'));
+  fs.symlinkSync(process.execPath, path.join(npxDir, 'node'));
+  return {
+    tarball: path.join(work, result.stdout.trim()),
+    npxDir,
+    npmEnv: { ...npmCache, npm_config_offline: 'true' },
   };
 }
 
@@ -284,27 +315,6 @@ test('the installer does not see the npm bin entry as a redisctl', async (t) => 
   assert.strictEqual(fs.readFileSync(seen, 'utf8').trim(), 'none');
 });
 
-test('an installed redisctl without init is skipped for the release one', async (t) => {
-  const old = fakeRedisctl(0, { hasInit: false });
-  const { fake, script } = installerScript();
-  const { url } = await releaseServer(t, script);
-  const env = testEnv(`${old.dir}:/bin:/usr/bin`, { REDISCTL_RELEASES_URL: url });
-  const result = await runAsync(['init'], env);
-  assert.strictEqual(result.status, 0, result.stderr);
-  assert.deepStrictEqual(childArgs(fake.argsFile), ['init']);
-  assert.ok(!fs.existsSync(old.argsFile), 'the old copy must not run');
-  assert.match(
-    result.stderr,
-    new RegExp(`${old.dir}/redisctl has no init command - installing redisctl ${VERSION}; that copy stays as it is\\n`)
-  );
-});
-
-test('a redisctl without init still runs the other subcommands', () => {
-  const old = fakeRedisctl(0, { hasInit: false });
-  assert.strictEqual(run(['profile', 'list'], old.dir).status, 0);
-  assert.deepStrictEqual(childArgs(old.argsFile), ['profile', 'list']);
-});
-
 test('a redisctl an earlier run or the official installer left is used even when PATH lacks it', async (t) => {
   const { url, requests } = await releaseServer(t);
   for (const where of [(env) => path.join(env.XDG_DATA_HOME, 'redisctl', 'bin'), (env) => path.join(env.CARGO_HOME, 'bin')]) {
@@ -331,13 +341,54 @@ test('a copy in the wrapper folder at another version is replaced by this releas
   assert.match(result.stderr, new RegExp(`updating ${installDir}/redisctl to redisctl ${VERSION}\\n`));
 });
 
-test('a redisctl the user installed is used at any version that has init', async (t) => {
-  const { url, requests } = await releaseServer(t);
-  const own = fakeRedisctl(0, { version: '0.0.1' });
-  const result = await runAsync(['init'], testEnv(`${own.dir}:/bin:/usr/bin`, { REDISCTL_RELEASES_URL: url }));
-  assert.strictEqual(result.status, 0, result.stderr);
-  assert.deepStrictEqual(childArgs(own.argsFile), ['init']);
-  assert.deepStrictEqual(requests, []);
+test('a redisctl the user installed runs at this release or newer; an older one is skipped and kept', () => {
+  const wrapper = path.join(packageAt('0.14.0'), 'bin', 'redisctl.js');
+  for (const [own, runs] of [['0.14.0', true], ['1.0.0', true], ['0.13.9', false], ['0.9.0', false], ['dev', false]]) {
+    const copy = fakeRedisctl(0, { version: own });
+    const result = run(['init'], copy.dir, wrapper);
+    assert.strictEqual(fs.existsSync(copy.argsFile), runs, `${own}: ${result.stderr}`);
+    if (!runs) {
+      assert.match(
+        result.stderr,
+        new RegExp(`${copy.dir}/redisctl is not redisctl 0\\.14\\.0 or newer - installing redisctl 0\\.14\\.0; that copy stays as it is\\n`)
+      );
+    }
+  }
+});
+
+test('the installed version floor follows SemVer prerelease and build precedence', () => {
+  for (const [release, installed, runs] of [
+    ['0.14.0', '0.14.0-rc.1', false],
+    ['0.14.0-rc.2', '0.14.0-rc.1', false],
+    ['0.14.0-rc.2', '0.14.0-rc.10', true],
+    ['0.14.0-rc.10', '0.14.0-rc.2', false],
+    ['0.14.0-rc.1', '0.14.0', true],
+    ['0.14.0-rc.1', '0.14.0-rc.1', true],
+    ['0.14.0-alpha.1', '0.14.0-alpha.beta', true],
+    ['0.14.0-alpha.beta', '0.14.0-alpha.1', false],
+    ['0.14.0-alpha', '0.14.0-alpha.1', true],
+    ['0.14.0-alpha.1', '0.14.0-alpha', false],
+    ['0.14.0-rc.A', '0.14.0-rc.a', true],
+    ['0.14.0-rc.a', '0.14.0-rc.A', false],
+    ['0.14.0+wrapper.1', '0.14.0+native.2', true],
+    ['0.14.0-rc.1+wrapper', '0.14.0-rc.1+native', true],
+    ['0.14.0', '0.15.0-alpha', true],
+    ['0.14.0-rc.9007199254740993', '0.14.0-rc.9007199254740992', false],
+    ['0.14.0', '0.14.0garbage', false],
+    ['0.14.0', '00.14.0', false],
+    ['0.14.0-rc.1', '0.14.0-rc.01', false],
+    ['0.14.0-rc.1', '0.14.0-rc..2', false],
+  ]) {
+    const wrapper = path.join(packageAt(release), 'bin', 'redisctl.js');
+    const copy = fakeRedisctl(0, { version: installed });
+    const result = run(['init', '--dry-run'], copy.dir, wrapper);
+    const label = `${installed} against ${release}: ${result.stderr}`;
+    assert.strictEqual(fs.existsSync(copy.argsFile), runs, label);
+    assert.strictEqual(result.status, runs ? 0 : 1, label);
+    assert.ok(fs.existsSync(path.join(copy.dir, 'redisctl')), 'the installed copy is kept');
+    if (runs) assert.deepStrictEqual(childArgs(copy.argsFile), ['init', '--dry-run']);
+    else assert.ok(result.stderr.includes(`installing redisctl ${release}`), label);
+  }
 });
 
 test('an installer that leaves no runnable redisctl exits 1 with the hint', async (t) => {
@@ -389,22 +440,37 @@ process.env.REDISCTL_TEST_DEPTH = String(depth);
 
 test('npx runs the packed wrapper the way the README does', (t) => {
   const { dir, argsFile, envFile } = fakeRedisctl(0);
-  const work = tempDir();
-  t.after(() => fs.rmSync(work, { recursive: true, force: true }));
-  const npmCache = { npm_config_cache: path.join(work, 'cache'), npm_config_update_notifier: 'false' };
-  const packed = spawnSync('npm', ['pack', '--silent', '--pack-destination', work], {
-    cwd: path.join(__dirname, '..'),
-    encoding: 'utf8',
-    env: { ...process.env, ...npmCache },
-  });
-  assert.strictEqual(packed.status, 0, packed.stderr);
-  const tarball = path.join(work, packed.stdout.trim());
-  const npxDir = process.env.PATH.split(path.delimiter).find((d) => fs.existsSync(path.join(d, 'npx')));
+  const { tarball, npxDir, npmEnv } = packed(t);
   const result = spawnSync('npx', ['--yes', `--package=${tarball}`, 'redisctl', 'init', '-y'], {
     encoding: 'utf8',
-    env: testEnv([dir, npxDir, '/bin'].join(path.delimiter), { ...npmCache, npm_config_offline: 'true' }),
+    env: testEnv([dir, npxDir, '/bin'].join(path.delimiter), npmEnv),
   });
   assert.strictEqual(result.status, 0, result.stderr);
   assert.deepStrictEqual(childArgs(argsFile), ['init', '--defaults']);
   assert.strictEqual(JSON.parse(fs.readFileSync(envFile, 'utf8')).npm_config_package, undefined);
+});
+
+test('npx with an older redisctl on PATH, like a stale brew install, runs its own release', async (t) => {
+  const release = '0.14.0';
+  const brew = fakeRedisctl(0, { version: '0.13.0' });
+  const { fake, script } = installerScript(release);
+  const { url, requests } = await releaseServer(t, script, release);
+  const { tarball, npxDir, npmEnv } = packed(t, packageAt(release));
+  const env = testEnv([brew.dir, npxDir, '/bin'].join(path.delimiter), { ...npmEnv, REDISCTL_RELEASES_URL: url });
+  const npx = (...argv) => runAsync(['--yes', `--package=${tarball}`, 'redisctl', ...argv], env, ['npx']);
+  const result = await npx('init', '--dry-run');
+  assert.strictEqual(result.status, 0, result.stderr);
+  assert.deepStrictEqual(requests, [`/redisctl-v${release}/redisctl-installer.sh`]);
+  assert.deepStrictEqual(childArgs(fake.argsFile), ['init', '--dry-run']);
+  assert.ok(!fs.existsSync(brew.argsFile), 'the older copy must not run');
+  assert.match(
+    result.stderr,
+    new RegExp(`${brew.dir}/redisctl is not redisctl ${release} or newer - installing redisctl ${release}; that copy stays as it is\\n`)
+  );
+  // The next run, with the older copy still first on PATH, reuses that install.
+  const again = await npx('init', '--defaults');
+  assert.strictEqual(again.status, 0, again.stderr);
+  assert.strictEqual(requests.length, 1);
+  assert.deepStrictEqual(childArgs(fake.argsFile), ['init', '--defaults']);
+  assert.ok(!fs.existsSync(brew.argsFile), 'the older copy must not run');
 });

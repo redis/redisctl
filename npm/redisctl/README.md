@@ -20,8 +20,8 @@ and never reaches it. Both are fine - they just answer different questions.
 
 The wrapper bundles no binary. It runs the first `redisctl` it finds on PATH, then
 in its own install folder, then in `~/.cargo/bin` (the official installer's
-default), skipping its own npm bin entry. For `init`, that copy must have the
-`init` command; an older one is skipped and left where it is.
+default), skipping its own npm bin entry. A copy you installed must be the
+wrapper's version or newer; an older one is skipped and left where it is.
 
 With no usable copy, the wrapper downloads the official installer of the redisctl
 release matching its own version, from GitHub releases, and runs it in unmanaged
