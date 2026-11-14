@@ -1,6 +1,7 @@
 #![cfg(feature = "database")]
 //! Synthetic RESP regressions: `limit: 0` on `redis_keys`/`redis_scan` must be
-//! refused up front instead of scanning and reporting "No keys found".
+//! refused up front instead of scanning and reporting "No keys found"; same for
+//! `sample_size: 0` on `redis_hotkeys`.
 
 mod support;
 
@@ -98,6 +99,27 @@ async fn run(
 fn text(result: &tower_mcp::CallToolResult) -> &str {
     assert_eq!(result.content.len(), 1);
     result.content[0].as_text().expect("text content")
+}
+
+#[tokio::test]
+async fn hotkeys_refuse_zero_sample_size_without_scanning() {
+    for sample_size in [json!(0), json!("0")] {
+        let result = run(
+            redis::hotkeys,
+            json!({"pattern": "*", "sample_size": sample_size}),
+            None,
+        )
+        .await;
+        assert!(
+            result.is_error,
+            "redis_hotkeys: expected tool error: {result:?}"
+        );
+        let message = text(&result);
+        assert!(
+            message.contains("sample_size must be at least 1"),
+            "redis_hotkeys: {message}"
+        );
+    }
 }
 
 #[tokio::test]
