@@ -46,10 +46,10 @@ pub struct FieldDefinition {
     /// Weight for TEXT fields (default 1.0)
     #[serde(default)]
     pub weight: Option<f64>,
-    /// Separator character for TAG fields (default ",")
+    /// Separator character for TAG fields: HASH defaults to ","; JSON has no default separator.
     #[serde(default)]
     pub separator: Option<String>,
-    /// Alias for this field (AS alias)
+    /// Optional alias for this field (AS alias) providing a simple query name
     #[serde(default)]
     pub alias: Option<String>,
 }
@@ -103,6 +103,31 @@ impl FieldDefinition {
             args.push("NOINDEX".to_string());
         }
         args
+    }
+}
+
+fn append_json_schema_notes(output: &mut String, schema: &[FieldDefinition]) {
+    let without_aliases = schema
+        .iter()
+        .filter(|field| field.alias.is_none())
+        .map(|field| field.name.as_str())
+        .collect::<Vec<_>>();
+    if !without_aliases.is_empty() {
+        output.push_str(&format!(
+            "\n\nNote: JSON fields without aliases: {}. Optional aliases provide simple query names; raw JSONPath query parsing is limited.",
+            without_aliases.join(", ")
+        ));
+    }
+    let without_separators = schema
+        .iter()
+        .filter(|field| field.field_type.to_uppercase() == "TAG" && field.separator.is_none())
+        .map(|field| field.name.as_str())
+        .collect::<Vec<_>>();
+    if !without_separators.is_empty() {
+        output.push_str(&format!(
+            "\n\nNote: JSON TAG fields without separators: {}. JSON has no default separator. Whole strings are single tags; array paths (e.g. $.tags[*]) index separate values, and explicit separators split delimited strings.",
+            without_separators.join(", ")
+        ));
     }
 }
 
@@ -893,11 +918,14 @@ database_tool!(read_only, ft_dictdump, "redis_ft_dictdump",
 database_tool!(write, ft_create, "redis_ft_create",
     "Create a search index with the specified schema. Requires the RediSearch module.\n\n\
      For JSON indexes, set `on` to `JSON` and use JSONPath expressions as field names (e.g. `$.name`). \
-     Always set `alias` on JSON fields to provide clean query names (e.g. alias `name` for `$.name`), \
-     since raw JSONPath cannot be used in search queries.\n\n\
+     Aliases are optional; set `alias` for simple query names (e.g. alias `name` for `$.name`), \
+     because the query parser has limited JSONPath support.\n\n\
      For HASH indexes (default), use plain field names (e.g. `name`, `price`) — no JSONPath or alias needed.\n\n\
      Field types: TEXT (full-text searchable, stemmed by default), NUMERIC (range queries), \
      TAG (exact match/filtering, case-insensitive), GEO (geo queries), VECTOR (similarity search).\n\n\
+     JSON TAG fields have no default separator: whole strings are single tags. \
+     Use array paths (e.g. `$.tags[*]`) for separate values or an explicit separator for delimited strings. \
+     HASH TAG fields default to comma.\n\n\
      Example schema for JSON:\n\
      ```\n\
      {\"name\": \"$.name\", \"alias\": \"name\", \"field_type\": \"TEXT\", \"sortable\": true}\n\
@@ -1009,10 +1037,14 @@ database_tool!(write, ft_create, "redis_ft_create",
             .join(", ");
 
         let note = if if_exists == "drop" { " (replaced existing index)" } else { "" };
-        Ok(CallToolResult::text(format!(
+        let mut output = format!(
             "Created index '{}' with {} field(s): {}{}",
             input.index, input.schema.len(), field_summary, note
-        )))
+        );
+        if input.on.as_ref().is_some_and(|on| on.to_uppercase() == "JSON") {
+            append_json_schema_notes(&mut output, &input.schema);
+        }
+        Ok(CallToolResult::text(output))
     }
 );
 
