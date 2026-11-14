@@ -109,6 +109,9 @@ pub struct ToolsetPolicy {
     /// Explicit tool names to deny (wins over allow and tier)
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub deny: Vec<String>,
+    /// Allow per-call Redis URL overrides. Defaults to false and is only
+    /// honored in the database toolset; tiers and tool allow lists do not enable it.
+    pub allow_url_override: bool,
 }
 
 /// TOML-deserializable policy configuration.
@@ -503,6 +506,16 @@ impl Policy {
         self.config.tier
     }
 
+    /// Whether the operator explicitly permits per-call Redis URL overrides.
+    /// Independent of safety tiers and tool allow lists. Only the database
+    /// toolset setting is honored; the fixed-target pilot never uses overrides.
+    pub fn allows_database_url_override(&self) -> bool {
+        self.config
+            .database
+            .as_ref()
+            .is_some_and(|policy| policy.allow_url_override)
+    }
+
     /// Generate a human-readable description for router instructions.
     pub fn describe(&self) -> String {
         let mut desc = String::new();
@@ -529,6 +542,12 @@ impl Policy {
             }
         };
         desc.push_str(tier_desc);
+
+        desc.push_str(if self.allows_database_url_override() {
+            "\n\nPer-call Redis URL overrides are enabled for the legacy database backend."
+        } else {
+            "\n\nPer-call Redis URL overrides are denied. Use the configured database URL or a configured profile."
+        });
 
         // Note per-toolset overrides
         let overrides: Vec<String> = [
@@ -585,6 +604,7 @@ impl Policy {
     fn to_summary(&self) -> PolicySummary {
         PolicySummary {
             global_tier: self.config.tier.to_string(),
+            database_url_override_allowed: self.allows_database_url_override(),
             deny_categories: self.config.deny_categories.clone(),
             global_allow: self.config.allow.clone(),
             global_deny: self.config.deny.clone(),
@@ -609,6 +629,7 @@ impl Policy {
 #[derive(Debug, Serialize)]
 pub struct PolicySummary {
     pub global_tier: String,
+    pub database_url_override_allowed: bool,
     pub deny_categories: Vec<String>,
     pub global_allow: Vec<String>,
     pub global_deny: Vec<String>,
@@ -724,6 +745,33 @@ mod tests {
     fn default_policy_is_read_only() {
         let config = PolicyConfig::default();
         assert_eq!(config.tier, SafetyTier::ReadOnly);
+    }
+
+    #[test]
+    fn database_url_override_requires_explicit_database_opt_in() {
+        for source in [
+            "",
+            "tier = 'full'\nallow = ['redis_set']",
+            "[database]\ntier = 'full'\nallow = ['redis_set']",
+            "[database]\nallow_url_override = false",
+            "[cloud]\nallow_url_override = true\n[enterprise]\nallow_url_override = true\n[app]\nallow_url_override = true",
+        ] {
+            let config: PolicyConfig = toml::from_str(source).unwrap();
+            let policy = policy_with_config(config);
+            assert!(!policy.allows_database_url_override(), "{source}");
+            assert!(!policy.to_summary().database_url_override_allowed);
+            assert!(policy.describe().contains("URL overrides are denied"));
+        }
+        assert!(
+            !policy_with_config(PolicyConfig::synthesized_default()).allows_database_url_override()
+        );
+
+        let config: PolicyConfig = toml::from_str("[database]\nallow_url_override = true").unwrap();
+        let serialized = toml::to_string(&config).unwrap();
+        let policy = policy_with_config(toml::from_str(&serialized).unwrap());
+        assert!(policy.allows_database_url_override());
+        assert!(policy.to_summary().database_url_override_allowed);
+        assert!(policy.describe().contains("URL overrides are enabled"));
     }
 
     #[test]

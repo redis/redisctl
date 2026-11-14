@@ -145,7 +145,7 @@ database_tool!(read_only, health_check, "redis_health_check",
             maxmemory_human
         };
 
-        let output = format!(
+        let mut output = format!(
             "Redis Health Check\n\
              ==================\n\
              \n\
@@ -177,6 +177,7 @@ database_tool!(read_only, health_check, "redis_health_check",
             db_size,
         );
 
+        output.push_str(super::MEMORY_INTERPRETATION_NOTE);
         Ok(CallToolResult::text(output))
     }
 );

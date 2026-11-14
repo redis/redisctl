@@ -46,10 +46,10 @@ pub struct FieldDefinition {
     /// Weight for TEXT fields (default 1.0)
     #[serde(default)]
     pub weight: Option<f64>,
-    /// Separator character for TAG fields (default ",")
+    /// Separator character for TAG fields: HASH defaults to ","; JSON has no default separator.
     #[serde(default)]
     pub separator: Option<String>,
-    /// Alias for this field (AS alias)
+    /// Optional alias for this field (AS alias) providing a simple query name
     #[serde(default)]
     pub alias: Option<String>,
 }
@@ -103,6 +103,31 @@ impl FieldDefinition {
             args.push("NOINDEX".to_string());
         }
         args
+    }
+}
+
+fn append_json_schema_notes(output: &mut String, schema: &[FieldDefinition]) {
+    let without_aliases = schema
+        .iter()
+        .filter(|field| field.alias.is_none())
+        .map(|field| field.name.as_str())
+        .collect::<Vec<_>>();
+    if !without_aliases.is_empty() {
+        output.push_str(&format!(
+            "\n\nNote: JSON fields without aliases: {}. Optional aliases provide simple query names; raw JSONPath query parsing is limited.",
+            without_aliases.join(", ")
+        ));
+    }
+    let without_separators = schema
+        .iter()
+        .filter(|field| field.field_type.to_uppercase() == "TAG" && field.separator.is_none())
+        .map(|field| field.name.as_str())
+        .collect::<Vec<_>>();
+    if !without_separators.is_empty() {
+        output.push_str(&format!(
+            "\n\nNote: JSON TAG fields without separators: {}. JSON has no default separator. Whole strings are single tags; array paths (e.g. $.tags[*]) index separate values, and explicit separators split delimited strings.",
+            without_separators.join(", ")
+        ));
     }
 }
 
@@ -533,6 +558,223 @@ database_tool!(read_only, ft_explain, "redis_ft_explain",
     }
 );
 
+/// A record is interpreted only within a known profile section. Result arrays
+/// and unknown fields remain sequences, even when they look like key/value pairs.
+#[derive(Clone, Copy)]
+enum ProfileSection {
+    Root,
+    Shard,
+    Iterator,
+    Processor,
+    Raw,
+}
+
+fn profile_key(value: &redis::Value) -> Option<&str> {
+    let key = match value {
+        redis::Value::SimpleString(key) => key.as_str(),
+        redis::Value::BulkString(key) => std::str::from_utf8(key).ok()?,
+        _ => return None,
+    };
+    (!key.chars().any(char::is_control)).then_some(key)
+}
+
+fn profile_fields(
+    value: &redis::Value,
+    section: ProfileSection,
+) -> Option<Vec<(&str, &redis::Value)>> {
+    if matches!(section, ProfileSection::Raw) {
+        return None;
+    }
+    let pairs = value.as_map_iter()?;
+    let mut names = std::collections::HashSet::new();
+    let mut fields = Vec::new();
+    for (key, value) in pairs {
+        let key = profile_key(key)?;
+        if !names.insert(key) {
+            return None;
+        }
+        fields.push((key, value));
+    }
+    let recognized = fields.iter().any(|(key, _)| match section {
+        ProfileSection::Root => matches!(
+            *key,
+            "Shards"
+                | "Coordinator"
+                | "Total profile time"
+                | "Iterators profile"
+                | "Result processors profile"
+        ),
+        ProfileSection::Shard => matches!(
+            *key,
+            "Total profile time"
+                | "Total coordinator time"
+                | "Iterators profile"
+                | "Result processors profile"
+        ),
+        ProfileSection::Iterator | ProfileSection::Processor => *key == "Type",
+        ProfileSection::Raw => false,
+    });
+    recognized.then_some(fields)
+}
+
+fn profile_indent(output: &mut String, depth: usize) {
+    output.push_str(&"  ".repeat(depth));
+}
+
+fn render_profile_list(
+    output: &mut String,
+    value: &redis::Value,
+    depth: usize,
+    section: ProfileSection,
+) {
+    if let redis::Value::Array(items) = value {
+        if items.is_empty() {
+            output.push_str("array []");
+            return;
+        }
+        output.push_str("array [\n");
+        for (index, item) in items.iter().enumerate() {
+            profile_indent(output, depth + 1);
+            output.push_str(&format!("[{index}]: "));
+            render_profile_value(output, item, depth + 1, section);
+            output.push('\n');
+        }
+        profile_indent(output, depth);
+        output.push(']');
+    } else {
+        render_profile_value(output, value, depth, ProfileSection::Raw);
+    }
+}
+
+fn render_profile_pairs(output: &mut String, pairs: &[(redis::Value, redis::Value)], depth: usize) {
+    if pairs.is_empty() {
+        output.push_str("map {}");
+        return;
+    }
+    output.push_str("map {\n");
+    for (key, value) in pairs {
+        profile_indent(output, depth + 1);
+        render_profile_value(output, key, depth + 1, ProfileSection::Raw);
+        output.push_str(" => ");
+        render_profile_value(output, value, depth + 1, ProfileSection::Raw);
+        output.push('\n');
+    }
+    profile_indent(output, depth);
+    output.push('}');
+}
+
+fn render_profile_value(
+    output: &mut String,
+    value: &redis::Value,
+    depth: usize,
+    section: ProfileSection,
+) {
+    if let Some(fields) = profile_fields(value, section) {
+        output.push_str(if matches!(value, redis::Value::Map(_)) {
+            "map {\n"
+        } else {
+            "array {\n"
+        });
+        for (key, value) in fields {
+            profile_indent(output, depth + 1);
+            output.push_str(key);
+            output.push_str(": ");
+            match key {
+                "Shards" => render_profile_list(output, value, depth + 1, ProfileSection::Shard),
+                "Coordinator" => {
+                    render_profile_value(output, value, depth + 1, ProfileSection::Shard)
+                }
+                "Iterators profile" | "Child iterator" => {
+                    render_profile_value(output, value, depth + 1, ProfileSection::Iterator)
+                }
+                "Child iterators" => {
+                    render_profile_list(output, value, depth + 1, ProfileSection::Iterator)
+                }
+                "Result processors profile" => {
+                    render_profile_list(output, value, depth + 1, ProfileSection::Processor)
+                }
+                _ => render_profile_value(output, value, depth + 1, ProfileSection::Raw),
+            }
+            output.push('\n');
+        }
+        profile_indent(output, depth);
+        output.push('}');
+        return;
+    }
+
+    // Debug preserves scalar types and full floating-point precision, but its
+    // Attribute implementation discards metadata. Traverse every container here.
+    match value {
+        redis::Value::Array(_) => render_profile_list(output, value, depth, ProfileSection::Raw),
+        redis::Value::Map(pairs) => render_profile_pairs(output, pairs, depth),
+        redis::Value::Set(items) => {
+            output.push_str("set [");
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    output.push_str(", ");
+                }
+                render_profile_value(output, item, depth, ProfileSection::Raw);
+            }
+            output.push(']');
+        }
+        redis::Value::Attribute { data, attributes } => {
+            output.push_str("attribute { data: ");
+            render_profile_value(output, data, depth, ProfileSection::Raw);
+            output.push_str(", attributes: ");
+            render_profile_pairs(output, attributes, depth);
+            output.push_str(" }");
+        }
+        redis::Value::Push { kind, data } => {
+            output.push_str(&format!("push({kind:?}, ["));
+            for (index, item) in data.iter().enumerate() {
+                if index > 0 {
+                    output.push_str(", ");
+                }
+                render_profile_value(output, item, depth, ProfileSection::Raw);
+            }
+            output.push_str("])");
+        }
+        redis::Value::BulkString(bytes) => match std::str::from_utf8(bytes) {
+            Ok(text) => output.push_str(&format!("bulk-string({text:?})")),
+            Err(_) => output.push_str(&format!("binary-data({bytes:?})")),
+        },
+        _ => output.push_str(&format!("{value:?}")),
+    }
+}
+
+fn format_profile_reply(value: &redis::Value) -> String {
+    let sections = match value {
+        redis::Value::Array(items) if items.len() == 2 => Some((&items[0], &items[1])),
+        redis::Value::Map(pairs) if pairs.len() == 2 => {
+            let results = pairs
+                .iter()
+                .find(|(key, _)| profile_key(key) == Some("Results"));
+            let profile = pairs
+                .iter()
+                .find(|(key, _)| profile_key(key) == Some("Profile"));
+            results
+                .zip(profile)
+                .map(|((_, results), (_, profile))| (results, profile))
+        }
+        _ => None,
+    };
+    let mut output = String::new();
+    if let Some((results, profile)) = sections {
+        output.push_str("Results:\n");
+        render_profile_value(&mut output, results, 0, ProfileSection::Raw);
+        output.push_str("\n\nProfile:\n");
+        if profile_fields(profile, ProfileSection::Root).is_none() {
+            output.push_str("Raw reply:\n");
+        }
+        render_profile_value(&mut output, profile, 0, ProfileSection::Root);
+    } else {
+        output.push_str("Raw reply:\n");
+        render_profile_value(&mut output, value, 0, ProfileSection::Raw);
+    }
+    output.push('\n');
+    output
+}
+
 database_tool!(read_only, ft_profile, "redis_ft_profile",
     "Profile a search or aggregate query to analyze performance. Shows timing and index intersection details. Requires the RediSearch module.\n\n\
      The output includes:\n\
@@ -540,7 +782,7 @@ database_tool!(read_only, ft_profile, "redis_ft_profile",
      how many documents each scanned (Counter), and the index size (Size). \
      Intersect iterators combine multiple conditions; the smallest child drives performance.\n\
      - **Result processors**: Shows time spent in scoring, sorting, and loading document content.\n\
-     - **Total profile time**: Wall-clock microseconds for the entire query.\n\n\
+     - **Total profile time**: Timing values as reported by the server, without rescaling. Consult the server version's documentation for units.\n\n\
      Use this to identify which query clause is the bottleneck and whether adding/removing index fields would help.",
     {
         /// Index name
@@ -558,7 +800,7 @@ database_tool!(read_only, ft_profile, "redis_ft_profile",
             )));
         }
 
-        let result: Vec<redis::Value> = redis::cmd("FT.PROFILE")
+        let result: redis::Value = redis::cmd("FT.PROFILE")
             .arg(&input.index)
             .arg(&command_upper)
             .arg("QUERY")
@@ -567,14 +809,23 @@ database_tool!(read_only, ft_profile, "redis_ft_profile",
             .await
             .tool_context("FT.PROFILE failed")?;
 
-        // FT.PROFILE returns [results, profile_data]
+        // Preserve the previous owned Vec<Value> decoder's success/error boundary
+        // while retaining the native RESP3 map rather than splitting its entries.
+        let result = match result {
+            accepted @ (redis::Value::Array(_) | redis::Value::Set(_) | redis::Value::Map(_)
+                | redis::Value::Nil | redis::Value::BulkString(_)) => accepted,
+            other => {
+                let values: Vec<redis::Value> = redis::from_owned_redis_value(other)
+                    .tool_context("FT.PROFILE failed")?;
+                redis::Value::Array(values)
+            }
+        };
+
         let mut output = format!(
             "Profile for {} '{}' on '{}':\n\n",
             command_upper, input.query, input.index
         );
-        for (i, val) in result.iter().enumerate() {
-            output.push_str(&format!("[{}]: {}\n", i, format_value(val)));
-        }
+        output.push_str(&format_profile_reply(&result));
 
         Ok(CallToolResult::text(output))
     }
@@ -667,11 +918,14 @@ database_tool!(read_only, ft_dictdump, "redis_ft_dictdump",
 database_tool!(write, ft_create, "redis_ft_create",
     "Create a search index with the specified schema. Requires the RediSearch module.\n\n\
      For JSON indexes, set `on` to `JSON` and use JSONPath expressions as field names (e.g. `$.name`). \
-     Always set `alias` on JSON fields to provide clean query names (e.g. alias `name` for `$.name`), \
-     since raw JSONPath cannot be used in search queries.\n\n\
+     Aliases are optional; set `alias` for simple query names (e.g. alias `name` for `$.name`), \
+     because the query parser has limited JSONPath support.\n\n\
      For HASH indexes (default), use plain field names (e.g. `name`, `price`) — no JSONPath or alias needed.\n\n\
      Field types: TEXT (full-text searchable, stemmed by default), NUMERIC (range queries), \
      TAG (exact match/filtering, case-insensitive), GEO (geo queries), VECTOR (similarity search).\n\n\
+     JSON TAG fields have no default separator: whole strings are single tags. \
+     Use array paths (e.g. `$.tags[*]`) for separate values or an explicit separator for delimited strings. \
+     HASH TAG fields default to comma.\n\n\
      Example schema for JSON:\n\
      ```\n\
      {\"name\": \"$.name\", \"alias\": \"name\", \"field_type\": \"TEXT\", \"sortable\": true}\n\
@@ -783,10 +1037,14 @@ database_tool!(write, ft_create, "redis_ft_create",
             .join(", ");
 
         let note = if if_exists == "drop" { " (replaced existing index)" } else { "" };
-        Ok(CallToolResult::text(format!(
+        let mut output = format!(
             "Created index '{}' with {} field(s): {}{}",
             input.index, input.schema.len(), field_summary, note
-        )))
+        );
+        if input.on.as_ref().is_some_and(|on| on.to_uppercase() == "JSON") {
+            append_json_schema_notes(&mut output, &input.schema);
+        }
+        Ok(CallToolResult::text(output))
     }
 );
 

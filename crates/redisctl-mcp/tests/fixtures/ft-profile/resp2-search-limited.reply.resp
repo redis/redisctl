@@ -1,0 +1,327 @@
+*2
+*21
+:14
+$13
+profile:doc:0
+*6
+$5
+title
+$24
+redis profiling sample 0
+$8
+category
+$1
+a
+$5
+price
+$1
+0
+$13
+profile:doc:1
+*6
+$5
+title
+$24
+redis profiling sample 1
+$8
+category
+$1
+b
+$5
+price
+$1
+1
+$13
+profile:doc:3
+*6
+$5
+title
+$24
+redis profiling sample 3
+$8
+category
+$1
+a
+$5
+price
+$1
+3
+$13
+profile:doc:4
+*6
+$5
+title
+$24
+redis profiling sample 4
+$8
+category
+$1
+b
+$5
+price
+$1
+4
+$13
+profile:doc:6
+*6
+$5
+title
+$24
+redis profiling sample 6
+$8
+category
+$1
+a
+$5
+price
+$1
+6
+$13
+profile:doc:7
+*6
+$5
+title
+$24
+redis profiling sample 7
+$8
+category
+$1
+b
+$5
+price
+$1
+7
+$13
+profile:doc:9
+*6
+$5
+title
+$24
+redis profiling sample 9
+$8
+category
+$1
+a
+$5
+price
+$1
+9
+$14
+profile:doc:10
+*6
+$5
+title
+$25
+redis profiling sample 10
+$8
+category
+$1
+b
+$5
+price
+$2
+10
+$14
+profile:doc:12
+*6
+$5
+title
+$25
+redis profiling sample 12
+$8
+category
+$1
+a
+$5
+price
+$2
+12
+$14
+profile:doc:13
+*6
+$5
+title
+$25
+redis profiling sample 13
+$8
+category
+$1
+b
+$5
+price
+$2
+13
+*4
++Shards
+*1
+*14
++Total profile time
+$6
+0.0495
++Parsing time
+$7
+0.01775
++Workers queue time
+$1
+0
++Pipeline creation time
+$5
+0.001
++Warning
+*1
++None
++Iterators profile
+*8
++Type
++INTERSECT
++Time
+$8
+0.010209
++Number of reading operations
+:14
++Child iterators
+*3
+*10
++Type
++UNION
++Query type
++TAG
++Time
+$8
+0.001789
++Number of reading operations
+:15
++Child iterators
++The number of iterators in the union is 2
+*10
++Type
++UNION
++Query type
++NUMERIC
++Time
+$8
+0.002375
++Number of reading operations
+:14
++Child iterators
++The number of iterators in the union is 2
+*10
++Type
++UNION
++Query type
++UNION
++Time
+$8
+0.004627
++Number of reading operations
+:14
++Child iterators
+*2
+*10
++Type
++UNION
++Query type
++UNION
++Time
+$8
+0.001791
++Number of reading operations
+:14
++Child iterators
+*2
+*10
++Type
++TEXT
++Term
++redis
++Time
+$8
+0.000626
++Number of reading operations
+:14
++Estimated number of matches
+:30
+*10
++Type
++TEXT
++Term
+++redi
++Time
+$8
+0.000415
++Number of reading operations
+:14
++Estimated number of matches
+:30
+*10
++Type
++UNION
++Query type
++UNION
++Time
+$8
+0.001666
++Number of reading operations
+:14
++Child iterators
+*2
+*10
++Type
++TEXT
++Term
++profiling
++Time
+$8
+0.000334
++Number of reading operations
+:14
++Estimated number of matches
+:30
+*10
++Type
++TEXT
++Term
+++profil
++Time
+$8
+0.000417
++Number of reading operations
+:14
++Estimated number of matches
+:30
++Result processors profile
+*4
+*6
++Type
++Index
++Time
+$8
+0.011249
++Results processed
+:14
+*6
++Type
++Scorer
++Time
+$21
+0.0015859999999999989
++Results processed
+:14
+*6
++Type
++Sorter
++Time
+$21
+0.0017870000000000004
++Results processed
+:10
+*6
++Type
++Loader
++Time
+$21
+0.0077540000000000005
++Results processed
+:10
++Coordinator
+*0

@@ -38,6 +38,10 @@ name = "redis_stack_tools"
 required-features = ["database", "test-support"]
 
 [[test]]
+name = "redis_noop_live"
+required-features = ["database", "test-support"]
+
+[[test]]
 name = "strict_tool_inputs"
 required-features = ["test-support"]
 
@@ -54,15 +58,23 @@ name = "expire_ttl_guard"
 required-features = ["database", "test-support"]
 
 [[test]]
-name = "keys_limit_guard"
-required-features = ["database", "test-support"]
-
-[[test]]
 name = "scan_json_alias"
 required-features = ["database", "test-support"]
 
 [[test]]
+name = "keys_limit_guard"
+required-features = ["database", "test-support"]
+
+[[test]]
+name = "ft_profile_format"
+required-features = ["database", "test-support"]
+
+[[test]]
 name = "json_empty_increment"
+required-features = ["database", "test-support"]
+
+[[test]]
+name = "ft_create_guidance"
 required-features = ["database", "test-support"]
 
 [[test]]
@@ -71,6 +83,10 @@ required-features = ["database", "test-support"]
 
 [[test]]
 name = "config_set_guard"
+required-features = ["database", "test-support"]
+
+[[test]]
+name = "memory_guidance"
 required-features = ["database", "test-support"]
 
 [[test]]

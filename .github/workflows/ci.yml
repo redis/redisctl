@@ -14,6 +14,8 @@ on:
   # target a feature branch and documentation-only changes. This guarantees
   # that the stable "CI Status" check is always emitted.
   pull_request:
+  merge_group:
+    types: [checks_requested]
 
 env:
   CARGO_TERM_COLOR: always
@@ -22,12 +24,18 @@ env:
   RUSTFLAGS: "-C debuginfo=0"
   CARGO_NET_RETRY: 10
 
-# Cancel previous runs of the same workflow
+# Keep PR, queue and main runs separate while cancelling obsolete runs.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  security-audit:
+    uses: ./.github/workflows/security.yml
+
+  cargo-deny:
+    uses: ./.github/workflows/cargo-deny.yml
+
   # Quick checks run first and fail fast
   quick-checks:
     name: Quick Checks
@@ -114,15 +122,20 @@ jobs:
       - name: Run integration tests
         run: cargo test --workspace --test '*' --all-features
 
+      - name: Run live JSON and seed reporting regressions
+        run: |
+          docker pull redis:8.6.7@sha256:e6dae84f7db289dde3384fdb18d182556784e5a681df3a3f54d1289952364ce8
+          cargo test -p redisctl-mcp --all-features --test redis_noop_live -- --ignored --nocapture
+
       - name: Run extended-attribute size-query regression tests
         env:
           REDISCTL_XATTR_TEST_DIR: /dev/shm
         run: cargo test -p redisctl --all-features --test unix_xattr_roundtrip -- --ignored
 
-      - name: Run live JSON SCAN alias regressions
+      - name: Run live FT.CREATE JSON guidance regressions
         run: |
           docker pull redis:8.6.7@sha256:e6dae84f7db289dde3384fdb18d182556784e5a681df3a3f54d1289952364ce8
-          cargo test -p redisctl-mcp --all-features --test scan_json_alias -- --ignored --nocapture
+          cargo test -p redisctl-mcp --all-features --test ft_create_guidance -- --ignored --nocapture
 
       - name: Install local Redis for the opt-in MCP pilot
         run: sudo apt-get update && sudo apt-get install -y redis-server openssl
@@ -143,17 +156,46 @@ jobs:
           REUSE_CONTAINERS: "1"
         run: cargo test -p redisctl-mcp --test redis_stack_tools --all-features test_search_tools -- --ignored --test-threads=1
 
-  # Platform builds - only required for main branch and releases
+      - name: Run live JSON SCAN alias regressions
+        run: |
+          docker pull redis:8.6.7@sha256:e6dae84f7db289dde3384fdb18d182556784e5a681df3a3f54d1289952364ce8
+          cargo test -p redisctl-mcp --all-features --test scan_json_alias -- --ignored --nocapture
+
+  # Required Linux build and full tests run alongside unit/integration jobs.
+  build-linux:
+    name: Build - ubuntu-latest
+    needs: quick-checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          prefix-key: "v1-rust"
+          shared-key: "build"
+
+      - name: Build binary
+        run: cargo build --release --bin redisctl
+
+      # Keep full workspace tests, including doctests, in the required gate.
+      - name: Run all tests
+        run: cargo test --workspace --all-features
+
+  # Optional platforms still run but do not delay the required gate.
   build-platforms:
     name: Build - ${{ matrix.os }}
-    needs: [test-unit, test-integration]
+    needs: quick-checks
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            required: true
           - os: macos-latest
             required: false
           - os: windows-latest
@@ -175,11 +217,6 @@ jobs:
 
       - name: Build binary
         run: cargo build --release --bin redisctl
-
-      # Only run full tests on Linux (fastest platform)
-      - name: Run all tests
-        if: matrix.os == 'ubuntu-latest'
-        run: cargo test --workspace --all-features
 
   # Code coverage - only on main branch
   coverage:
@@ -229,7 +266,7 @@ jobs:
   ci-status:
     name: CI Status
     runs-on: ubuntu-latest
-    needs: [quick-checks, test-unit, test-integration, build-platforms, npm-wrapper]
+    needs: [quick-checks, test-unit, test-integration, build-linux, npm-wrapper, security-audit, cargo-deny]
     if: always()
     steps:
       - name: Check CI status
@@ -246,9 +283,20 @@ jobs:
             echo "Integration tests failed"
             exit 1
           fi
+          if [[ "${{ needs.build-linux.result }}" != "success" ]]; then
+            echo "Linux build or full workspace tests failed"
+            exit 1
+          fi
           if [[ "${{ needs.npm-wrapper.result }}" != "success" ]]; then
             echo "npm wrapper tests failed"
             exit 1
           fi
-          # Build platforms can have failures for non-Linux
+          if [[ "${{ needs.security-audit.result }}" != "success" ]]; then
+            echo "Security audit failed"
+            exit 1
+          fi
+          if [[ "${{ needs.cargo-deny.result }}" != "success" ]]; then
+            echo "Dependency checks failed"
+            exit 1
+          fi
           echo "CI passed!"
