@@ -1,0 +1,73 @@
+*2
+*31
+:1
+*0
+*0
+*0
+*0
+*0
+*0
+*0
+*0
+*0
+*0
+*0
+*0
+*0
+*0
+*0
+*0
+*0
+*0
+*0
+*0
+*0
+*0
+*0
+*0
+*0
+*0
+*0
+*0
+*0
+*0
+*4
++Shards
+*1
+*14
++Total profile time
+$8
+0.019459
++Parsing time
+$5
+0.013
++Workers queue time
+$1
+0
++Pipeline creation time
+$7
+0.00025
++Warning
+*1
++None
++Iterators profile
+*6
++Type
++WILDCARD
++Time
+$8
+0.000458
++Number of reading operations
+:30
++Result processors profile
+*1
+*6
++Type
++Index
++Time
+$8
+0.002166
++Results processed
+:30
++Coordinator
+*0

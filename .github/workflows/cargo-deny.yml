@@ -1,19 +1,7 @@
 name: Cargo Deny
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "**/Cargo.toml"
-      - "**/Cargo.lock"
-      - "deny.toml"
-      - ".github/workflows/cargo-deny.yml"
-  pull_request:
-    paths:
-      - "**/Cargo.toml"
-      - "**/Cargo.lock"
-      - "deny.toml"
-      - ".github/workflows/cargo-deny.yml"
+  workflow_call:
   schedule:
     - cron: "0 0 * * MON" # Weekly on Monday
 
@@ -22,14 +10,15 @@ jobs:
     name: License and Security Check
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         checks:
           - advisories
           - bans licenses sources
 
-    # Prevent duplicate runs
+    # Separate called/scheduled workflows and each matrix leg from the caller.
     concurrency:
-      group: ${{ github.workflow }}-${{ github.ref }}-${{ matrix.checks }}
+      group: cargo-deny-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ matrix.checks }}
       cancel-in-progress: true
 
     steps:

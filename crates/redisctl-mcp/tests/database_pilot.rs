@@ -233,6 +233,37 @@ async fn feature_alone_preserves_the_legacy_schema_and_catalog() {
     assert!(names(&tools).contains("redis_info"));
 }
 
+#[tokio::test]
+async fn legacy_url_opt_in_keeps_the_pilot_fixed_target_contract() {
+    let mut policy = PolicyConfig::default();
+    let mut database = ToolsetPolicy::default();
+    database.allow_url_override = true;
+    policy.database = Some(database);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target = format!("redis://{}", listener.local_addr().unwrap());
+    let mut client = client(builder(policy).with_database_url(Some(target))).await;
+    for override_input in [
+        json!({"key":"k", "url":"redis://default:override-secret@127.0.0.1:1"}),
+        json!({"key":"k", "profile":"other"}),
+    ] {
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            client.call_tool("redis_get", override_input),
+        )
+        .await
+        .expect("pilot must reject target overrides before connection");
+        assert!(result.is_error);
+        let text = serde_json::to_string(&result).unwrap();
+        assert!(text.contains("unknown field"), "{text}");
+        assert!(!text.contains("override-secret"));
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), listener.accept())
+            .await
+            .is_err()
+    );
+}
+
 #[test]
 fn invalid_limits_and_legacy_submodule_names_fail_startup() {
     assert!(

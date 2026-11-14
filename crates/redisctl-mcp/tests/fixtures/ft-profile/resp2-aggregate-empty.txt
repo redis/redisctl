@@ -1,0 +1,34 @@
+Profile for AGGREGATE 'nomatchzzzz' on 'profile_idx':
+
+Results:
+array [
+  [0]: int(0)
+]
+
+Profile:
+array {
+  Shards: array [
+    [0]: array {
+      Total profile time: bulk-string("0.010375")
+      Parsing time: bulk-string("0.007583")
+      Workers queue time: bulk-string("0")
+      Pipeline creation time: bulk-string("0.000375")
+      Warning: array [
+        [0]: simple-string("None")
+      ]
+      Iterators profile: array {
+        Type: simple-string("EMPTY")
+        Time: bulk-string("0.000042")
+        Number of reading operations: int(0)
+      }
+      Result processors profile: array [
+        [0]: array {
+          Type: simple-string("Index")
+          Time: bulk-string("0.000167")
+          Results processed: int(0)
+        }
+      ]
+    }
+  ]
+  Coordinator: array []
+}

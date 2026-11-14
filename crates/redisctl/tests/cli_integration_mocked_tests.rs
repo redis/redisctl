@@ -1028,6 +1028,53 @@ async fn test_cloud_database_modules() {
 }
 
 #[tokio::test]
+async fn test_cloud_database_list_warns_when_subscription_fetch_fails() {
+    let temp_dir = TempDir::new().unwrap();
+    let mock_server = MockServer::start().await;
+
+    create_cloud_profile(&temp_dir, &mock_server.uri()).unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "subscriptions": [
+                {"id": 1, "name": "sub-ok"},
+                {"id": 2, "name": "sub-broken"}
+            ]
+        })))
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/fixed/subscriptions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"subscriptions": []})))
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/1/databases"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!([{"databaseId": 11, "name": "db-ok"}])),
+        )
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/subscriptions/2/databases"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(json!({"error": "forbidden"})))
+        .mount(&mock_server)
+        .await;
+
+    test_cmd(&temp_dir)
+        .args(["-o", "json", "cloud", "database", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("db-ok"))
+        .stderr(predicate::str::contains("subscription 2"))
+        .stderr(predicate::str::contains("sub-broken"));
+}
+
+#[tokio::test]
 async fn test_enterprise_crdb_operations() {
     let temp_dir = TempDir::new().unwrap();
     let mock_server = MockServer::start().await;
@@ -1916,4 +1963,65 @@ async fn test_enterprise_cluster_alerts_uses_cluster_alerts_route() {
         .assert()
         .success()
         .stdout(predicate::str::contains("cluster_too_many_nodes"));
+}
+
+// API failures must not turn into successful placeholder output or revocation claims.
+#[tokio::test]
+async fn enterprise_session_and_cluster_errors_are_propagated() {
+    let server = MockServer::start().await;
+    let temp_dir = TempDir::new().unwrap();
+    create_enterprise_profile(&temp_dir, &server.uri()).unwrap();
+
+    for status in [403, 404, 500] {
+        for (verb, endpoint, args) in [
+            (
+                "DELETE",
+                "/v1/users/42/sessions",
+                vec!["auth", "session-revoke-all", "--user", "42"],
+            ),
+            ("GET", "/v1/sessions", vec!["auth", "session-list"]),
+            ("GET", "/v1/cluster/events", vec!["cluster", "events"]),
+            ("GET", "/v1/cluster/audit_log", vec!["cluster", "audit-log"]),
+        ] {
+            server.reset().await;
+            Mock::given(method(verb))
+                .and(path(endpoint))
+                .respond_with(
+                    ResponseTemplate::new(status).set_body_json(json!({"error": "denied"})),
+                )
+                .expect(1..)
+                .mount(&server)
+                .await;
+
+            test_cmd(&temp_dir)
+                .timeout(std::time::Duration::from_secs(30))
+                .arg("enterprise")
+                .args(args)
+                .assert()
+                .failure()
+                .stdout(predicate::str::is_empty())
+                .stderr(predicate::str::is_empty().not());
+            server.verify().await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn enterprise_session_revocation_reports_success_after_api_success() {
+    let server = MockServer::start().await;
+    let temp_dir = TempDir::new().unwrap();
+    create_enterprise_profile(&temp_dir, &server.uri()).unwrap();
+    Mock::given(method("DELETE"))
+        .and(path("/v1/users/42/sessions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    test_cmd(&temp_dir)
+        .timeout(std::time::Duration::from_secs(30))
+        .args(["enterprise", "auth", "session-revoke-all", "--user", "42"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("All sessions for user 42 revoked"));
 }

@@ -387,10 +387,19 @@ async fn list_databases(
             let sub_name = extract_field(sub, "name", "Unknown");
 
             // Fetch databases for this flexible subscription
-            let db_response = client
+            let db_response = match client
                 .get_raw(&format!("/subscriptions/{}/databases", sub_id))
                 .await
-                .ok();
+            {
+                Ok(resp) => Some(resp),
+                Err(e) => {
+                    eprintln!(
+                        "Warning: failed to fetch databases for subscription {} ({}): {}; its databases are missing from this list",
+                        sub_id, sub_name, e
+                    );
+                    None
+                }
+            };
 
             if let Some(Value::Array(databases)) = db_response {
                 for db in databases {
@@ -426,10 +435,19 @@ async fn list_databases(
             let sub_name = extract_field(sub, "name", "Unknown");
 
             // Fetch databases for this fixed subscription
-            let db_response = client
+            let db_response = match client
                 .get_raw(&format!("/fixed/subscriptions/{}/databases", sub_id))
                 .await
-                .ok();
+            {
+                Ok(resp) => Some(resp),
+                Err(e) => {
+                    eprintln!(
+                        "Warning: failed to fetch databases for fixed subscription {} ({}): {}; its databases are missing from this list",
+                        sub_id, sub_name, e
+                    );
+                    None
+                }
+            };
 
             // Fixed subscriptions have a different response structure
             if let Some(sub_data) = db_response.and_then(|r| r.get("subscription").cloned())

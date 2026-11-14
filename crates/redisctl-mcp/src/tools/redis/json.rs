@@ -35,6 +35,36 @@ fn default_paths() -> Vec<String> {
     vec!["$".to_string()]
 }
 
+fn decode_numincrby_reply(reply: redis::Value) -> redis::RedisResult<String> {
+    match reply {
+        // RESP3 uses native arrays even for legacy paths; RESP2 returns JSON text.
+        redis::Value::Array(items) => {
+            let values = items
+                .into_iter()
+                .map(|item| match item {
+                    redis::Value::Nil => Ok(serde_json::Value::Null),
+                    redis::Value::Int(value) => Ok(serde_json::Value::Number(value.into())),
+                    redis::Value::Double(value) => serde_json::Number::from_f64(value)
+                        .map(serde_json::Value::Number)
+                        .ok_or_else(|| {
+                            redis::RedisError::from((
+                                redis::ErrorKind::TypeError,
+                                "Non-finite JSON.NUMINCRBY array number",
+                            ))
+                        }),
+                    _ => Err(redis::RedisError::from((
+                        redis::ErrorKind::TypeError,
+                        "Unexpected JSON.NUMINCRBY array member",
+                    ))),
+                })
+                .collect::<redis::RedisResult<Vec<_>>>()?;
+            Ok(serde_json::Value::Array(values).to_string())
+        }
+        // Preserve bulk-string bytes, scalar formatting and legacy decode errors.
+        reply => redis::from_owned_redis_value(reply),
+    }
+}
+
 fn array_mutation_noop(result: &redis::Value) -> bool {
     matches!(result, redis::Value::Nil)
         || matches!(result, redis::Value::Array(items) if items.iter().all(|item| matches!(item, redis::Value::Nil)))
@@ -274,15 +304,18 @@ database_tool!(write, json_numincrby, "redis_json_numincrby",
         /// Amount to increment by (can be negative)
         pub value: f64,
     } => |conn, input| {
-        let result: String = redis::cmd("JSON.NUMINCRBY")
+        let result: redis::Value = redis::cmd("JSON.NUMINCRBY")
             .arg(&input.key)
             .arg(&input.path)
             .arg(input.value)
             .query_async(&mut conn)
             .await
             .tool_context("JSON.NUMINCRBY failed")?;
+        let native_array = matches!(&result, redis::Value::Array(_));
+        let result = decode_numincrby_reply(result)
+            .tool_context("JSON.NUMINCRBY failed")?;
 
-        if input.path.starts_with('$')
+        if (native_array || input.path.starts_with('$'))
             && let Ok(serde_json::Value::Array(values)) =
                 serde_json::from_str::<serde_json::Value>(&result)
         {
