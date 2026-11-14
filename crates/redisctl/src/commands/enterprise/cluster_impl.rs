@@ -565,11 +565,7 @@ pub async fn get_cluster_events(
         "/v1/cluster/events".to_string()
     };
 
-    let events = client.get_raw(&endpoint).await.unwrap_or_else(|_| {
-        serde_json::json!({
-            "message": "Events endpoint not available"
-        })
-    });
+    let events = client.get_raw(&endpoint).await?;
 
     let data = handle_output(events, output_format, query)?;
     print_formatted_output(data, output_format)?;
@@ -591,11 +587,7 @@ pub async fn get_audit_log(
         "/v1/cluster/audit_log".to_string()
     };
 
-    let audit_log = client.get_raw(&endpoint).await.unwrap_or_else(|_| {
-        serde_json::json!({
-            "message": "Audit log endpoint not available"
-        })
-    });
+    let audit_log = client.get_raw(&endpoint).await?;
 
     let data = handle_output(audit_log, output_format, query)?;
     print_formatted_output(data, output_format)?;

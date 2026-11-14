@@ -171,6 +171,8 @@ pub(crate) async fn get_connection(
         .map_err(|e| ToolError::new(format!("Connection failed: {}", e)))
 }
 
+const MEMORY_INTERPRETATION_NOTE: &str = "\n\nMemory interpretation: A high fragmentation ratio alone does not establish a memory problem. Consider absolute overhead in bytes, allocator metrics and prior peak usage, especially when current allocation is small.";
+
 /// Helper to format Redis values for display
 pub(crate) fn format_value(v: &redis::Value) -> String {
     match v {
@@ -246,6 +248,21 @@ pub(crate) fn require_positive_ttl(seconds: i64, target: &str, remedy: &str) -> 
     ))
 }
 
+/// Refuse a sample size of zero before any key is scanned.
+///
+/// A sample size of 0 truncates the scanned keys to nothing, so `redis_hotkeys`
+/// would report "No keys found" for a pattern that does match.
+pub(crate) fn require_positive_sample_size(sample_size: usize) -> Result<(), String> {
+    if sample_size > 0 {
+        return Ok(());
+    }
+    Err(
+        "sample_size must be at least 1: a sample size of 0 samples no keys, which \
+         would be reported as no matches. Use a positive sample_size."
+            .to_string(),
+    )
+}
+
 /// Refuse a result limit of zero before any key is scanned.
 ///
 /// A limit of 0 truncates every result to nothing, so `redis_keys` and `redis_scan`
@@ -258,21 +275,6 @@ pub(crate) fn require_positive_limit(limit: usize) -> Result<(), String> {
     Err(
         "limit must be at least 1: a limit of 0 returns no keys, which would be \
          reported as no matches. Use a positive limit."
-            .to_string(),
-    )
-}
-
-/// Refuse a sample size of zero before any key is scanned.
-///
-/// A sample size of 0 truncates the scanned keys to nothing, so `redis_hotkeys`
-/// would report "No keys found" for a pattern that does match.
-pub(crate) fn require_positive_sample_size(sample_size: usize) -> Result<(), String> {
-    if sample_size > 0 {
-        return Ok(());
-    }
-    Err(
-        "sample_size must be at least 1: a sample size of 0 samples no keys, which \
-         would be reported as no matches. Use a positive sample_size."
             .to_string(),
     )
 }

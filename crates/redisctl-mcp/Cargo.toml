@@ -38,6 +38,10 @@ name = "redis_stack_tools"
 required-features = ["database", "test-support"]
 
 [[test]]
+name = "redis_noop_live"
+required-features = ["database", "test-support"]
+
+[[test]]
 name = "strict_tool_inputs"
 required-features = ["test-support"]
 
@@ -66,11 +70,19 @@ name = "json_empty_increment"
 required-features = ["database", "test-support"]
 
 [[test]]
+name = "ft_create_guidance"
+required-features = ["database", "test-support"]
+
+[[test]]
 name = "zrange_pagination"
 required-features = ["database", "test-support"]
 
 [[test]]
 name = "config_set_guard"
+required-features = ["database", "test-support"]
+
+[[test]]
+name = "memory_guidance"
 required-features = ["database", "test-support"]
 
 [[test]]
