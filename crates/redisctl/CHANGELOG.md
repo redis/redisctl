@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0](https://github.com/redis/redisctl/compare/redisctl-v0.14.0...redisctl-v0.15.0) - 2026-11-14
+
+### Fixed
+
+- *(cli)* propagate enterprise session and cluster API failures ([#1323](https://github.com/redis/redisctl/pull/1323))
+- *(cloud)* warn when a subscription's databases cannot be fetched in database list ([#1322](https://github.com/redis/redisctl/pull/1322))
+- update locked dependencies for security advisories ([#1335](https://github.com/redis/redisctl/pull/1335))
+
 ## [0.14.0](https://github.com/redis/redisctl/compare/redisctl-v0.13.0...redisctl-v0.14.0) - 2026-11-09
 
 ### Added

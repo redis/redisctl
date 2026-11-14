@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0](https://github.com/redis/redisctl/compare/redisctl-mcp-v0.14.0...redisctl-mcp-v0.15.0) - 2026-11-14
+
+### Fixed
+
+- *(mcp)* explain JSON index schema choices after creation ([#1341](https://github.com/redis/redisctl/pull/1341))
+- *(mcp)* handle native RESP3 JSON increment replies ([#1336](https://github.com/redis/redisctl/pull/1336))
+- *(mcp)* dedupe SCAN results and flag truncated key listings ([#1325](https://github.com/redis/redisctl/pull/1325))
+- *(mcp)* explain memory fragmentation interpretation ([#1342](https://github.com/redis/redisctl/pull/1342))
+- *(mcp)* add a manual WRONGTYPE next action ([#1344](https://github.com/redis/redisctl/pull/1344))
+- *(mcp)* format FT.PROFILE results and profiles ([#1345](https://github.com/redis/redisctl/pull/1345))
+- *(mcp)* disable per-call URL overrides by default ([#1329](https://github.com/redis/redisctl/pull/1329))
+- *(mcp)* [**breaking**] remove unsupported alert acknowledgement tool ([#1330](https://github.com/redis/redisctl/pull/1330))
+
 ### Removed
 
 - [**breaking**] Remove `acknowledge_enterprise_alert`, whose Enterprise REST route does not exist. Refresh `tools/list` and remove calls to this tool from saved workflows. Use `list_alerts` to read current cluster alert states.
