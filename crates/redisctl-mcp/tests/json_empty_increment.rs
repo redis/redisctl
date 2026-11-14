@@ -1,5 +1,5 @@
 #![cfg(feature = "database")]
-//! Synthetic RESP2 replies through actual tools and credential-free loopback targets.
+//! Synthetic RESP2/RESP3 replies through actual tools and credential-free loopback targets.
 
 mod support;
 
@@ -32,6 +32,10 @@ async fn read_command(reader: &mut BufReader<OwnedReadHalf>) -> Vec<String> {
 }
 
 async fn call_tool(input: Value, response: String) -> CallToolResult {
+    call_tool_protocol(false, input, response).await
+}
+
+async fn call_tool_protocol(resp3: bool, input: Value, response: String) -> CallToolResult {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let path = input
@@ -43,7 +47,10 @@ async fn call_tool(input: Value, response: String) -> CallToolResult {
         let (socket, _) = listener.accept().await.unwrap();
         let (read, mut write) = socket.into_split();
         let mut reader = BufReader::new(read);
-        // The default RESP2 connection setup sends two CLIENT SETINFO commands.
+        if resp3 {
+            assert_eq!(read_command(&mut reader).await, ["HELLO", "3"]);
+            write.write_all(b"%1\r\n+proto\r\n:3\r\n").await.unwrap();
+        }
         for field in ["LIB-NAME", "LIB-VER"] {
             let handshake = read_command(&mut reader).await;
             assert_eq!(handshake.len(), 4);
@@ -66,7 +73,8 @@ async fn call_tool(input: Value, response: String) -> CallToolResult {
             other => panic!("unexpected extra query or close error: {other:?}"),
         }
     });
-    let state = support::database_state_write(format!("redis://{addr}"));
+    let protocol = if resp3 { "resp3" } else { "resp2" };
+    let state = support::database_state_write(format!("redis://{addr}/?protocol={protocol}"));
     let tool = redis::json_numincrby(state.clone());
     let result = tokio::time::timeout(Duration::from_secs(5), tool.call(input))
         .await
@@ -82,6 +90,132 @@ async fn call_tool(input: Value, response: String) -> CallToolResult {
 
 fn bulk_reply(payload: &str) -> String {
     format!("${}\r\n{}\r\n", payload.len(), payload)
+}
+
+#[tokio::test]
+async fn resp3_native_empty_and_null_only_arrays_report_no_increment() {
+    for (path, response, expected) in [
+        (
+            "$.missing",
+            "*0\r\n",
+            "Nothing incremented: path '$.missing' matched no values",
+        ),
+        (
+            "$.n",
+            "*1\r\n_\r\n",
+            "Nothing incremented: path '$.n' matched no numeric values",
+        ),
+        (
+            "$..n",
+            "*2\r\n_\r\n_\r\n",
+            "Nothing incremented: path '$..n' matched no numeric values",
+        ),
+        (
+            ".missing",
+            "*0\r\n",
+            "Nothing incremented: path '.missing' matched no values",
+        ),
+        (
+            ".n",
+            "*2\r\n_\r\n_\r\n",
+            "Nothing incremented: path '.n' matched no numeric values",
+        ),
+    ] {
+        let result = call_tool_protocol(
+            true,
+            json!({"key":"synthetic","path":path,"value":2}),
+            response.to_owned(),
+        )
+        .await;
+        assert!(!result.is_error, "{result:?}");
+        assert_eq!(result.content.len(), 1);
+        assert_eq!(result.content[0].as_text(), Some(expected));
+    }
+}
+
+#[tokio::test]
+async fn resp3_native_numeric_and_mixed_arrays_preserve_numeric_success() {
+    for path in ["$.n", ".n"] {
+        for (response, expected) in [
+            ("*1\r\n,0\r\n", "[0.0]"),
+            ("*1\r\n:0\r\n", "[0]"),
+            ("*1\r\n,1.25\r\n", "[1.25]"),
+            ("*1\r\n,-0\r\n", "[-0.0]"),
+            ("*1\r\n:9223372036854775807\r\n", "[9223372036854775807]"),
+            ("*4\r\n_\r\n,5\r\n:0\r\n_\r\n", "[null,5.0,0,null]"),
+        ] {
+            let result = call_tool_protocol(
+                true,
+                json!({"key":"synthetic","path":path,"value":2}),
+                response.to_owned(),
+            )
+            .await;
+            assert!(!result.is_error, "{result:?}");
+            assert_eq!(result.content.len(), 1);
+            assert_eq!(
+                result.content[0].as_text(),
+                Some(format!("New value at '{path}': {expected}").as_str())
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn resp3_server_decode_and_invalid_member_errors_remain_errors() {
+    for response in [
+        "-ERR synthetic JSON failure\r\n",
+        "_\r\n",
+        "*1\r\n?invalid\r\n",
+        "*1\r\n#t\r\n",
+        "*1\r\n+unexpected\r\n",
+        "*1\r\n$1\r\n5\r\n",
+        "*1\r\n*0\r\n",
+        "*1\r\n%0\r\n",
+        "*1\r\n-ERR nested JSON failure\r\n",
+        "*1\r\n~0\r\n",
+        "*1\r\n(123456789012345678901234567890\r\n",
+        "*1\r\n,inf\r\n",
+        "*1\r\n,-inf\r\n",
+        "*1\r\n,nan\r\n",
+    ] {
+        let result = call_tool_protocol(
+            true,
+            json!({"key":"synthetic","path":"$.n","value":2}),
+            response.to_owned(),
+        )
+        .await;
+        assert!(result.is_error, "{response:?}: {result:?}");
+        assert_eq!(result.content.len(), 1);
+        assert!(
+            result.content[0]
+                .as_text()
+                .unwrap()
+                .contains("JSON.NUMINCRBY failed"),
+            "{result:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn resp3_bulk_strings_and_legacy_scalars_keep_existing_rendering() {
+    for (path, response, expected) in [
+        ("$.n", bulk_reply(" [null,0,1.25] "), " [null,0,1.25] "),
+        (".n", ",1.25\r\n".to_owned(), "1.25"),
+        (".n", ":0\r\n".to_owned(), "0"),
+        (".n", bulk_reply("1.25e+3"), "1.25e+3"),
+    ] {
+        let result = call_tool_protocol(
+            true,
+            json!({"key":"synthetic","path":path,"value":2}),
+            response,
+        )
+        .await;
+        assert!(!result.is_error, "{result:?}");
+        assert_eq!(
+            result.content[0].as_text(),
+            Some(format!("New value at '{path}': {expected}").as_str())
+        );
+    }
 }
 
 #[tokio::test]
