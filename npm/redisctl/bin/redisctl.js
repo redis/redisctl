@@ -47,8 +47,6 @@ function mapArgs(argv) {
 }
 
 const args = mapArgs(process.argv.slice(2));
-// A redisctl from before init answers it with a usage error.
-const needsInit = args[subcommandIndex(args)] === 'init';
 
 // npm exec exports its flags as npm_config_* to every descendant; the package
 // pinning (`--package=@redis/redisctl`) would make redisctl's own npm/npx calls
@@ -95,14 +93,46 @@ function owned(command) {
   return path.dirname(command) === installDir;
 }
 
-// The wrapper's own copy follows the wrapper's version, since nothing else updates
-// it; a copy the user installed only needs init.
-function usable(command) {
-  if (owned(command)) {
-    const ran = spawnSync(command, ['--version'], { encoding: 'utf8', env });
-    return ran.status === 0 && ran.stdout.trim() === `redisctl ${version}`;
+function parseVersion(text) {
+  const match = /^redisctl (0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(text);
+  if (!match) return null;
+  const prerelease = match[4] ? match[4].split('.') : [];
+  if (prerelease.some((part) => /^0\d+$/.test(part))) return null;
+  return { core: match.slice(1, 4).map(BigInt), prerelease };
+}
+
+function compareVersions(left, right) {
+  for (let i = 0; i < left.core.length; i++) {
+    if (left.core[i] !== right.core[i]) return left.core[i] < right.core[i] ? -1 : 1;
   }
-  return !needsInit || spawnSync(command, ['init', '--help'], { stdio: 'ignore', env }).status === 0;
+  // A release is newer than any prerelease with the same core version.
+  if (!left.prerelease.length || !right.prerelease.length) {
+    if (left.prerelease.length === right.prerelease.length) return 0;
+    return left.prerelease.length ? -1 : 1;
+  }
+  for (let i = 0; i < Math.min(left.prerelease.length, right.prerelease.length); i++) {
+    const a = left.prerelease[i];
+    const b = right.prerelease[i];
+    if (a === b) continue;
+    const aNumeric = /^\d+$/.test(a);
+    const bNumeric = /^\d+$/.test(b);
+    if (aNumeric && bNumeric) return BigInt(a) < BigInt(b) ? -1 : 1;
+    if (aNumeric !== bNumeric) return aNumeric ? -1 : 1;
+    return a < b ? -1 : 1;
+  }
+  return Math.sign(left.prerelease.length - right.prerelease.length);
+}
+const ours = parseVersion(`redisctl ${version}`);
+
+// The wrapper's own copy follows the wrapper's version, since nothing else updates
+// it. A copy the user installed runs at this version or newer, so
+// `npx @redis/redisctl@X` never runs a redisctl older than X.
+function usable(command) {
+  const ran = spawnSync(command, ['--version'], { encoding: 'utf8', env });
+  const reported = ran.status === 0 ? ran.stdout.trim() : '';
+  if (owned(command)) return reported === `redisctl ${version}`;
+  const theirs = parseVersion(reported);
+  return !!theirs && !!ours && compareVersions(theirs, ours) >= 0;
 }
 
 function fail(message) {
@@ -167,7 +197,7 @@ async function main() {
         ? `redisctl is not installed - installing redisctl ${version}`
         : owned(found[0])
           ? `updating ${found[0]} to redisctl ${version}`
-          : `${found[0]} has no init command - installing redisctl ${version}; that copy stays as it is`
+          : `${found[0]} is not redisctl ${version} or newer - installing redisctl ${version}; that copy stays as it is`
     );
     command = await install();
   }
