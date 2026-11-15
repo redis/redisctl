@@ -317,6 +317,8 @@ database_tool!(read_only, xrange, "redis_xrange",
         cmd.arg(&input.key).arg(&input.start).arg(&input.end);
 
         if let Some(count) = input.count {
+            // XRANGE COUNT 0 returns nothing, reported as "No stream entries returned".
+            super::require_positive_param("count", count).map_err(tower_mcp::Error::tool)?;
             cmd.arg("COUNT").arg(count);
         }
 

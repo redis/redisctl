@@ -128,7 +128,7 @@ async fn empty_stream_ranges_report_returned_results_without_guessing_key_state(
             vec![],
         ),
         (json!({}), "-", "+", vec![]),
-        (json!({"count": "0"}), "-", "+", vec!["COUNT", "0"]),
+        (json!({"count": "1"}), "-", "+", vec!["COUNT", "1"]),
     ] {
         let mut input = json!({"key": "synthetic"});
         input

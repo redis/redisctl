@@ -122,6 +122,9 @@ database_tool!(read_only, slowlog, "redis_slowlog",
         #[serde(default = "default_slowlog_count", deserialize_with = "serde_helpers::string_or_usize::deserialize")]
         pub count: usize,
     } => |conn, input| {
+        // SLOWLOG GET 0 returns nothing, which would read as "no slow queries".
+        super::require_positive_param("count", input.count).map_err(tower_mcp::Error::tool)?;
+
         // SLOWLOG GET returns nested arrays
         let entries: Vec<Vec<redis::Value>> = redis::cmd("SLOWLOG")
             .arg("GET")
