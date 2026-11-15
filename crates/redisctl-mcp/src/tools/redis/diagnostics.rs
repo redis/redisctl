@@ -278,6 +278,7 @@ database_tool!(read_only, hotkeys, "redis_hotkeys",
     } => |conn, input| {
         let pattern = input.pattern.as_deref().unwrap_or("*");
         let sample_size = input.sample_size.unwrap_or(1000).min(MAX_SAMPLE_SIZE);
+        super::require_positive_sample_size(sample_size).map_err(tower_mcp::Error::tool)?;
 
         // SCAN to collect keys
         let mut cursor: u64 = 0;
