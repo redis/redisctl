@@ -864,6 +864,12 @@ database_tool!(read_only, zrangebyscore, "redis_zrangebyscore",
             cmd.arg("LIMIT").arg(offset).arg(count);
         }
 
+        let empty_prefix = if input.offset.is_some() {
+            "No members returned from"
+        } else {
+            "No members in"
+        };
+
         if input.withscores {
             let result: Vec<(String, f64)> = cmd
                 .query_async(&mut conn)
@@ -872,7 +878,7 @@ database_tool!(read_only, zrangebyscore, "redis_zrangebyscore",
 
             if result.is_empty() {
                 return Ok(CallToolResult::text(format!(
-                    "No members in '{}' with scores in [{}, {}]",
+                    "{empty_prefix} '{}' with scores in [{}, {}]",
                     input.key, input.min, input.max
                 )));
             }
@@ -899,7 +905,7 @@ database_tool!(read_only, zrangebyscore, "redis_zrangebyscore",
 
             if result.is_empty() {
                 return Ok(CallToolResult::text(format!(
-                    "No members in '{}' with scores in [{}, {}]",
+                    "{empty_prefix} '{}' with scores in [{}, {}]",
                     input.key, input.min, input.max
                 )));
             }
