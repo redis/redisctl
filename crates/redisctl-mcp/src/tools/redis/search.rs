@@ -26,6 +26,67 @@ fn format_kv_pairs(values: &[redis::Value]) -> Vec<String> {
         .collect()
 }
 
+const TAG_ESCAPING_HINT: &str = "\nHint: If this query uses TAG filters (@field:{value}), check escaping inside literal TAG values. For example, use @sku:{usb\\-c} in the query, or \"@sku:{usb\\\\-c}\" in a JSON string. Escape literal punctuation as needed for the Redis Search version/dialect; keep intentional operators such as | intact. Whitespace rules depend on version/dialect.";
+
+/// Recognize TAG-shaped clauses without interpreting or changing the query.
+/// Ignore escaped characters and quoted text that only resembles a filter.
+fn has_tag_clause(query: &str) -> bool {
+    let mut chars = query.chars();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' => {
+                chars.next();
+            }
+            '"' | '\'' => {
+                while let Some(quoted) = chars.next() {
+                    if quoted == '\\' {
+                        chars.next();
+                    } else if quoted == ch {
+                        break;
+                    }
+                }
+            }
+            '@' => {
+                let mut field = chars.clone();
+                let mut has_name = false;
+                while let Some(ch) = field.next() {
+                    if ch == ':' && has_name {
+                        if field.find(|ch| !ch.is_whitespace()) == Some('{') {
+                            return true;
+                        }
+                        break;
+                    }
+                    if ch.is_whitespace() || matches!(ch, '@' | '{' | '}' | '(' | ')' | '"' | '\'')
+                    {
+                        break;
+                    }
+                    if ch == '\\' && field.next().is_none() {
+                        break;
+                    }
+                    has_name = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn search_result<T>(result: redis::RedisResult<T>, query: &str) -> Result<T, McpError> {
+    let tag_syntax_error = result.as_ref().err().is_some_and(|err| {
+        matches!((err.code(), err.detail()),
+            (Some("Syntax"), Some(detail)) if detail.starts_with("error at offset "))
+            || matches!((err.code(), err.detail()),
+                (Some("ERR"), Some(detail)) if detail.starts_with("Syntax error at offset "))
+    }) && has_tag_clause(query);
+    result.tool_context("FT.SEARCH failed").map_err(|mut err| {
+        if tag_syntax_error && let McpError::Tool(ref mut error) = err {
+            error.message.push_str(TAG_ESCAPING_HINT);
+        }
+        err
+    })
+}
+
 /// Field definition for FT.CREATE and FT.ALTER schema definitions.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -212,6 +273,11 @@ database_tool!(read_only, ft_search, "redis_ft_search",
      - Wildcard: `wire*`\n\
      - All documents: `*`\n\
      - Combined: `@category:{electronics} @price:[0 100]`\n\n\
+     TAG literals may need query-level backslashes for punctuation: `@sku:{usb\\-c}`. \
+     In a JSON string, double each backslash: `\"@sku:{usb\\\\-c}\"`. \
+     Escape literal values while keeping intentional query operators intact. \
+     Rules depend on Redis Search version and dialect; RediSearch 2.4+ with DIALECT 2+ \
+     supports unescaped spaces in TAG values.\n\n\
      For JSON indexes, use field aliases (set via AS in FT.CREATE) in queries, not the raw JSONPath.\n\n\
      Field-specific queries (e.g. `@name:value`) only work on fields that are included in the index schema. \
      Querying a field that is not indexed returns zero results without an error.\n\n\
@@ -287,10 +353,10 @@ database_tool!(read_only, ft_search, "redis_ft_search",
                 .arg(input.limit_num.unwrap_or(10));
         }
 
-        let result: Vec<redis::Value> = cmd
-            .query_async(&mut conn)
-            .await
-            .tool_context("FT.SEARCH failed")?;
+        let result: Vec<redis::Value> = search_result(
+            cmd.query_async(&mut conn).await,
+            &input.query,
+        )?;
 
         if result.is_empty() {
             return Ok(CallToolResult::text("No results"));
