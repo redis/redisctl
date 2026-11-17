@@ -88,7 +88,7 @@ The server resolves which toolsets to load in this order:
 |---------|-------------|-------------|
 | `cloud` | `subscriptions`, `account`, `networking`, `fixed`, `provisioning`, `raw` | 150 |
 | `enterprise` | `cluster`, `databases`, `rbac`, `observability`, `proxy`, `services`, `raw` | 84 |
-| `database` | `server`, `keys`, `structures`, `diagnostics`, `json`, `search`, `aliases`, `bulk`, `raw` | 132 |
+| `database` | `server`, `keys`, `structures`, `diagnostics`, `json`, `search`, `aliases`, `bulk`, `raw` | 147 |
 | `app` | *(none -- flat toolset)* | 8 |
 | *(system)* | *(always loaded)* | 2 |
 
@@ -96,7 +96,7 @@ The two system tools (`list_available_tools` and `show_policy`) are always regis
 
 ### Examples
 
-**Cloud only** -- all Cloud sub-modules (148 tools + system):
+**Cloud only** -- all Cloud sub-modules (150 tools + system):
 
 ```bash
 redisctl-mcp --profile my-cloud --tools cloud
@@ -114,7 +114,7 @@ redisctl-mcp --profile my-cloud --tools cloud:subscriptions,cloud:networking
 redisctl-mcp --profile my-re --tools enterprise:cluster,enterprise:observability
 ```
 
-**Database only** -- direct Redis operations (132 tools + system):
+**Database only** -- direct Redis operations (147 tools + system):
 
 ```bash
 redisctl-mcp --database-url redis://localhost:6379 --tools database

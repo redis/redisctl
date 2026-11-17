@@ -1,6 +1,6 @@
 # Tools Reference
 
-The redisctl MCP server exposes **376 tools** across 4 toolsets and 2 system tools for managing Redis Cloud, Redis Enterprise, and direct database operations. The machine-checked [MCP catalog](compatibility.md) is the compatibility source of truth.
+The redisctl MCP server exposes **391 tools** across 4 toolsets and 2 system tools for managing Redis Cloud, Redis Enterprise, and direct database operations. The machine-checked [MCP catalog](compatibility.md) is the compatibility source of truth.
 
 Tools are organized into **toolsets** (Cloud, Enterprise, Database, App) and further into **sub-modules** that can be selectively loaded with the [`--tools` flag](configuration.md#the-tools-flag).
 
@@ -204,7 +204,7 @@ System service lifecycle -- list, inspect, start, stop, restart, and status chec
 |------|-------------|
 | `enterprise_raw_api` | Execute arbitrary Redis Enterprise REST API requests |
 
-## Database Toolset (132 tools)
+## Database Toolset (147 tools)
 
 Direct Redis database operations. Requires `--database-url` connection. Select with `--tools database` or target specific sub-modules.
 
@@ -243,9 +243,9 @@ Key-space operations -- listing, scanning, get/set, type inspection, TTL, existe
 | `redis_incr` | Increment integer value *(write)* |
 | `redis_decr` | Decrement integer value *(write)* |
 
-### `database:structures` (42 tools)
+### `database:structures` (54 tools)
 
-Data structure operations -- hashes, lists, sets, sorted sets, streams, pub/sub inspection, set algebra, and granular field/member accessors.
+Data structure operations -- hashes, lists, sets, sorted sets, streams and stream consumer groups, pub/sub publish and inspection, set algebra, and granular field/member accessors.
 
 | Representative Tools | Description |
 |---------------------|-------------|
@@ -256,6 +256,8 @@ Data structure operations -- hashes, lists, sets, sorted sets, streams, pub/sub 
 | `redis_lrange` | Get list range |
 | `redis_llen` | Get list length |
 | `redis_lindex` | Get list element by index |
+| `redis_lrem` | Remove list elements by value *(write)* |
+| `redis_ltrim` | Trim a list to an index range *(write)* |
 | `redis_smembers` | Get all set members |
 | `redis_scard` | Get set cardinality |
 | `redis_sismember` | Check set membership |
@@ -270,7 +272,14 @@ Data structure operations -- hashes, lists, sets, sorted sets, streams, pub/sub 
 | `redis_xinfo_stream` | Get stream info |
 | `redis_xrange` | Get stream entries by ID range |
 | `redis_xlen` | Get stream length |
+| `redis_xinfo_groups` | List a stream's consumer groups |
+| `redis_xpending` | Inspect a consumer group's pending entries |
+| `redis_xgroup_create` | Create a consumer group *(write)* |
+| `redis_xreadgroup` | Read entries as a group consumer *(write)* |
+| `redis_xack` | Acknowledge processed entries *(write)* |
+| `redis_xgroup_destroy` | Destroy a consumer group *(destructive)* |
 | `redis_pubsub_channels` | List active pub/sub channels |
+| `redis_publish` | Publish a message to a channel *(write)* |
 
 ### `database:diagnostics` (4 tools)
 
@@ -298,14 +307,17 @@ JSON document operations using RedisJSON -- get, set, merge, delete, increment, 
 | `redis_json_objkeys` | Get JSON object keys |
 | `redis_json_numincrby` | Increment numeric JSON value *(write)* |
 
-### `database:search` (18 tools)
+### `database:search` (21 tools)
 
-Full-text and vector search via RediSearch -- index management, aliases, dictionaries, synonyms, FT.SEARCH, FT.AGGREGATE, explain, and profile.
+Full-text and vector search via RediSearch -- index management, aliases, dictionaries, synonyms, FT.SEARCH, KNN vector search, FT.AGGREGATE, explain, and profile, plus binary vector storage in hash fields.
 
 | Representative Tools | Description |
 |---------------------|-------------|
 | `redis_ft_create` | Create a search index *(write)* |
 | `redis_ft_search` | Execute full-text search |
+| `redis_ft_vector_search` | KNN vector search with an optional pre-filter |
+| `redis_vector_set_hash` | Store a FLOAT32/FLOAT64 vector in a hash field *(write)* |
+| `redis_vector_get_hash` | Read and decode a vector from a hash field |
 | `redis_ft_aggregate` | Execute aggregation pipeline |
 | `redis_ft_info` | Get index information |
 | `redis_ft_list` | List all search indexes |
@@ -374,12 +386,12 @@ Profile and configuration management tools. Always compiled in; no sub-modules.
 
 | Toolset | Sub-modules | Tools |
 |---------|-------------|-------|
-| Cloud | `subscriptions` (36), `account` (33), `networking` (51), `fixed` (27), `raw` (1) | **148** |
+| Cloud | `subscriptions` (36), `account` (33), `networking` (51), `fixed` (27), `provisioning` (2), `raw` (1) | **150** |
 | Enterprise | `cluster` (23), `databases` (19), `rbac` (19), `observability` (12), `proxy` (3), `services` (7), `raw` (1) | **84** |
-| Database | `server` (14), `keys` (31), `structures` (42), `diagnostics` (4), `json` (16), `search` (18), `aliases` (4), `bulk` (2), `raw` (1) | **132** |
+| Database | `server` (14), `keys` (31), `structures` (54), `diagnostics` (4), `json` (16), `search` (21), `aliases` (4), `bulk` (2), `raw` (1) | **147** |
 | App | *(flat)* | **8** |
 | System | *(always on)* | **2** |
-| **Total** | | **374** |
+| **Total** | | **391** |
 
 ## Example Tool Usage
 

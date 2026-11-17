@@ -171,6 +171,11 @@ jobs:
           docker pull redis:8.6.7@sha256:e6dae84f7db289dde3384fdb18d182556784e5a681df3a3f54d1289952364ce8
           cargo test -p redisctl-mcp --all-features --test ft_search_tag_guidance -- --ignored --nocapture
 
+      - name: Run live list, stream group, publish and vector tool tests
+        run: |
+          docker pull redis:8.6.7@sha256:e6dae84f7db289dde3384fdb18d182556784e5a681df3a3f54d1289952364ce8
+          cargo test -p redisctl-mcp --all-features --test db_command_gap_tools -- --ignored --nocapture
+
   # Required Linux build and full tests run alongside unit/integration jobs.
   build-linux:
     name: Build - ubuntu-latest

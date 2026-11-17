@@ -9768,6 +9768,98 @@
       }
     },
     {
+      "name": "redis_ft_vector_search",
+      "toolset": "database",
+      "submodule": "search",
+      "requiredTier": "read-only",
+      "inputSchema": {
+        "required": [
+          "index",
+          "vector_field",
+          "vector"
+        ],
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "url": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "index": {
+            "type": "string"
+          },
+          "vector_field": {
+            "type": "string"
+          },
+          "vector": {
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "type": "array"
+          },
+          "data_type": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "k": {
+            "default": null,
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
+          },
+          "filter": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "return_fields": {
+            "default": null,
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "score_alias": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "outputSchema": null,
+      "annotations": {
+        "title": null,
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
       "name": "redis_get",
       "toolset": "database",
       "submodule": "keys",
@@ -11641,6 +11733,154 @@
       }
     },
     {
+      "name": "redis_lrem",
+      "toolset": "database",
+      "submodule": "structures",
+      "requiredTier": "read-write",
+      "inputSchema": {
+        "required": [
+          "key",
+          "count",
+          "value"
+        ],
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "url": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "outputSchema": null,
+      "annotations": {
+        "title": null,
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "redis_lset",
+      "toolset": "database",
+      "submodule": "structures",
+      "requiredTier": "read-write",
+      "inputSchema": {
+        "required": [
+          "key",
+          "index",
+          "value"
+        ],
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "url": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "index": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "outputSchema": null,
+      "annotations": {
+        "title": null,
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "redis_ltrim",
+      "toolset": "database",
+      "submodule": "structures",
+      "requiredTier": "read-write",
+      "inputSchema": {
+        "required": [
+          "key",
+          "start",
+          "stop"
+        ],
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "url": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "start": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "stop": {
+            "format": "int64",
+            "type": "integer"
+          }
+        }
+      },
+      "outputSchema": null,
+      "annotations": {
+        "title": null,
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
       "name": "redis_memory_stats",
       "toolset": "database",
       "submodule": "server",
@@ -12077,6 +12317,50 @@
         "readOnlyHint": true,
         "destructiveHint": false,
         "idempotentHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "redis_publish",
+      "toolset": "database",
+      "submodule": "structures",
+      "requiredTier": "read-write",
+      "inputSchema": {
+        "required": [
+          "channel",
+          "message"
+        ],
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "url": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "channel": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "outputSchema": null,
+      "annotations": {
+        "title": null,
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
         "openWorldHint": true
       }
     },
@@ -13320,6 +13604,167 @@
       }
     },
     {
+      "name": "redis_vector_get_hash",
+      "toolset": "database",
+      "submodule": "search",
+      "requiredTier": "read-only",
+      "inputSchema": {
+        "required": [
+          "key",
+          "field"
+        ],
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "url": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          },
+          "data_type": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "outputSchema": null,
+      "annotations": {
+        "title": null,
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "redis_vector_set_hash",
+      "toolset": "database",
+      "submodule": "search",
+      "requiredTier": "read-write",
+      "inputSchema": {
+        "required": [
+          "key",
+          "field",
+          "vector"
+        ],
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "url": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          },
+          "vector": {
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "type": "array"
+          },
+          "data_type": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "outputSchema": null,
+      "annotations": {
+        "title": null,
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "redis_xack",
+      "toolset": "database",
+      "submodule": "structures",
+      "requiredTier": "read-write",
+      "inputSchema": {
+        "required": [
+          "key",
+          "group",
+          "ids"
+        ],
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "url": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "group": {
+            "type": "string"
+          },
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        }
+      },
+      "outputSchema": null,
+      "annotations": {
+        "title": null,
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
       "name": "redis_xadd",
       "toolset": "database",
       "submodule": "structures",
@@ -13394,6 +13839,233 @@
         "readOnlyHint": false,
         "destructiveHint": false,
         "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "redis_xdel",
+      "toolset": "database",
+      "submodule": "structures",
+      "requiredTier": "read-write",
+      "inputSchema": {
+        "required": [
+          "key",
+          "ids"
+        ],
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "url": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        }
+      },
+      "outputSchema": null,
+      "annotations": {
+        "title": null,
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "redis_xgroup_create",
+      "toolset": "database",
+      "submodule": "structures",
+      "requiredTier": "read-write",
+      "inputSchema": {
+        "required": [
+          "key",
+          "group"
+        ],
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "url": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "group": {
+            "type": "string"
+          },
+          "id": {
+            "default": "$",
+            "type": "string"
+          },
+          "mkstream": {
+            "default": false,
+            "type": "boolean"
+          }
+        }
+      },
+      "outputSchema": null,
+      "annotations": {
+        "title": null,
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "redis_xgroup_destroy",
+      "toolset": "database",
+      "submodule": "structures",
+      "requiredTier": "full",
+      "inputSchema": {
+        "required": [
+          "key",
+          "group"
+        ],
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "url": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "group": {
+            "type": "string"
+          }
+        }
+      },
+      "outputSchema": null,
+      "annotations": {
+        "title": null,
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "redis_xinfo_consumers",
+      "toolset": "database",
+      "submodule": "structures",
+      "requiredTier": "read-only",
+      "inputSchema": {
+        "required": [
+          "key",
+          "group"
+        ],
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "url": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "group": {
+            "type": "string"
+          }
+        }
+      },
+      "outputSchema": null,
+      "annotations": {
+        "title": null,
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "redis_xinfo_groups",
+      "toolset": "database",
+      "submodule": "structures",
+      "requiredTier": "read-only",
+      "inputSchema": {
+        "required": [
+          "key"
+        ],
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "url": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": "string"
+          }
+        }
+      },
+      "outputSchema": null,
+      "annotations": {
+        "title": null,
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": true
       }
     },
@@ -13478,6 +14150,83 @@
       }
     },
     {
+      "name": "redis_xpending",
+      "toolset": "database",
+      "submodule": "structures",
+      "requiredTier": "read-only",
+      "inputSchema": {
+        "required": [
+          "key",
+          "group"
+        ],
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "url": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "group": {
+            "type": "string"
+          },
+          "start": {
+            "default": "-",
+            "type": "string"
+          },
+          "end": {
+            "default": "+",
+            "type": "string"
+          },
+          "count": {
+            "default": null,
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint",
+            "minimum": 0
+          },
+          "consumer": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "min_idle_ms": {
+            "default": null,
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
+      },
+      "outputSchema": null,
+      "annotations": {
+        "title": null,
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
       "name": "redis_xrange",
       "toolset": "database",
       "submodule": "structures",
@@ -13531,6 +14280,71 @@
         "readOnlyHint": true,
         "destructiveHint": false,
         "idempotentHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "redis_xreadgroup",
+      "toolset": "database",
+      "submodule": "structures",
+      "requiredTier": "read-write",
+      "inputSchema": {
+        "required": [
+          "group",
+          "consumer",
+          "key"
+        ],
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "url": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "group": {
+            "type": "string"
+          },
+          "consumer": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "id": {
+            "default": ">",
+            "type": "string"
+          },
+          "count": {
+            "default": null,
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint",
+            "minimum": 0
+          },
+          "noack": {
+            "default": false,
+            "type": "boolean"
+          }
+        }
+      },
+      "outputSchema": null,
+      "annotations": {
+        "title": null,
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
         "openWorldHint": true
       }
     },
