@@ -130,7 +130,7 @@ async fn omitted_and_complete_pairs_preserve_wire_arguments_and_output() {
             json!({"offset": 2, "count": 0}),
             vec!["LIMIT", "2", "0"],
             "*0\r\n",
-            "No members in 'synthetic' with scores in [-inf, +inf]",
+            "No members returned from 'synthetic' with scores in [-inf, +inf]",
         ),
         (
             json!({"offset": 0, "count": -1}),
