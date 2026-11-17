@@ -93,6 +93,7 @@ pub(crate) fn bound_upstream_text(text: &str) -> String {
     }
 }
 
+pub mod atomic_file;
 pub mod auth;
 pub mod clients;
 pub mod config;

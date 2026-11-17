@@ -241,6 +241,15 @@ fn gitignore_covers_env_before_a_later_write_fails() {
         .assert()
         .code(1)
         .stderr(predicate::str::contains("cannot write '.env.example'"));
+    assert_eq!(sandbox.read(".env.example"), "APP_NAME=\n");
+    assert_eq!(
+        std::fs::metadata(sandbox.project.path().join(".env.example"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o444
+    );
     assert!(
         sandbox.project.path().join(".gitignore").exists(),
         ".env holds the password but .gitignore was never written"
