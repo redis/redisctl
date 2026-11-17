@@ -1397,7 +1397,7 @@ impl VectorType {
     }
 
     fn decode(self, bytes: &[u8]) -> Result<Vec<f64>, McpError> {
-        if bytes.is_empty() || bytes.len() % self.width() != 0 {
+        if bytes.is_empty() || !bytes.len().is_multiple_of(self.width()) {
             return Err(McpError::tool(format!(
                 "field holds {} bytes, which is not a whole number of {} elements ({} bytes each). \
                  Check data_type or whether the field holds a vector.",

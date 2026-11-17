@@ -57,7 +57,7 @@ fn field_pairs(value: &redis::Value) -> Option<Vec<(String, &redis::Value)>> {
                 .map(|(k, v)| (super::format_value(k), v))
                 .collect(),
         ),
-        redis::Value::Array(items) if items.len() % 2 == 0 => Some(
+        redis::Value::Array(items) if items.len().is_multiple_of(2) => Some(
             items
                 .chunks(2)
                 .map(|pair| (super::format_value(&pair[0]), &pair[1]))
