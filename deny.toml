@@ -21,6 +21,12 @@ ignore = [
     # proc-macro-error2 is unmaintained (pulled via tabled -> tabled_derive); no safe upgrade
     # available. Benign EOL notice, not a vulnerability. Revisit when tabled drops it.
     "RUSTSEC-2026-0173",
+    # chrono and chrono-tz are unmaintained; no patched versions (advisory suggests jiff or
+    # time). chrono is a direct dependency of redisctl and redisctl-core and is also pulled via
+    # oauth2, redis-cloud, redis-enterprise and jpx-core. Informational notice, not a
+    # vulnerability. Revisit when those crates migrate.
+    "RUSTSEC-2026-0543",
+    "RUSTSEC-2026-0555",
 ]
 
 [licenses]
