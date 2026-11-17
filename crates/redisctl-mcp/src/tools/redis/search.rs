@@ -1,4 +1,5 @@
-//! RediSearch module tools (FT.CREATE, FT.SEARCH, FT.AGGREGATE, FT.INFO, etc.)
+//! RediSearch module tools (FT.CREATE, FT.SEARCH, FT.AGGREGATE, FT.INFO, etc.) and the
+//! binary hash-vector helpers that KNN search reads.
 
 use tower_mcp::{CallToolResult, Error as McpError};
 
@@ -210,7 +211,10 @@ mcp_module! {
     ft_aliasupdate => "redis_ft_aliasupdate",
     ft_dropindex => "redis_ft_dropindex",
     ft_aliasdel => "redis_ft_aliasdel",
-    ft_dictdel => "redis_ft_dictdel"
+    ft_dictdel => "redis_ft_dictdel",
+    vector_set_hash => "redis_vector_set_hash",
+    vector_get_hash => "redis_vector_get_hash",
+    ft_vector_search => "redis_ft_vector_search"
 }
 
 // ---------------------------------------------------------------------------
@@ -1322,6 +1326,483 @@ database_tool!(write, ft_dictdel, "redis_ft_dictdel",
         )))
     }
 );
+
+// ---------------------------------------------------------------------------
+// Vector tools
+// ---------------------------------------------------------------------------
+
+/// Largest vector dimension accepted, matching the Redis Query Engine limit.
+const MAX_VECTOR_DIMENSIONS: usize = 16_384;
+/// Largest `k` accepted by `redis_ft_vector_search`.
+const MAX_VECTOR_K: u64 = 100;
+const DEFAULT_VECTOR_K: u64 = 10;
+const DEFAULT_VECTOR_SCORE_ALIAS: &str = "vector_distance";
+
+/// Element type of a binary vector stored in a hash field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VectorType {
+    Float32,
+    Float64,
+}
+
+impl VectorType {
+    fn parse(data_type: Option<&str>) -> Result<Self, McpError> {
+        match data_type.map(str::to_ascii_uppercase).as_deref() {
+            None | Some("FLOAT32") => Ok(Self::Float32),
+            Some("FLOAT64") => Ok(Self::Float64),
+            Some(other) => Err(McpError::tool(format!(
+                "Invalid data_type '{other}'. Valid values: FLOAT32, FLOAT64"
+            ))),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Float32 => "FLOAT32",
+            Self::Float64 => "FLOAT64",
+        }
+    }
+
+    fn width(self) -> usize {
+        match self {
+            Self::Float32 => 4,
+            Self::Float64 => 8,
+        }
+    }
+
+    /// Encode as little-endian bytes, the layout the Query Engine expects.
+    fn encode(self, vector: &[f64]) -> Result<Vec<u8>, McpError> {
+        if vector.is_empty() || vector.len() > MAX_VECTOR_DIMENSIONS {
+            return Err(McpError::tool(format!(
+                "vector must have between 1 and {MAX_VECTOR_DIMENSIONS} elements (got {})",
+                vector.len()
+            )));
+        }
+        let mut bytes = Vec::with_capacity(vector.len() * self.width());
+        for (index, &value) in vector.iter().enumerate() {
+            let out_of_range =
+                !value.is_finite() || (self == Self::Float32 && value.abs() > f64::from(f32::MAX));
+            if out_of_range {
+                return Err(McpError::tool(format!(
+                    "vector[{index}] = {value} is not a finite {} value",
+                    self.name()
+                )));
+            }
+            match self {
+                Self::Float32 => bytes.extend_from_slice(&(value as f32).to_le_bytes()),
+                Self::Float64 => bytes.extend_from_slice(&value.to_le_bytes()),
+            }
+        }
+        Ok(bytes)
+    }
+
+    fn decode(self, bytes: &[u8]) -> Result<Vec<f64>, McpError> {
+        if bytes.is_empty() || !bytes.len().is_multiple_of(self.width()) {
+            return Err(McpError::tool(format!(
+                "field holds {} bytes, which is not a whole number of {} elements ({} bytes each). \
+                 Check data_type or whether the field holds a vector.",
+                bytes.len(),
+                self.name(),
+                self.width()
+            )));
+        }
+        Ok(bytes
+            .chunks_exact(self.width())
+            .map(|chunk| match self {
+                Self::Float32 => {
+                    let mut element = [0u8; 4];
+                    element.copy_from_slice(chunk);
+                    f64::from(f32::from_le_bytes(element))
+                }
+                Self::Float64 => {
+                    let mut element = [0u8; 8];
+                    element.copy_from_slice(chunk);
+                    f64::from_le_bytes(element)
+                }
+            })
+            .collect())
+    }
+}
+
+/// Refuse names that cannot be spliced into a KNN query clause.
+fn require_query_identifier(name: &str, what: &str) -> Result<(), McpError> {
+    let valid = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if valid {
+        return Ok(());
+    }
+    Err(McpError::tool(format!(
+        "Invalid {what} '{name}': use letters, digits and underscores only. \
+         For JSON indexes, pass the field alias set with AS in FT.CREATE, not the JSONPath."
+    )))
+}
+
+/// `(name, value)` pairs from a RESP3 map or a RESP2 flat `[name, value, ...]` array.
+fn reply_pairs(value: &redis::Value) -> Vec<(String, String)> {
+    match value {
+        redis::Value::Map(pairs) => pairs
+            .iter()
+            .map(|(name, value)| (format_value(name), format_value(value)))
+            .collect(),
+        redis::Value::Array(values) => values
+            .chunks(2)
+            .filter_map(|pair| match pair {
+                [name, value] => Some((format_value(name), format_value(value))),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Documents from an FT.SEARCH reply as `(id, fields)`.
+///
+/// RESP2 replies are `[total, id, [field, value, ...], ...]`. RESP3 replies are a map
+/// whose `results` entry lists maps with `id` and `extra_attributes`.
+fn search_documents(reply: &redis::Value) -> Vec<(String, Vec<(String, String)>)> {
+    match reply {
+        redis::Value::Array(items) => items
+            .get(1..)
+            .unwrap_or_default()
+            .chunks(2)
+            .filter_map(|pair| match pair {
+                [id, fields] => Some((format_value(id), reply_pairs(fields))),
+                _ => None,
+            })
+            .collect(),
+        redis::Value::Map(entries) => {
+            let results = entries.iter().find_map(|(name, value)| match value {
+                redis::Value::Array(results) if format_value(name) == "results" => Some(results),
+                _ => None,
+            });
+            results
+                .into_iter()
+                .flatten()
+                .filter_map(|result| {
+                    let redis::Value::Map(document) = result else {
+                        return None;
+                    };
+                    let field = |wanted: &str| {
+                        document
+                            .iter()
+                            .find(|(name, _)| format_value(name) == wanted)
+                            .map(|(_, value)| value)
+                    };
+                    let id = format_value(field("id")?);
+                    let fields = field("extra_attributes")
+                        .map(reply_pairs)
+                        .unwrap_or_default();
+                    Some((id, fields))
+                })
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Build the DIALECT 2 query for a KNN search with an optional pre-filter.
+fn knn_query(filter: Option<&str>, k: u64, vector_field: &str, score_alias: &str) -> String {
+    let filter = match filter.map(str::trim) {
+        None | Some("") | Some("*") => "*".to_string(),
+        Some(filter) => format!("({filter})"),
+    };
+    format!("{filter}=>[KNN {k} @{vector_field} $vector AS {score_alias}]")
+}
+
+database_tool!(write, vector_set_hash, "redis_vector_set_hash",
+    "Store a numeric vector in a hash field as little-endian FLOAT32 (default) or FLOAT64 \
+     bytes, the layout a VECTOR field in an ON HASH index reads. Use this instead of \
+     redis_hset for embeddings; redis_hset stores text.",
+    {
+        /// Hash key
+        pub key: String,
+        /// Hash field that holds the vector
+        pub field: String,
+        /// Vector elements
+        pub vector: Vec<f64>,
+        /// Element type: FLOAT32 (default) or FLOAT64. Must match the index's VECTOR field TYPE.
+        #[serde(default)]
+        pub data_type: Option<String>,
+    } => |conn, input| {
+        let data_type = VectorType::parse(input.data_type.as_deref())?;
+        let bytes = data_type.encode(&input.vector)?;
+
+        let added: i64 = redis::cmd("HSET")
+            .arg(&input.key)
+            .arg(&input.field)
+            .arg(bytes.as_slice())
+            .query_async(&mut conn)
+            .await
+            .tool_context("HSET failed")?;
+
+        Ok(CallToolResult::text(format!(
+            "OK - stored {}-dimension {} vector ({} bytes) in field '{}' of '{}' ({})",
+            input.vector.len(),
+            data_type.name(),
+            bytes.len(),
+            input.field,
+            input.key,
+            if added == 1 { "new field" } else { "replaced existing field" }
+        )))
+    }
+);
+
+database_tool!(read_only, vector_get_hash, "redis_vector_get_hash",
+    "Read a binary vector from a hash field and decode it as FLOAT32 (default) or FLOAT64 \
+     elements. Other hash tools show binary fields as unreadable text.",
+    {
+        /// Hash key
+        pub key: String,
+        /// Hash field that holds the vector
+        pub field: String,
+        /// Element type: FLOAT32 (default) or FLOAT64. Must match how the vector was stored.
+        #[serde(default)]
+        pub data_type: Option<String>,
+    } => |conn, input| {
+        let data_type = VectorType::parse(input.data_type.as_deref())?;
+
+        let bytes: Option<Vec<u8>> = redis::cmd("HGET")
+            .arg(&input.key)
+            .arg(&input.field)
+            .query_async(&mut conn)
+            .await
+            .tool_context("HGET failed")?;
+
+        let Some(bytes) = bytes else {
+            return Ok(CallToolResult::text(format!(
+                "(nil) - field '{}' not found in '{}' (or the key does not exist)",
+                input.field, input.key
+            )));
+        };
+        let vector = data_type.decode(&bytes)?;
+        let rendered = serde_json::to_string(&vector)
+            .map_err(|e| McpError::tool(format!("failed to render vector: {e}")))?;
+
+        Ok(CallToolResult::text(format!(
+            "{}-dimension {} vector from field '{}' of '{}':\n{}",
+            vector.len(),
+            data_type.name(),
+            input.field,
+            input.key,
+            rendered
+        )))
+    }
+);
+
+database_tool!(read_only, ft_vector_search, "redis_ft_vector_search",
+    "K-nearest-neighbor vector search against an index's VECTOR field (FT.SEARCH with \
+     KNN and DIALECT 2). Requires the RediSearch module. Results are ordered by distance, \
+     nearest first; the distance metric is the one set on the index field (COSINE, L2 \
+     or IP).\n\n\
+     filter pre-selects documents with ordinary query syntax before ranking, for hybrid \
+     search, e.g. `@category:{shoes} @price:[0 100]`. Omit it or pass `*` for pure \
+     vector search.\n\n\
+     Only the distance and the listed return_fields are returned, so the stored vector \
+     bytes are not printed.",
+    {
+        /// Index name
+        pub index: String,
+        /// VECTOR field name, or its alias for JSON indexes (without the leading @)
+        pub vector_field: String,
+        /// Query vector; its length must equal the field's DIM
+        pub vector: Vec<f64>,
+        /// Element type: FLOAT32 (default) or FLOAT64. Must match the field's TYPE.
+        #[serde(default)]
+        pub data_type: Option<String>,
+        /// Number of nearest neighbors to return (default: 10, max: 100)
+        #[serde(default, deserialize_with = "serde_helpers::string_or_opt_u64::deserialize")]
+        pub k: Option<u64>,
+        /// Optional pre-filter query, e.g. "@category:{shoes}" (default: "*" for all documents)
+        #[serde(default)]
+        pub filter: Option<String>,
+        /// Fields to return with each result (default: none, distance only)
+        #[serde(default)]
+        pub return_fields: Option<Vec<String>>,
+        /// Name for the distance field in results (default: "vector_distance")
+        #[serde(default)]
+        pub score_alias: Option<String>,
+    } => |conn, input| {
+        let data_type = VectorType::parse(input.data_type.as_deref())?;
+        let k = input.k.unwrap_or(DEFAULT_VECTOR_K);
+        if k == 0 || k > MAX_VECTOR_K {
+            return Err(McpError::tool(format!(
+                "k must be between 1 and {MAX_VECTOR_K} (got {k})"
+            )));
+        }
+        require_query_identifier(&input.vector_field, "vector_field")?;
+        let score_alias = input
+            .score_alias
+            .as_deref()
+            .unwrap_or(DEFAULT_VECTOR_SCORE_ALIAS);
+        require_query_identifier(score_alias, "score_alias")?;
+        let bytes = data_type.encode(&input.vector)?;
+        let query = knn_query(input.filter.as_deref(), k, &input.vector_field, score_alias);
+        let return_fields = input.return_fields.clone().unwrap_or_default();
+
+        let mut cmd = redis::cmd("FT.SEARCH");
+        cmd.arg(&input.index).arg(&query);
+        cmd.arg("RETURN").arg(return_fields.len() + 1).arg(score_alias);
+        for field in &return_fields {
+            cmd.arg(field);
+        }
+        cmd.arg("SORTBY").arg(score_alias).arg("ASC");
+        cmd.arg("PARAMS").arg(2).arg("vector").arg(bytes.as_slice());
+        cmd.arg("LIMIT").arg(0).arg(k);
+        cmd.arg("DIALECT").arg(2);
+
+        let reply: redis::Value = search_result(cmd.query_async(&mut conn).await, &query)?;
+
+        let documents = search_documents(&reply);
+        if documents.is_empty() {
+            return Ok(CallToolResult::text(format!(
+                "No results from index '{}' for query {}",
+                input.index, query
+            )));
+        }
+
+        let mut output = format!(
+            "{} nearest neighbor(s) from index '{}' (query: {}):\n",
+            documents.len(),
+            input.index,
+            query
+        );
+        for (rank, (id, pairs)) in documents.iter().enumerate() {
+            let distance = pairs
+                .iter()
+                .find(|(name, _)| name == score_alias)
+                .map(|(_, value)| value.as_str())
+                .unwrap_or("?");
+            output.push_str(&format!(
+                "{}. {} ({}: {})\n",
+                rank + 1,
+                id,
+                score_alias,
+                distance
+            ));
+            for (name, value) in pairs.iter().filter(|(name, _)| name != score_alias) {
+                output.push_str(&format!("  {}: {}\n", name, value));
+            }
+        }
+
+        Ok(CallToolResult::text(output))
+    }
+);
+
+#[cfg(test)]
+mod vector_tests {
+    use super::{VectorType, knn_query, require_query_identifier, search_documents};
+    use redis::Value;
+
+    fn bulk(s: &str) -> Value {
+        Value::BulkString(s.as_bytes().to_vec())
+    }
+
+    #[test]
+    fn search_documents_reads_resp2_and_resp3_replies() {
+        let resp2 = Value::Array(vec![
+            Value::Int(1),
+            bulk("doc:1"),
+            Value::Array(vec![bulk("dist"), bulk("0.5"), bulk("genre"), bulk("jazz")]),
+        ]);
+        let resp3 = Value::Map(vec![
+            (Value::SimpleString("total_results".into()), Value::Int(1)),
+            (
+                Value::SimpleString("results".into()),
+                Value::Array(vec![Value::Map(vec![
+                    (Value::SimpleString("id".into()), bulk("doc:1")),
+                    (
+                        Value::SimpleString("extra_attributes".into()),
+                        Value::Map(vec![
+                            (bulk("dist"), bulk("0.5")),
+                            (bulk("genre"), bulk("jazz")),
+                        ]),
+                    ),
+                    (Value::SimpleString("values".into()), Value::Array(vec![])),
+                ])]),
+            ),
+        ]);
+        let expected = vec![(
+            "doc:1".to_string(),
+            vec![
+                ("dist".to_string(), "0.5".to_string()),
+                ("genre".to_string(), "jazz".to_string()),
+            ],
+        )];
+        assert_eq!(search_documents(&resp2), expected);
+        assert_eq!(search_documents(&resp3), expected);
+        assert!(search_documents(&Value::Array(vec![Value::Int(0)])).is_empty());
+    }
+
+    #[test]
+    fn float32_round_trips_little_endian() {
+        let bytes = VectorType::Float32.encode(&[1.0, -0.5]).expect("encode");
+        assert_eq!(bytes, [0, 0, 128, 63, 0, 0, 0, 191]);
+        assert_eq!(
+            VectorType::Float32.decode(&bytes).expect("decode"),
+            [1.0, -0.5]
+        );
+    }
+
+    #[test]
+    fn float64_round_trips() {
+        let bytes = VectorType::Float64.encode(&[0.25, 3.0]).expect("encode");
+        assert_eq!(bytes.len(), 16);
+        assert_eq!(
+            VectorType::Float64.decode(&bytes).expect("decode"),
+            [0.25, 3.0]
+        );
+    }
+
+    #[test]
+    fn encode_rejects_empty_non_finite_and_f32_overflow() {
+        assert!(VectorType::Float32.encode(&[]).is_err());
+        assert!(VectorType::Float64.encode(&[f64::NAN]).is_err());
+        assert!(VectorType::Float32.encode(&[1e39]).is_err());
+        assert!(VectorType::Float64.encode(&[1e39]).is_ok());
+    }
+
+    #[test]
+    fn decode_rejects_partial_elements() {
+        assert!(VectorType::Float32.decode(&[0, 0, 128]).is_err());
+        assert!(VectorType::Float64.decode(&[0; 12]).is_err());
+    }
+
+    #[test]
+    fn parse_defaults_to_float32_and_rejects_unknown() {
+        assert_eq!(
+            VectorType::parse(None).expect("default"),
+            VectorType::Float32
+        );
+        assert_eq!(
+            VectorType::parse(Some("float64")).expect("lower"),
+            VectorType::Float64
+        );
+        assert!(VectorType::parse(Some("FLOAT16")).is_err());
+    }
+
+    #[test]
+    fn knn_query_wraps_filters() {
+        assert_eq!(
+            knn_query(None, 5, "embedding", "dist"),
+            "*=>[KNN 5 @embedding $vector AS dist]"
+        );
+        assert_eq!(
+            knn_query(Some(" * "), 5, "embedding", "dist"),
+            "*=>[KNN 5 @embedding $vector AS dist]"
+        );
+        assert_eq!(
+            knn_query(Some("@genre:{jazz}"), 3, "v", "d"),
+            "(@genre:{jazz})=>[KNN 3 @v $vector AS d]"
+        );
+    }
+
+    #[test]
+    fn query_identifiers_reject_injection() {
+        assert!(require_query_identifier("embedding_v2", "vector_field").is_ok());
+        assert!(require_query_identifier("$.embedding", "vector_field").is_err());
+        assert!(require_query_identifier("v AS x]", "vector_field").is_err());
+        assert!(require_query_identifier("", "score_alias").is_err());
+    }
+}
 
 #[cfg(test)]
 mod tests {

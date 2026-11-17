@@ -2,7 +2,8 @@
 //! pubsub_channels, pubsub_numsub, hset, hdel, lpush, rpush, lpop, rpop, sadd, srem, zadd,
 //! zrem, xadd, xtrim, hget, hmget, hlen, hexists, hkeys, hvals, hincrby, hexpire, scard,
 //! sismember, sunion, sinter, sdiff, zcard, zscore, zrank, zcount, zrangebyscore,
-//! zremrangebyscore, llen, lindex)
+//! zremrangebyscore, llen, lindex, lrem, lset, ltrim, xinfo_groups, xinfo_consumers, xpending,
+//! xgroup_create, xreadgroup, xack, xdel, xgroup_destroy, publish)
 
 use std::collections::HashMap;
 
@@ -34,6 +35,108 @@ fn default_xrange_start() -> String {
 
 fn default_xrange_end() -> String {
     "+".to_string()
+}
+
+fn default_xgroup_create_id() -> String {
+    "$".to_string()
+}
+
+fn default_xreadgroup_id() -> String {
+    ">".to_string()
+}
+
+/// Default page size for `redis_xreadgroup` when `count` is omitted.
+const DEFAULT_XREADGROUP_COUNT: usize = 10;
+
+/// Key/value pairs from a RESP3 map or a RESP2 flat `[k, v, k, v, ...]` array.
+fn field_pairs(value: &redis::Value) -> Option<Vec<(String, &redis::Value)>> {
+    match value {
+        redis::Value::Map(pairs) => Some(
+            pairs
+                .iter()
+                .map(|(k, v)| (super::format_value(k), v))
+                .collect(),
+        ),
+        redis::Value::Array(items) if items.len().is_multiple_of(2) => Some(
+            items
+                .chunks(2)
+                .map(|pair| (super::format_value(&pair[0]), &pair[1]))
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+/// One `k=v` line per XINFO GROUPS / XINFO CONSUMERS record.
+fn format_info_records(records: &redis::Value) -> Vec<String> {
+    let items: &[redis::Value] = match records {
+        redis::Value::Array(items) | redis::Value::Set(items) => items,
+        _ => return vec![super::format_value(records)],
+    };
+    items
+        .iter()
+        .map(|record| match field_pairs(record) {
+            Some(pairs) => pairs
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, super::format_value(v)))
+                .collect::<Vec<_>>()
+                .join(" "),
+            None => super::format_value(record),
+        })
+        .collect()
+}
+
+/// Format one stream entry `[id, [field, value, ...]]`. A nil field list means the
+/// entry was deleted after delivery but is still in the pending entries list.
+fn format_stream_entry(entry: &redis::Value) -> String {
+    let redis::Value::Array(parts) = entry else {
+        return super::format_value(entry);
+    };
+    let (Some(id), Some(fields)) = (parts.first(), parts.get(1)) else {
+        return super::format_value(entry);
+    };
+    let id = super::format_value(id);
+    if matches!(fields, redis::Value::Nil) {
+        return format!("{id}  (deleted)");
+    }
+    match field_pairs(fields) {
+        Some(pairs) => format!(
+            "{id}  {}",
+            pairs
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, super::format_value(v)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        None => format!("{id}  {}", super::format_value(fields)),
+    }
+}
+
+/// Stream batches from an XREADGROUP reply: RESP2 `[[stream, entries], ...]` or a
+/// RESP3 map of stream to entries. Nil (nothing to read) yields no batches.
+fn stream_batches(reply: &redis::Value) -> Vec<(String, Vec<&redis::Value>)> {
+    fn entries_of(value: &redis::Value) -> Vec<&redis::Value> {
+        match value {
+            redis::Value::Array(entries) => entries.iter().collect(),
+            _ => Vec::new(),
+        }
+    }
+    match reply {
+        redis::Value::Map(pairs) => pairs
+            .iter()
+            .map(|(name, entries)| (super::format_value(name), entries_of(entries)))
+            .collect(),
+        redis::Value::Array(batches) => batches
+            .iter()
+            .filter_map(|batch| match batch {
+                redis::Value::Array(parts) if parts.len() == 2 => {
+                    Some((super::format_value(&parts[0]), entries_of(&parts[1])))
+                }
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 mcp_module! {
@@ -79,6 +182,18 @@ mcp_module! {
     zremrangebyscore => "redis_zremrangebyscore",
     llen => "redis_llen",
     lindex => "redis_lindex",
+    lrem => "redis_lrem",
+    lset => "redis_lset",
+    ltrim => "redis_ltrim",
+    xinfo_groups => "redis_xinfo_groups",
+    xinfo_consumers => "redis_xinfo_consumers",
+    xpending => "redis_xpending",
+    xgroup_create => "redis_xgroup_create",
+    xreadgroup => "redis_xreadgroup",
+    xack => "redis_xack",
+    xdel => "redis_xdel",
+    xgroup_destroy => "redis_xgroup_destroy",
+    publish => "redis_publish",
 }
 
 // --- Read tools ---
@@ -1531,3 +1646,631 @@ database_tool!(write, hexpire, "redis_hexpire",
         )))
     }
 );
+
+// --- List write tools ---
+
+database_tool!(write, lrem, "redis_lrem",
+    "Remove occurrences of an element from a list (LREM). count > 0 removes the first \
+     count matches from the head, count < 0 removes the last |count| matches from the \
+     tail, and count = 0 removes every match.",
+    {
+        /// List key
+        pub key: String,
+        /// Occurrences to remove: positive from the head, negative from the tail, 0 for all matches
+        #[serde(deserialize_with = "serde_helpers::string_or_i64::deserialize")]
+        pub count: i64,
+        /// List element to remove
+        pub value: String,
+    } => |conn, input| {
+        let removed: i64 = redis::cmd("LREM")
+            .arg(&input.key)
+            .arg(input.count)
+            .arg(&input.value)
+            .query_async(&mut conn)
+            .await
+            .tool_context("LREM failed")?;
+
+        if removed == 0 {
+            return Ok(CallToolResult::text(format!(
+                "No elements removed: '{}' has no element equal to '{}' (or the key does not exist)",
+                input.key, input.value
+            )));
+        }
+
+        Ok(CallToolResult::text(format!(
+            "OK - removed {} occurrence(s) of '{}' from '{}'",
+            removed, input.value, input.key
+        )))
+    }
+);
+
+database_tool!(write, lset, "redis_lset",
+    "Replace the list element at an index (LSET). Index is 0-based; negative counts from \
+     the tail. Fails when the key does not exist or the index is out of range.",
+    {
+        /// List key
+        pub key: String,
+        /// Index to replace (0-based, negative counts from the tail)
+        #[serde(deserialize_with = "serde_helpers::string_or_i64::deserialize")]
+        pub index: i64,
+        /// Replacement value
+        pub value: String,
+    } => |conn, input| {
+        let _: () = redis::cmd("LSET")
+            .arg(&input.key)
+            .arg(input.index)
+            .arg(&input.value)
+            .query_async(&mut conn)
+            .await
+            .tool_context("LSET failed")?;
+
+        Ok(CallToolResult::text(format!(
+            "OK - set index {} of '{}'",
+            input.index, input.key
+        )))
+    }
+);
+
+database_tool!(write, ltrim, "redis_ltrim",
+    "Trim a list to the inclusive range [start, stop] (LTRIM). Elements outside the range \
+     are removed. Indexes are 0-based; negative counts from the tail. Use start=0, stop=N-1 \
+     to keep the first N elements (capped list).",
+    {
+        /// List key
+        pub key: String,
+        /// Inclusive start index (negative counts from the tail)
+        #[serde(deserialize_with = "serde_helpers::string_or_i64::deserialize")]
+        pub start: i64,
+        /// Inclusive stop index (negative counts from the tail)
+        #[serde(deserialize_with = "serde_helpers::string_or_i64::deserialize")]
+        pub stop: i64,
+    } => |conn, input| {
+        let _: () = redis::cmd("LTRIM")
+            .arg(&input.key)
+            .arg(input.start)
+            .arg(input.stop)
+            .query_async(&mut conn)
+            .await
+            .tool_context("LTRIM failed")?;
+
+        let length: i64 = redis::cmd("LLEN")
+            .arg(&input.key)
+            .query_async(&mut conn)
+            .await
+            .tool_context("LLEN after LTRIM failed")?;
+
+        Ok(CallToolResult::text(format!(
+            "OK - trimmed '{}' to [{}, {}], length now {}",
+            input.key, input.start, input.stop, length
+        )))
+    }
+);
+
+// --- Stream consumer-group tools ---
+
+database_tool!(read_only, xinfo_groups, "redis_xinfo_groups",
+    "List the consumer groups of a stream with their consumers, pending count, \
+     last-delivered ID, entries read and lag (XINFO GROUPS).",
+    {
+        /// Stream key
+        pub key: String,
+    } => |conn, input| {
+        let result: redis::Value = redis::cmd("XINFO")
+            .arg("GROUPS")
+            .arg(&input.key)
+            .query_async(&mut conn)
+            .await
+            .tool_context("XINFO GROUPS failed")?;
+
+        let groups = format_info_records(&result);
+        if groups.is_empty() {
+            return Ok(CallToolResult::text(format!(
+                "Stream '{}' has no consumer groups",
+                input.key
+            )));
+        }
+
+        Ok(CallToolResult::text(format!(
+            "Stream '{}' consumer groups ({}):\n  {}",
+            input.key,
+            groups.len(),
+            groups.join("\n  ")
+        )))
+    }
+);
+
+database_tool!(read_only, xinfo_consumers, "redis_xinfo_consumers",
+    "List the consumers of a stream consumer group with their pending count and idle \
+     time in milliseconds (XINFO CONSUMERS).",
+    {
+        /// Stream key
+        pub key: String,
+        /// Consumer group name
+        pub group: String,
+    } => |conn, input| {
+        let result: redis::Value = redis::cmd("XINFO")
+            .arg("CONSUMERS")
+            .arg(&input.key)
+            .arg(&input.group)
+            .query_async(&mut conn)
+            .await
+            .tool_context("XINFO CONSUMERS failed")?;
+
+        let consumers = format_info_records(&result);
+        if consumers.is_empty() {
+            return Ok(CallToolResult::text(format!(
+                "Group '{}' on stream '{}' has no consumers",
+                input.group, input.key
+            )));
+        }
+
+        Ok(CallToolResult::text(format!(
+            "Group '{}' on stream '{}' consumers ({}):\n  {}",
+            input.group,
+            input.key,
+            consumers.len(),
+            consumers.join("\n  ")
+        )))
+    }
+);
+
+database_tool!(read_only, xpending, "redis_xpending",
+    "Inspect a consumer group's pending entries list (XPENDING). Without count, returns \
+     the summary: total pending, ID range and per-consumer counts. With count, returns up \
+     to count entries in [start, end] with consumer, idle time (ms) and delivery count, \
+     optionally filtered by consumer and minimum idle time.",
+    {
+        /// Stream key
+        pub key: String,
+        /// Consumer group name
+        pub group: String,
+        /// Start ID for the detailed form (default: "-")
+        #[serde(default = "default_xrange_start")]
+        pub start: String,
+        /// End ID for the detailed form (default: "+")
+        #[serde(default = "default_xrange_end")]
+        pub end: String,
+        /// Number of entries to return; selects the detailed form
+        #[serde(default, deserialize_with = "serde_helpers::string_or_opt_usize::deserialize")]
+        pub count: Option<usize>,
+        /// Only entries owned by this consumer (detailed form only)
+        #[serde(default)]
+        pub consumer: Option<String>,
+        /// Only entries idle for at least this many milliseconds (detailed form only)
+        #[serde(default, deserialize_with = "serde_helpers::string_or_opt_u64::deserialize")]
+        pub min_idle_ms: Option<u64>,
+    } => |conn, input| {
+        let Some(count) = input.count else {
+            if input.consumer.is_some() || input.min_idle_ms.is_some() {
+                return Err(tower_mcp::Error::tool(
+                    "consumer and min_idle_ms apply to the detailed form; pass count as well",
+                ));
+            }
+            let summary: redis::Value = redis::cmd("XPENDING")
+                .arg(&input.key)
+                .arg(&input.group)
+                .query_async(&mut conn)
+                .await
+                .tool_context("XPENDING failed")?;
+
+            let redis::Value::Array(parts) = &summary else {
+                return Ok(CallToolResult::text(super::format_value(&summary)));
+            };
+            let total = parts.first().map(super::format_value).unwrap_or_default();
+            if total == "0" {
+                return Ok(CallToolResult::text(format!(
+                    "Group '{}' on stream '{}' has no pending entries",
+                    input.group, input.key
+                )));
+            }
+            let smallest = parts.get(1).map(super::format_value).unwrap_or_default();
+            let greatest = parts.get(2).map(super::format_value).unwrap_or_default();
+            let mut output = format!(
+                "Group '{}' on stream '{}': {} pending, IDs {} to {}",
+                input.group, input.key, total, smallest, greatest
+            );
+            if let Some(redis::Value::Array(consumers)) = parts.get(3) {
+                for consumer in consumers {
+                    if let redis::Value::Array(pair) = consumer
+                        && pair.len() == 2
+                    {
+                        output.push_str(&format!(
+                            "\n  {}: {} pending",
+                            super::format_value(&pair[0]),
+                            super::format_value(&pair[1])
+                        ));
+                    }
+                }
+            }
+            return Ok(CallToolResult::text(output));
+        };
+
+        super::require_positive_param("count", count).map_err(tower_mcp::Error::tool)?;
+        let mut cmd = redis::cmd("XPENDING");
+        cmd.arg(&input.key).arg(&input.group);
+        if let Some(min_idle_ms) = input.min_idle_ms {
+            cmd.arg("IDLE").arg(min_idle_ms);
+        }
+        cmd.arg(&input.start).arg(&input.end).arg(count);
+        if let Some(ref consumer) = input.consumer {
+            cmd.arg(consumer);
+        }
+
+        let entries: Vec<(String, String, u64, u64)> = cmd
+            .query_async(&mut conn)
+            .await
+            .tool_context("XPENDING failed")?;
+
+        if entries.is_empty() {
+            return Ok(CallToolResult::text(format!(
+                "No pending entries in [{}, {}] for group '{}' on stream '{}'",
+                input.start, input.end, input.group, input.key
+            )));
+        }
+
+        let lines = entries
+            .iter()
+            .map(|(id, consumer, idle_ms, deliveries)| {
+                format!(
+                    "  {id}  consumer={consumer} idle_ms={idle_ms} deliveries={deliveries}"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(CallToolResult::text(format!(
+            "Group '{}' on stream '{}' pending entries ({}):\n{}",
+            input.group,
+            input.key,
+            entries.len(),
+            lines
+        )))
+    }
+);
+
+database_tool!(write, xgroup_create, "redis_xgroup_create",
+    "Create a consumer group on a stream (XGROUP CREATE). id sets where the group \
+     starts: \"$\" (default) delivers only entries added after creation, \"0\" delivers \
+     the whole stream. mkstream creates an empty stream if the key does not exist.",
+    {
+        /// Stream key
+        pub key: String,
+        /// Consumer group name
+        pub group: String,
+        /// Last-delivered ID for the new group: "$" (default) for new entries only, "0" for the full history
+        #[serde(default = "default_xgroup_create_id")]
+        pub id: String,
+        /// Create the stream if it does not exist
+        #[serde(default)]
+        pub mkstream: bool,
+    } => |conn, input| {
+        let mut cmd = redis::cmd("XGROUP");
+        cmd.arg("CREATE").arg(&input.key).arg(&input.group).arg(&input.id);
+        if input.mkstream {
+            cmd.arg("MKSTREAM");
+        }
+
+        let _: () = cmd
+            .query_async(&mut conn)
+            .await
+            .tool_context("XGROUP CREATE failed")?;
+
+        Ok(CallToolResult::text(format!(
+            "OK - created group '{}' on stream '{}' starting after ID {}",
+            input.group, input.key, input.id
+        )))
+    }
+);
+
+database_tool!(write, xreadgroup, "redis_xreadgroup",
+    "Read entries from a stream as a consumer in a consumer group (XREADGROUP, \
+     non-blocking). id \">\" (default) reads entries never delivered to this group and \
+     adds them to the consumer's pending list; an explicit ID such as \"0\" re-reads this \
+     consumer's own pending entries. Acknowledge processed entries with redis_xack. \
+     noack skips the pending list.",
+    {
+        /// Consumer group name
+        pub group: String,
+        /// Consumer name (created on first read)
+        pub consumer: String,
+        /// Stream key
+        pub key: String,
+        /// ">" (default) for new entries, or an ID to re-read this consumer's pending entries after it
+        #[serde(default = "default_xreadgroup_id")]
+        pub id: String,
+        /// Maximum entries to return (default: 10)
+        #[serde(default, deserialize_with = "serde_helpers::string_or_opt_usize::deserialize")]
+        pub count: Option<usize>,
+        /// Do not add delivered entries to the pending entries list
+        #[serde(default)]
+        pub noack: bool,
+    } => |conn, input| {
+        let count = input.count.unwrap_or(DEFAULT_XREADGROUP_COUNT);
+        super::require_positive_param("count", count).map_err(tower_mcp::Error::tool)?;
+
+        let mut cmd = redis::cmd("XREADGROUP");
+        cmd.arg("GROUP")
+            .arg(&input.group)
+            .arg(&input.consumer)
+            .arg("COUNT")
+            .arg(count);
+        if input.noack {
+            cmd.arg("NOACK");
+        }
+        cmd.arg("STREAMS").arg(&input.key).arg(&input.id);
+
+        let reply: redis::Value = cmd
+            .query_async(&mut conn)
+            .await
+            .tool_context("XREADGROUP failed")?;
+
+        let entries: Vec<&redis::Value> = stream_batches(&reply)
+            .into_iter()
+            .flat_map(|(_, entries)| entries)
+            .collect();
+        if entries.is_empty() {
+            let what = if input.id == ">" {
+                "no new entries"
+            } else {
+                "no pending entries after that ID"
+            };
+            return Ok(CallToolResult::text(format!(
+                "Consumer '{}' in group '{}' on stream '{}': {}",
+                input.consumer, input.group, input.key, what
+            )));
+        }
+
+        let lines = entries
+            .iter()
+            .map(|entry| format!("  {}", format_stream_entry(entry)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(CallToolResult::text(format!(
+            "Consumer '{}' in group '{}' read {} entr{} from stream '{}':\n{}",
+            input.consumer,
+            input.group,
+            entries.len(),
+            if entries.len() == 1 { "y" } else { "ies" },
+            input.key,
+            lines
+        )))
+    }
+);
+
+database_tool!(write, xack, "redis_xack",
+    "Acknowledge processed entries for a consumer group, removing them from its pending \
+     entries list (XACK).",
+    {
+        /// Stream key
+        pub key: String,
+        /// Consumer group name
+        pub group: String,
+        /// Entry IDs to acknowledge
+        pub ids: Vec<String>,
+    } => |conn, input| {
+        if input.ids.is_empty() {
+            return Err(tower_mcp::Error::tool("ids must contain at least one entry ID"));
+        }
+        let mut cmd = redis::cmd("XACK");
+        cmd.arg(&input.key).arg(&input.group);
+        for id in &input.ids {
+            cmd.arg(id);
+        }
+
+        let acknowledged: i64 = cmd
+            .query_async(&mut conn)
+            .await
+            .tool_context("XACK failed")?;
+
+        if acknowledged == 0 {
+            return Ok(CallToolResult::text(format!(
+                "No entries acknowledged: none of the {} ID(s) are pending for group '{}' on stream '{}'",
+                input.ids.len(),
+                input.group,
+                input.key
+            )));
+        }
+
+        Ok(CallToolResult::text(format!(
+            "OK - acknowledged {} of {} ID(s) for group '{}' on stream '{}'",
+            acknowledged,
+            input.ids.len(),
+            input.group,
+            input.key
+        )))
+    }
+);
+
+database_tool!(write, xdel, "redis_xdel",
+    "Delete entries from a stream by ID (XDEL). Consumer groups keep deleted IDs in \
+     their pending lists until acknowledged.",
+    {
+        /// Stream key
+        pub key: String,
+        /// Entry IDs to delete
+        pub ids: Vec<String>,
+    } => |conn, input| {
+        if input.ids.is_empty() {
+            return Err(tower_mcp::Error::tool("ids must contain at least one entry ID"));
+        }
+        let mut cmd = redis::cmd("XDEL");
+        cmd.arg(&input.key);
+        for id in &input.ids {
+            cmd.arg(id);
+        }
+
+        let deleted: i64 = cmd
+            .query_async(&mut conn)
+            .await
+            .tool_context("XDEL failed")?;
+
+        if deleted == 0 {
+            return Ok(CallToolResult::text(format!(
+                "No entries deleted: none of the {} ID(s) exist in stream '{}'",
+                input.ids.len(),
+                input.key
+            )));
+        }
+
+        Ok(CallToolResult::text(format!(
+            "OK - deleted {} of {} ID(s) from stream '{}'",
+            deleted,
+            input.ids.len(),
+            input.key
+        )))
+    }
+);
+
+database_tool!(destructive, xgroup_destroy, "redis_xgroup_destroy",
+    "DANGEROUS: Destroy a consumer group (XGROUP DESTROY). Its consumers and pending \
+     entries list are discarded; stream entries are kept.",
+    {
+        /// Stream key
+        pub key: String,
+        /// Consumer group name
+        pub group: String,
+    } => |conn, input| {
+        let destroyed: i64 = redis::cmd("XGROUP")
+            .arg("DESTROY")
+            .arg(&input.key)
+            .arg(&input.group)
+            .query_async(&mut conn)
+            .await
+            .tool_context("XGROUP DESTROY failed")?;
+
+        if destroyed == 0 {
+            return Ok(CallToolResult::text(format!(
+                "No group destroyed: stream '{}' has no group '{}'",
+                input.key, input.group
+            )));
+        }
+
+        Ok(CallToolResult::text(format!(
+            "OK - destroyed group '{}' on stream '{}'",
+            input.group, input.key
+        )))
+    }
+);
+
+// --- Pub/sub write tools ---
+
+database_tool!(write, publish, "redis_publish",
+    "Publish a message to a pub/sub channel (PUBLISH). Returns the number of subscribers \
+     that received it. In Redis Cluster the count covers only subscribers connected to \
+     the node that handled the publish. Delivery is fire-and-forget: subscribers that \
+     are not connected miss the message.",
+    {
+        /// Channel name
+        pub channel: String,
+        /// Message payload
+        pub message: String,
+    } => |conn, input| {
+        let receivers: i64 = redis::cmd("PUBLISH")
+            .arg(&input.channel)
+            .arg(&input.message)
+            .query_async(&mut conn)
+            .await
+            .tool_context("PUBLISH failed")?;
+
+        Ok(CallToolResult::text(format!(
+            "OK - published to '{}', received by {} subscriber(s)",
+            input.channel, receivers
+        )))
+    }
+);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use redis::Value;
+
+    fn bulk(s: &str) -> Value {
+        Value::BulkString(s.as_bytes().to_vec())
+    }
+
+    fn entry(id: &str, fields: &[(&str, &str)]) -> Value {
+        Value::Array(vec![
+            bulk(id),
+            Value::Array(
+                fields
+                    .iter()
+                    .flat_map(|(f, v)| [bulk(f), bulk(v)])
+                    .collect(),
+            ),
+        ])
+    }
+
+    #[test]
+    fn field_pairs_reads_resp2_and_resp3() {
+        let resp2 = Value::Array(vec![
+            bulk("name"),
+            bulk("g1"),
+            bulk("pending"),
+            Value::Int(2),
+        ]);
+        let resp3 = Value::Map(vec![
+            (bulk("name"), bulk("g1")),
+            (bulk("pending"), Value::Int(2)),
+        ]);
+        for value in [resp2, resp3] {
+            let pairs = field_pairs(&value).expect("pairs");
+            let rendered: Vec<_> = pairs
+                .iter()
+                .map(|(k, v)| format!("{k}={}", super::super::format_value(v)))
+                .collect();
+            assert_eq!(rendered, ["name=g1", "pending=2"]);
+        }
+        assert!(field_pairs(&Value::Array(vec![bulk("odd")])).is_none());
+    }
+
+    #[test]
+    fn format_info_records_renders_one_line_per_group() {
+        let groups = Value::Array(vec![
+            Value::Array(vec![
+                bulk("name"),
+                bulk("g1"),
+                bulk("consumers"),
+                Value::Int(1),
+            ]),
+            Value::Map(vec![
+                (bulk("name"), bulk("g2")),
+                (bulk("consumers"), Value::Int(0)),
+            ]),
+        ]);
+        assert_eq!(
+            format_info_records(&groups),
+            ["name=g1 consumers=1", "name=g2 consumers=0"]
+        );
+        assert!(format_info_records(&Value::Array(vec![])).is_empty());
+    }
+
+    #[test]
+    fn format_stream_entry_marks_deleted_entries() {
+        assert_eq!(
+            format_stream_entry(&entry("1-0", &[("a", "1"), ("b", "2")])),
+            "1-0  a=1, b=2"
+        );
+        assert_eq!(
+            format_stream_entry(&Value::Array(vec![bulk("2-0"), Value::Nil])),
+            "2-0  (deleted)"
+        );
+    }
+
+    #[test]
+    fn stream_batches_reads_resp2_resp3_and_nil() {
+        let resp2 = Value::Array(vec![Value::Array(vec![
+            bulk("s"),
+            Value::Array(vec![entry("1-0", &[("a", "1")])]),
+        ])]);
+        let resp3 = Value::Map(vec![(
+            bulk("s"),
+            Value::Array(vec![entry("1-0", &[("a", "1")])]),
+        )]);
+        for reply in [resp2, resp3] {
+            let batches = stream_batches(&reply);
+            assert_eq!(batches.len(), 1);
+            assert_eq!(batches[0].0, "s");
+            assert_eq!(batches[0].1.len(), 1);
+        }
+        assert!(stream_batches(&Value::Nil).is_empty());
+    }
+}

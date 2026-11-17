@@ -5,13 +5,13 @@ documented feature set. The all-features catalog is recorded in
 [`mcp-catalog-v1.json`](https://github.com/redis/redisctl/blob/main/crates/redisctl-mcp/tests/fixtures/mcp-catalog-v1.json)
 and checked in CI.
 
-The current all-features baseline contains 376 tools:
+The current all-features baseline contains 391 tools:
 
 | Toolset | Tools |
 | --- | ---: |
 | Cloud | 150 |
 | Enterprise | 84 |
-| Database | 132 |
+| Database | 147 |
 | App/profile | 8 |
 | System | 2 |
 
