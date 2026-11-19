@@ -234,7 +234,7 @@ database_tool!(write, seed, "redis_seed",
         /// For sorted_set: maximum score (default: count)
         #[serde(default)]
         pub score_max: Option<f64>,
-        /// Optional TTL in seconds (applied to string, hash, and json types)
+        /// Optional TTL in seconds (applied to string, hash, and json types; must be positive)
         #[serde(default, deserialize_with = "serde_helpers::string_or_opt_u64::deserialize")]
         pub ttl: Option<u64>,
         /// Pipeline batch size (default: 1000)
@@ -291,6 +291,8 @@ database_tool!(write, seed, "redis_seed",
             }
             _ => unreachable!(),
         }
+
+        validate_ttl(&data_type, input.ttl).map_err(tower_mcp::Error::tool)?;
 
         let score_min = input.score_min.unwrap_or(0.0);
         let score_max = input.score_max.unwrap_or(count as f64);
@@ -416,9 +418,44 @@ database_tool!(write, seed, "redis_seed",
     }
 );
 
+/// Reject a zero TTL for the types that apply one.
+///
+/// `EXPIRE key 0` deletes the key immediately, so seeding with `ttl: 0` would
+/// create every key and then remove it again while reporting success. Types
+/// that ignore `ttl` (sorted_set, set, list) are left alone.
+fn validate_ttl(data_type: &str, ttl: Option<u64>) -> Result<(), String> {
+    match (data_type, ttl) {
+        ("string" | "hash" | "json", Some(ttl)) => super::require_positive_ttl(
+            i64::try_from(ttl).unwrap_or(i64::MAX),
+            "every seeded key",
+            "Omit ttl to create keys without an expiry.",
+        )
+        .map_err(|e| e.replace("seconds must be", "ttl must be")),
+        _ => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_validate_ttl_zero_rejected() {
+        for t in ["string", "hash", "json"] {
+            let msg = validate_ttl(t, Some(0)).unwrap_err();
+            assert!(msg.contains("must be positive"), "{msg}");
+        }
+    }
+
+    #[test]
+    fn test_validate_ttl_accepts_valid() {
+        assert_eq!(validate_ttl("string", None), Ok(()));
+        assert_eq!(validate_ttl("string", Some(60)), Ok(()));
+        // ttl is ignored for these types, so zero is harmless.
+        for t in ["sorted_set", "set", "list"] {
+            assert_eq!(validate_ttl(t, Some(0)), Ok(()));
+        }
+    }
 
     #[test]
     fn test_substitute_simple() {
