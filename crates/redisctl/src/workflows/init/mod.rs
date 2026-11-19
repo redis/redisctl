@@ -547,7 +547,7 @@ async fn run_inner(
                 "{} {}  {}",
                 ok("✓"),
                 product.label(),
-                dim(&format!("({proof} - {})", product.url()))
+                dim(&format!("({proof} - {})", product.masked_url()))
             ),
             Err(e) => {
                 println!("{} {}  {e}", output::red("✗"), product.label());
@@ -558,7 +558,7 @@ async fn run_inner(
                 return Err(RedisCtlError::Other(format!(
                     "could not use {} at {}.\n  Check {id_part}that {} matches the one shown in the console.\n  .env already holds the values that were rejected - correct or remove them before re-running.",
                     product.label(),
-                    product.url(),
+                    product.masked_url(),
                     product.env_key(),
                 )));
             }

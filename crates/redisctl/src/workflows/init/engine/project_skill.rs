@@ -246,7 +246,7 @@ fn product_section(
             format!(
                 "\n## Agent Memory (Redis Iris)\n- Store `{id}` at `{url}`. Read all three from the environment - `{env_url}`, `{env_id}`, `{env_key}` are in `.env`; never hardcode the key or the store id.\n{pending}{hint}{AGENT_MEMORY_BULLETS}",
                 id = product.id.as_deref().unwrap_or_default(),
-                url = product.url(),
+                url = product.masked_url(),
                 env_url = product.spec.env_url,
                 env_id = product.spec.env_id.unwrap_or_default(),
                 env_key = product.spec.env_key,
@@ -266,7 +266,7 @@ fn product_section(
             format!(
                 "\n## Semantic cache (LangCache)\n- Cache `{id}` at `{url}`. Read all three from the environment - `{env_url}`, `{env_id}`, `{env_key}` are in `.env`; never hardcode the key or the cache id.\n{pending}{hint}{LANGCACHE_BULLETS}",
                 id = product.id.as_deref().unwrap_or_default(),
-                url = product.url(),
+                url = product.masked_url(),
                 env_url = product.spec.env_url,
                 env_id = product.spec.env_id.unwrap_or_default(),
                 env_key = product.spec.env_key,
@@ -280,7 +280,7 @@ fn product_section(
             };
             format!(
                 "\n## Governed business data (Context Retriever)\n- The scoped agent tools are exposed at `{url}`. Read `{env_url}` and `{env_key}` from `.env`; never use a Context Retriever admin key in application code or agent tooling.\n{pending}{CONTEXT_RETRIEVER_BULLETS}{client}{CONTEXT_RETRIEVER_CTL}",
-                url = product.url(),
+                url = product.masked_url(),
                 env_url = product.spec.env_url,
                 env_key = product.spec.env_key,
             )
@@ -664,6 +664,23 @@ mod tests {
             text.contains("redisctl api cloud get /subscriptions/1/databases/9 -p qa`"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn content_masks_userinfo_in_product_urls() {
+        use crate::workflows::init::engine::products::{ProductKey, ProductRequest, wire};
+        let dir = tempfile::tempdir().unwrap();
+        let requests = vec![ProductRequest {
+            key: ProductKey::LangCache,
+            url: "https://user:s3cret@l.example".into(),
+            id: Some("c1".into()),
+        }];
+        let wired = wire(dir.path(), &requests, None, false, &|_| None).unwrap();
+        let mut f = facts(None, &[]);
+        f.products = &wired;
+        let text = content(&f, None);
+        assert!(text.contains("l.example"));
+        assert!(!text.contains("s3cret"));
     }
 
     #[test]
