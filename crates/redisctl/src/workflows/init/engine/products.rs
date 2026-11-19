@@ -102,8 +102,10 @@ impl WiredProduct {
         self.spec.label
     }
 
-    pub fn url(&self) -> &str {
-        &self.url
+    /// The endpoint with any `user:pass@` userinfo masked, for terminal output and
+    /// the committed skill file.
+    pub fn masked_url(&self) -> String {
+        super::util::mask_url(&self.url)
     }
 
     pub fn env_key(&self) -> &'static str {
@@ -631,6 +633,19 @@ mod tests {
             err.to_string(),
             "cannot complete Agent Memory: .env needs AGENT_MEMORY_URL and AGENT_MEMORY_STORE_ID."
         );
+    }
+
+    #[test]
+    fn masked_url_hides_userinfo() {
+        let dir = tempfile::tempdir().unwrap();
+        let requests = vec![ProductRequest {
+            key: ProductKey::LangCache,
+            url: "https://user:s3cret@l.example".into(),
+            id: Some("c1".into()),
+        }];
+        let wired = wire(dir.path(), &requests, None, false, &|_| None).unwrap();
+        assert!(!wired[0].masked_url().contains("s3cret"));
+        assert!(wired[0].masked_url().contains("l.example"));
     }
 
     #[test]

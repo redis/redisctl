@@ -507,7 +507,7 @@ fn decide_product(
             return no_sdk(format!(
                 "no {} SDK - call the REST API at {}",
                 project.runtime.as_str(),
-                product.url()
+                product.masked_url()
             ));
         }
     };
