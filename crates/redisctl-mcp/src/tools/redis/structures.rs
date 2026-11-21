@@ -1339,6 +1339,12 @@ database_tool!(write, xadd, "redis_xadd",
         #[serde(default)]
         pub approximate: bool,
     } => |conn, input| {
+        if input.maxlen.is_some() && input.minid.is_some() {
+            return Err(tower_mcp::Error::tool(
+                "maxlen and minid are mutually exclusive: provide only one trimming strategy",
+            ));
+        }
+
         let mut cmd = redis::cmd("XADD");
         cmd.arg(&input.key);
 
