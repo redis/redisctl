@@ -1075,6 +1075,55 @@ async fn test_cloud_database_list_warns_when_subscription_fetch_fails() {
 }
 
 #[tokio::test]
+async fn test_enterprise_license_report_warns_when_a_profile_fetch_fails() {
+    let temp_dir = TempDir::new().unwrap();
+    let healthy = MockServer::start().await;
+    let broken = MockServer::start().await;
+
+    let profile = |name: &str, url: String| {
+        format!(
+            r#"
+[profiles.{name}]
+deployment_type = "enterprise"
+url = "{url}"
+username = "admin@redis.local"
+password = "test-password"
+insecure = true
+"#
+        )
+    };
+    std::fs::write(
+        temp_dir.path().join("config.toml"),
+        profile("healthy", healthy.uri()) + &profile("broken", broken.uri()),
+    )
+    .unwrap();
+
+    for (server, cluster_status) in [(&healthy, 200), (&broken, 500)] {
+        Mock::given(method("GET"))
+            .and(path("/v1/license"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"cluster_name": "cluster-ok"})),
+            )
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/cluster"))
+            .respond_with(ResponseTemplate::new(cluster_status).set_body_json(json!({})))
+            .mount(server)
+            .await;
+    }
+
+    test_cmd(&temp_dir)
+        .args(["-o", "json", "enterprise", "workflow", "license", "report"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("healthy"))
+        .stdout(predicate::str::contains("broken").not())
+        .stderr(predicate::str::contains("profile 'broken'"))
+        .stderr(predicate::str::contains("cluster info"));
+}
+
+#[tokio::test]
 async fn test_enterprise_crdb_operations() {
     let temp_dir = TempDir::new().unwrap();
     let mock_server = MockServer::start().await;
