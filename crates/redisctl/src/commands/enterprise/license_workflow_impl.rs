@@ -176,6 +176,13 @@ pub async fn bulk_update(
     super::utils::print_formatted_output(response, output_format).map_err(|e| anyhow::anyhow!(e))
 }
 
+/// Report on stderr that a profile is missing from the license report, keeping stdout parseable.
+fn warn_skipped_profile(profile_name: &str, reason: &str, error: &dyn std::fmt::Display) {
+    eprintln!(
+        "Warning: {reason} for profile '{profile_name}': {error}; it is not included in the report"
+    );
+}
+
 pub async fn license_report(
     conn_mgr: &ConnectionManager,
     format: &str,
@@ -192,35 +199,45 @@ pub async fn license_report(
         match conn_mgr.create_enterprise_client(Some(profile_name)).await {
             Ok(client) => {
                 // Get license info
-                let license = client.get::<Value>("/v1/license").await.ok();
+                let license = match client.get::<Value>("/v1/license").await {
+                    Ok(license) => license,
+                    Err(e) => {
+                        warn_skipped_profile(profile_name, "failed to fetch license", &e);
+                        continue;
+                    }
+                };
                 // Get cluster info for usage
-                let cluster = client.get::<Value>("/v1/cluster").await.ok();
+                let cluster = match client.get::<Value>("/v1/cluster").await {
+                    Ok(cluster) => cluster,
+                    Err(e) => {
+                        warn_skipped_profile(profile_name, "failed to fetch cluster info", &e);
+                        continue;
+                    }
+                };
 
-                if let (Some(license), Some(cluster)) = (license, cluster) {
-                    report_data.push(serde_json::json!({
-                        "profile": profile_name,
-                        "cluster_name": license.get("cluster_name").and_then(|v| v.as_str()).unwrap_or("unknown"),
-                        "activation_date": license.get("activation_date").and_then(|v| v.as_str()).unwrap_or("unknown"),
-                        "expiration_date": license.get("expiration_date").and_then(|v| v.as_str()).unwrap_or("unknown"),
-                        "days_remaining": calculate_days_remaining(
-                            license.get("expiration_date").and_then(|v| v.as_str())
-                        ),
-                        "expired": license.get("expired").and_then(|v| v.as_bool()).unwrap_or(false),
-                        "shards_limit": license.get("shards_limit").and_then(|v| v.as_i64()).unwrap_or(0),
-                        "shards_used": cluster.get("shards_used").and_then(|v| v.as_i64()).unwrap_or(0),
-                        "ram_limit_gb": bytes_to_gb(
-                            license.get("ram_limit").and_then(|v| v.as_i64()).unwrap_or(0)
-                        ),
-                        "ram_used_gb": bytes_to_gb(
-                            cluster.get("ram_used").and_then(|v| v.as_i64()).unwrap_or(0)
-                        ),
-                        "nodes_count": cluster.get("nodes_count").and_then(|v| v.as_i64()).unwrap_or(0),
-                        "flash_enabled": license.get("flash_enabled").and_then(|v| v.as_bool()).unwrap_or(false),
-                        "rack_awareness": license.get("rack_awareness").and_then(|v| v.as_bool()).unwrap_or(false),
-                    }));
-                }
+                report_data.push(serde_json::json!({
+                    "profile": profile_name,
+                    "cluster_name": license.get("cluster_name").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                    "activation_date": license.get("activation_date").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                    "expiration_date": license.get("expiration_date").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                    "days_remaining": calculate_days_remaining(
+                        license.get("expiration_date").and_then(|v| v.as_str())
+                    ),
+                    "expired": license.get("expired").and_then(|v| v.as_bool()).unwrap_or(false),
+                    "shards_limit": license.get("shards_limit").and_then(|v| v.as_i64()).unwrap_or(0),
+                    "shards_used": cluster.get("shards_used").and_then(|v| v.as_i64()).unwrap_or(0),
+                    "ram_limit_gb": bytes_to_gb(
+                        license.get("ram_limit").and_then(|v| v.as_i64()).unwrap_or(0)
+                    ),
+                    "ram_used_gb": bytes_to_gb(
+                        cluster.get("ram_used").and_then(|v| v.as_i64()).unwrap_or(0)
+                    ),
+                    "nodes_count": cluster.get("nodes_count").and_then(|v| v.as_i64()).unwrap_or(0),
+                    "flash_enabled": license.get("flash_enabled").and_then(|v| v.as_bool()).unwrap_or(false),
+                    "rack_awareness": license.get("rack_awareness").and_then(|v| v.as_bool()).unwrap_or(false),
+                }));
             }
-            Err(_) => continue,
+            Err(e) => warn_skipped_profile(profile_name, "failed to connect", &e),
         }
     }
 
