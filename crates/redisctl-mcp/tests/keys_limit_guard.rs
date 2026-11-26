@@ -56,14 +56,27 @@ async fn run(
     input: Value,
     expected: Option<(&[&str], &str)>,
 ) -> tower_mcp::CallToolResult {
+    let script: Vec<_> = expected.into_iter().collect();
+    run_script(make_tool, input, &script).await
+}
+
+/// Like [`run`], but the server expects each command in `script`, in order.
+async fn run_script(
+    make_tool: impl FnOnce(std::sync::Arc<redisctl_mcp::AppState>) -> Tool,
+    input: Value,
+    script: &[(&[&str], &str)],
+) -> tower_mcp::CallToolResult {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let expected: Option<(Vec<String>, String)> = expected.map(|(command, reply)| {
-        (
-            command.iter().map(|arg| (*arg).to_string()).collect(),
-            reply.to_string(),
-        )
-    });
+    let script: Vec<(Vec<String>, String)> = script
+        .iter()
+        .map(|(command, reply)| {
+            (
+                command.iter().map(|arg| (*arg).to_string()).collect(),
+                (*reply).to_string(),
+            )
+        })
+        .collect();
     let server = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.unwrap();
         let (read, mut write) = socket.into_split();
@@ -75,7 +88,7 @@ async fn run(
             assert_eq!(&handshake[..3], &["CLIENT", "SETINFO", field]);
             write.write_all(b"+OK\r\n").await.unwrap();
         }
-        if let Some((command, reply)) = expected {
+        for (command, reply) in script {
             assert_eq!(read_command(&mut reader).await, command);
             write.write_all(reply.as_bytes()).await.unwrap();
         }
@@ -226,6 +239,32 @@ async fn keys_and_scan_dedupe_repeated_keys() {
             "{name}"
         );
     }
+}
+
+#[tokio::test]
+async fn hotkeys_dedupe_repeated_keys() {
+    let result = run_script(
+        redis::hotkeys,
+        json!({"pattern": "k*"}),
+        &[
+            (
+                &SCAN_KEYS,
+                "*2\r\n$1\r\n0\r\n*2\r\n$2\r\nk1\r\n$2\r\nk1\r\n",
+            ),
+            (&["TYPE", "k1"], "+string\r\n"),
+            (&["MEMORY", "USAGE", "k1"], ":100\r\n"),
+        ],
+    )
+    .await;
+    assert!(!result.is_error, "unexpected tool error: {result:?}");
+    let output = text(&result);
+    assert!(output.contains("Keys scanned: 1\n"), "{output}");
+    assert!(
+        output.contains("Total memory sampled: 100 bytes\n"),
+        "{output}"
+    );
+    assert!(output.contains("  string: 1\n"), "{output}");
+    assert!(output.contains("Top 1 Keys by Memory:"), "{output}");
 }
 
 #[tokio::test]
