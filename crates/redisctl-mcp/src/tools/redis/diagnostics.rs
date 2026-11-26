@@ -1,10 +1,11 @@
 //! Composed Redis diagnostic tools (health_check, key_summary, hotkeys, connection_summary)
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use tower_mcp::CallToolResult;
 
 use super::RedisResultExt;
+use super::keys::extend_unique;
 
 use crate::serde_helpers;
 use crate::tools::macros::{database_tool, mcp_module};
@@ -283,6 +284,7 @@ database_tool!(read_only, hotkeys, "redis_hotkeys",
         // SCAN to collect keys
         let mut cursor: u64 = 0;
         let mut scanned_keys: Vec<String> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
 
         loop {
             let (new_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
@@ -295,7 +297,7 @@ database_tool!(read_only, hotkeys, "redis_hotkeys",
                 .await
                 .tool_context("SCAN failed")?;
 
-            scanned_keys.extend(keys);
+            extend_unique(&mut scanned_keys, &mut seen, keys);
             cursor = new_cursor;
 
             if cursor == 0 || scanned_keys.len() >= sample_size {

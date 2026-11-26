@@ -57,7 +57,11 @@ fn default_limit() -> usize {
 
 /// Append SCAN results to `all_keys`, skipping keys already seen. SCAN may return the
 /// same key more than once across iterations, so duplicates must not count toward `limit`.
-fn extend_unique(all_keys: &mut Vec<String>, seen: &mut HashSet<String>, page: Vec<String>) {
+pub(super) fn extend_unique(
+    all_keys: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+    page: Vec<String>,
+) {
     for key in page {
         if seen.insert(key.clone()) {
             all_keys.push(key);
