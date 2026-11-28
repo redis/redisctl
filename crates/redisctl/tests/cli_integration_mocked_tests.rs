@@ -2025,3 +2025,59 @@ async fn enterprise_session_revocation_reports_success_after_api_success() {
         .success()
         .stdout(predicate::str::contains("All sessions for user 42 revoked"));
 }
+
+// `enterprise alerts get` must report a failed request as such, not as a
+// missing alert: only a 404 means "try the next alert source".
+#[tokio::test]
+async fn test_enterprise_alerts_get_propagates_request_errors() {
+    for status in [401, 500] {
+        let temp_dir = TempDir::new().unwrap();
+        let mock_server = MockServer::start().await;
+        create_enterprise_profile(&temp_dir, &mock_server.uri()).unwrap();
+
+        Mock::given(method("GET"))
+            .and(path("/v1/cluster/alerts/1"))
+            .respond_with(ResponseTemplate::new(status))
+            .mount(&mock_server)
+            .await;
+
+        test_cmd(&temp_dir)
+            .args(["enterprise", "alerts", "get", "1"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "Failed to get alert 1 from /v1/cluster/alerts/1",
+            ))
+            .stderr(predicate::str::contains("not found").not());
+    }
+}
+
+// A 404 from one source still falls through to the next one.
+#[tokio::test]
+async fn test_enterprise_alerts_get_falls_through_on_404() {
+    let temp_dir = TempDir::new().unwrap();
+    let mock_server = MockServer::start().await;
+    create_enterprise_profile(&temp_dir, &mock_server.uri()).unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/v1/nodes/alerts/2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "node_cpu_utilization": { "enabled": true, "state": true }
+        })))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    test_cmd(&temp_dir)
+        .args(["-o", "json", "enterprise", "alerts", "get", "2"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("node_cpu_utilization"));
+
+    // No source has the alert: every route answers 404.
+    test_cmd(&temp_dir)
+        .args(["enterprise", "alerts", "get", "9"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Alert with UID 9 not found"));
+}

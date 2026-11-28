@@ -189,44 +189,22 @@ pub async fn get_alert(
 ) -> AnyhowResult<()> {
     let client = conn_mgr.create_enterprise_client(profile_name).await?;
 
-    // Try to find the alert in different endpoints
-    // First try cluster alerts
-    if let Ok(alerts) = client
-        .get::<Value>(&format!("/v1/cluster/alerts/{}", uid))
-        .await
-    {
-        let response = if let Some(q) = query {
-            super::utils::apply_jmespath(&alerts, q)?
-        } else {
-            alerts
+    // Try each alert source in turn. Only a 404 moves on to the next one; any
+    // other failure is reported instead of being turned into "not found".
+    for source in &ALERT_SOURCES {
+        let path = format!("{}/{}", source.path, uid);
+        let alert = match client.get::<Value>(&path).await {
+            Ok(alert) => alert,
+            Err(e) if e.is_not_found() => continue,
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("Failed to get alert {} from {}", uid, path));
+            }
         };
-        return super::utils::print_formatted_output(response, output_format)
-            .map_err(|e| anyhow::anyhow!(e));
-    }
-
-    // Try node alerts
-    if let Ok(alerts) = client
-        .get::<Value>(&format!("/v1/nodes/alerts/{}", uid))
-        .await
-    {
         let response = if let Some(q) = query {
-            super::utils::apply_jmespath(&alerts, q)?
+            super::utils::apply_jmespath(&alert, q)?
         } else {
-            alerts
-        };
-        return super::utils::print_formatted_output(response, output_format)
-            .map_err(|e| anyhow::anyhow!(e));
-    }
-
-    // Try database alerts
-    if let Ok(alerts) = client
-        .get::<Value>(&format!("/v1/bdbs/alerts/{}", uid))
-        .await
-    {
-        let response = if let Some(q) = query {
-            super::utils::apply_jmespath(&alerts, q)?
-        } else {
-            alerts
+            alert
         };
         return super::utils::print_formatted_output(response, output_format)
             .map_err(|e| anyhow::anyhow!(e));
