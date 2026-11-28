@@ -635,18 +635,29 @@ async fn get_database(
                     resp
                 }
             }
-            Err(_) => {
+            Err(e) if e.is_not_found() => {
                 // Try flexible path as fallback
-                client
+                match client
                     .get_raw(&format!(
                         "/subscriptions/{}/databases/{}",
                         subscription_id, db_id
                     ))
                     .await
-                    .map_err(|_| {
-                        anyhow::Error::msg(format!("Database {} not found", database_id))
-                    })?
+                {
+                    Ok(resp) => resp,
+                    Err(e) if e.is_not_found() => {
+                        return Err(anyhow::Error::msg(format!(
+                            "Database {} not found",
+                            database_id
+                        ))
+                        .into());
+                    }
+                    Err(e) => return Err(e.into()),
+                }
             }
+            // Only a 404 means "not a fixed database"; auth, server and
+            // network errors must not be reported as a missing database.
+            Err(e) => return Err(e.into()),
         }
     } else {
         // For flexible databases, we need to find the subscription first
