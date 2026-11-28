@@ -331,30 +331,31 @@ async fn get_subscription(
 ) -> CliResult<()> {
     let client = conn_mgr.create_cloud_client(profile_name).await?;
 
-    // Try flexible subscription first
-    let flex_response = client
+    // Try flexible subscription first, then fall back to fixed. Only a 404
+    // means "try the other kind"; auth, server and network errors are real
+    // failures and must not be reported as a missing subscription.
+    let response = match client
         .get_raw(&format!("/subscriptions/{}", subscription_id))
         .await
-        .ok();
-
-    // If not found, try fixed subscription
-    let response = if let Some(resp) = flex_response {
-        resp
-    } else {
-        let fixed_response = client
-            .get_raw(&format!("/fixed/subscriptions/{}", subscription_id))
-            .await;
-
-        match fixed_response {
-            Ok(resp) => resp,
-            Err(_) => {
-                return Err(anyhow::Error::msg(format!(
-                    "Subscription {} not found",
-                    subscription_id
-                ))
-                .into());
+    {
+        Ok(resp) => resp,
+        Err(e) if e.is_not_found() => {
+            match client
+                .get_raw(&format!("/fixed/subscriptions/{}", subscription_id))
+                .await
+            {
+                Ok(resp) => resp,
+                Err(e) if e.is_not_found() => {
+                    return Err(anyhow::Error::msg(format!(
+                        "Subscription {} not found",
+                        subscription_id
+                    ))
+                    .into());
+                }
+                Err(e) => return Err(e.into()),
             }
         }
+        Err(e) => return Err(e.into()),
     };
 
     let data = handle_output(response, output_format, query)?;
